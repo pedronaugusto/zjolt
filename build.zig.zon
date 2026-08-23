@@ -1,0 +1,21 @@
+.{
+    .name = .zjolt,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
+    .fingerprint = 0xfc700587694304e3,
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "ffi",
+        "libs",
+        "src",
+        "tests",
+        // Contributing tells people to run ci/run.sh before pushing, so a
+        // fetched copy has to actually contain it, and the workflow it mirrors.
+        "ci",
+        ".github",
+        "LICENSE",
+        "README.md",
+        "UPSTREAM.md",
+    },
+}

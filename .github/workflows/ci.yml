@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  # The full suite, executed on every supported host. `ci/run.sh --full`
+  # mirrors these steps locally; they are spelled out here so each one reports
+  # its own status.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      # Only our own sources: libs/JoltPhysics is vendored verbatim and
+      # reformatting it would make the next re-vendor an unreadable diff.
+      - name: Formatting
+        run: zig fmt --check src build.zig
+
+      # Zig's C undefined-behaviour sanitizer is on by default in Debug, so
+      # this is the run that would catch UB in zjolt's own code.
+      - name: Test — Debug, sanitizer on
+        run: zig build test -Doptimize=Debug
+
+      - name: Test — Debug, sanitizer off
+        run: zig build test -Doptimize=Debug -Dsanitize_c=false
+
+      - name: Test — ReleaseSafe
+        run: zig build test -Doptimize=ReleaseSafe
+
+      - name: Test — ReleaseFast
+        run: zig build test -Doptimize=ReleaseFast
+
+      - name: Test — ReleaseSmall
+        run: zig build test -Doptimize=ReleaseSmall
+
+      # The C boundary on its own, with no Zig in the picture — the header is a
+      # real C contract, not a private detail of the wrapper.
+      - name: Test — C ABI standalone
+        run: zig build test-c
+
+      # Zig's default ABI for Windows is gnu, so every step above exercises
+      # that one and the MSVC branches in build.zig would never be built at
+      # all. On a Windows runner the MSVC ABI is native, so the suite can run
+      # there too rather than merely compile.
+      - name: Test — Windows MSVC ABI
+        if: runner.os == 'Windows'
+        run: zig build test -Dtarget=x86_64-windows-msvc
+
+      - name: Test — C ABI standalone, Windows MSVC ABI
+        if: runner.os == 'Windows'
+        run: zig build test-c -Dtarget=x86_64-windows-msvc
+
+  # Options that change the WIDTH of types in the ABI have to be executed, not
+  # merely built: a compile proves the macros agree, only a run proves the
+  # layouts do. That is what the ABI test in src/zjolt.zig checks, and it can
+  # only check the configuration it was built in.
+  configurations:
+    name: build configurations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Double precision
+        run: zig build test -Ddouble_precision=true
+      - name: 32-bit object layers
+        run: zig build test -Dobject_layer_bits=32
+      - name: Double precision and 32-bit object layers
+        run: zig build test -Ddouble_precision=true -Dobject_layer_bits=32
+      - name: Cross-platform deterministic
+        run: zig build test -Dcross_platform_deterministic=true
+      - name: Asserts disabled
+        run: zig build test -Denable_asserts=false
+      - name: Shared library
+        run: zig build -Dshared=true
+
+  # Compile-only coverage of the targets the suite cannot execute on. These
+  # prove the sources and build graph are portable; the `test` job above is
+  # what proves behaviour.
+  cross-compile:
+    name: cross (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
+          - x86_64-linux-musl
+          - aarch64-linux-musl
+          - x86_64-windows-gnu
+          - aarch64-windows-gnu
+          - x86_64-macos
+          - aarch64-macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: zig build -Dtarget=${{ matrix.target }}
+
+  # The half of the ABI the runtime layout guard cannot see: the names and
+  # parameter counts of the functions themselves.
+  abi-declarations:
+    name: ABI declarations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/check-abi.sh
+
+  # Proves libs/ is still a pristine copy of the pinned upstream commit, rather
+  # than a claim in a markdown file. Needs network, so it is its own job and is
+  # not part of the local inner loop.
+  vendor-integrity:
+    name: vendor integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/verify-vendor.sh
