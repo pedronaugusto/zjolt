@@ -24,7 +24,7 @@
 //! ```
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/debug.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const system_mod = @import("system.zig");

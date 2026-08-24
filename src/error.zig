@@ -1,7 +1,7 @@
 //! Translation between the C result enum and a Zig error set.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 
 pub const Error = error{
     /// A call was made before `init`, or after `deinit`.

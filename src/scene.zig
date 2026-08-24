@@ -21,7 +21,7 @@
 //! Reference counted like a `Shape`: `release` it, not `deinit`.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/scene.zig");
 const err = @import("error.zig");
 const body_mod = @import("body.zig");
 const group_mod = @import("group.zig");

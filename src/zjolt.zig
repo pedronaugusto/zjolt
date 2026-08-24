@@ -32,7 +32,18 @@
 
 const std = @import("std");
 
+/// The raw C declarations, one namespace per public header — `core.body`,
+/// `core.shape`, `core.constraint` and so on, mirroring `ffi/zjolt_*.h`.
+///
+/// This is the escape hatch: anything the typed surface above does not wrap
+/// is reachable here, ABI-checked, and documented as a first-class way to
+/// call it rather than as a fallback. It used to be one flat namespace; the
+/// module name is now part of the path, so `core.max_physics_jobs` is
+/// `c.core.max_physics_jobs`.
 pub const c = @import("c.zig");
+
+/// Shorthand for the module everything in this file happens to need.
+const core = c.core;
 
 const error_mod = @import("error.zig");
 const math_mod = @import("math.zig");
@@ -90,7 +101,7 @@ pub const ShapeSubType = shape_mod.SubType;
 pub const MutableCompound = shape_mod.MutableCompound;
 pub const CompoundChild = shape_mod.CompoundChild;
 pub const compoundChild = shape_mod.compoundChild;
-pub const SubShapeId = c.SubShapeId;
+pub const SubShapeId = core.SubShapeId;
 pub const sub_shape_id_empty = shape_mod.sub_shape_id_empty;
 pub const height_field_no_collision = shape_mod.height_field_no_collision;
 
@@ -341,8 +352,8 @@ pub const options = @import("zjolt_options");
 //=============================================================================
 
 /// A formatted line of Jolt diagnostic output.
-pub const TraceFn = c.TraceFn;
-pub const AssertFailedFn = c.AssertFailedFn;
+pub const TraceFn = core.TraceFn;
+pub const AssertFailedFn = core.AssertFailedFn;
 
 pub const InitOptions = struct {
     /// Routes every Jolt allocation through this. Null keeps Jolt's own
@@ -372,8 +383,8 @@ pub const InitOptions = struct {
 /// `build.zig`, which derives both from one option set — it is the guard for
 /// a hand-assembled link.
 pub fn init(opts: InitOptions) Error!void {
-    var bridged: c.Allocator = undefined;
-    var desc: c.InitDesc = .{
+    var bridged: core.Allocator = undefined;
+    var desc: core.InitDesc = .{
         .allocator = null,
         .trace = opts.trace,
         .assert_failed = opts.assert_failed,
@@ -383,7 +394,7 @@ pub fn init(opts: InitOptions) Error!void {
         bridged = memory_mod.bridge(gpa);
         desc.allocator = &bridged;
     }
-    try error_mod.check(c.zjoltInitWithConfig(&desc, c.config_id));
+    try error_mod.check(core.zjoltInitWithConfig(&desc, core.config_id));
 }
 
 /// Unregisters Jolt's types, destroys the factory, and gives Jolt its own
@@ -394,11 +405,11 @@ pub fn init(opts: InitOptions) Error!void {
 /// make destroying them free through an allocator they were never allocated
 /// from, so leaving the library up is the safer of the two wrong situations.
 pub fn deinit() void {
-    c.zjoltDeinit();
+    core.zjoltDeinit();
 }
 
 pub fn isInitialized() bool {
-    return c.zjoltIsInitialized();
+    return core.zjoltIsInitialized();
 }
 
 /// Owning handles currently alive, across every kind there is: physics
@@ -418,7 +429,7 @@ pub fn isInitialized() bool {
 /// count moves when `RagdollSettings.createRagdoll` allocates it and when the
 /// `release` that frees it drops the last reference, not on every `addRef`.
 pub fn liveHandleCount() u32 {
-    return c.zjoltLiveHandleCount();
+    return core.zjoltLiveHandleCount();
 }
 
 //=============================================================================
@@ -445,12 +456,12 @@ pub const Version = struct {
 
 /// Version of these bindings.
 pub fn version() Version {
-    return Version.unpack(c.zjoltVersion());
+    return Version.unpack(core.zjoltVersion());
 }
 
 /// Version of the vendored Jolt Physics library.
 pub fn joltVersion() Version {
-    return Version.unpack(c.zjoltJoltVersion());
+    return Version.unpack(core.zjoltJoltVersion());
 }
 
 //=============================================================================
@@ -504,28 +515,28 @@ test "the library reports the build the wrapper was compiled for" {
     // ZJoltReal and ZJoltObjectLayer change width with those macros, so a
     // library built with different ones describes different structs while
     // presenting an identical header. This is the check that catches it.
-    var layout: c.AbiLayout = undefined;
-    c.zjoltAbiLayout(&layout);
+    var layout: core.AbiLayout = undefined;
+    core.zjoltAbiLayout(&layout);
 
-    try std.testing.expectEqual(@as(u32, @sizeOf(c.AbiLayout)), layout.layout_size);
-    try std.testing.expectEqual(@as(u32, @sizeOf(c.Real)), layout.real_size);
-    try std.testing.expectEqual(@as(u32, @sizeOf(c.ObjectLayer)), layout.object_layer_size);
-    try std.testing.expectEqual(c.config_id, layout.config_id);
-    try std.testing.expectEqual(c.zjoltConfigId(), layout.config_id);
+    try std.testing.expectEqual(@as(u32, @sizeOf(core.AbiLayout)), layout.layout_size);
+    try std.testing.expectEqual(@as(u32, @sizeOf(core.Real)), layout.real_size);
+    try std.testing.expectEqual(@as(u32, @sizeOf(core.ObjectLayer)), layout.object_layer_size);
+    try std.testing.expectEqual(core.config_id, layout.config_id);
+    try std.testing.expectEqual(core.zjoltConfigId(), layout.config_id);
     try std.testing.expectEqual(
-        @as(u32, @intCast(c.zjoltDefaultAllocateAlignment())),
+        @as(u32, @intCast(core.zjoltDefaultAllocateAlignment())),
         layout.default_allocate_alignment,
     );
 
     // The options module and the C library must describe the same build.
-    const double_bit = (layout.build_flags & c.build_flag_double_precision) != 0;
+    const double_bit = (layout.build_flags & core.build_flag_double_precision) != 0;
     try std.testing.expectEqual(options.double_precision, double_bit);
-    const layer32_bit = (layout.build_flags & c.build_flag_object_layer_32) != 0;
+    const layer32_bit = (layout.build_flags & core.build_flag_object_layer_32) != 0;
     try std.testing.expectEqual(options.object_layer_bits == 32, layer32_bit);
-    const asserts_bit = (layout.build_flags & c.build_flag_asserts_enabled) != 0;
+    const asserts_bit = (layout.build_flags & core.build_flag_asserts_enabled) != 0;
     try std.testing.expectEqual(options.enable_asserts, asserts_bit);
     const deterministic_bit =
-        (layout.build_flags & c.build_flag_cross_platform_deterministic) != 0;
+        (layout.build_flags & core.build_flag_cross_platform_deterministic) != 0;
     try std.testing.expectEqual(options.cross_platform_deterministic, deterministic_bit);
 }
 
@@ -535,9 +546,9 @@ test "version reporting is wired up" {
     // completes the chain library -> Zig mirror -> header without a third
     // copy of the number that would need editing when a version is cut.
     const v = version();
-    try std.testing.expectEqual(@as(u8, @intCast(c.version_major)), v.major);
-    try std.testing.expectEqual(@as(u8, @intCast(c.version_minor)), v.minor);
-    try std.testing.expectEqual(@as(u8, @intCast(c.version_patch)), v.patch);
+    try std.testing.expectEqual(@as(u8, @intCast(core.version_major)), v.major);
+    try std.testing.expectEqual(@as(u8, @intCast(core.version_minor)), v.minor);
+    try std.testing.expectEqual(@as(u8, @intCast(core.version_patch)), v.patch);
 
     const jolt = joltVersion();
     try std.testing.expectEqual(@as(u8, 5), jolt.major);
@@ -545,7 +556,7 @@ test "version reporting is wired up" {
 }
 
 test "result names are never empty" {
-    inline for (@typeInfo(c.Result).@"enum".fields) |field| {
+    inline for (@typeInfo(core.Result).@"enum".fields) |field| {
         const name = resultName(@enumFromInt(field.value));
         try std.testing.expect(name.len > 0);
     }

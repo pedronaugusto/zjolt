@@ -357,12 +357,45 @@ fn sweepOurs() Counts {
     comptime {
         var n = Counts{};
 
-        for (@typeInfo(c).@"struct".decls) |d| {
-            const Decl = @TypeOf(@field(c, d.name));
+        // One pass per module in `c.zig`'s list. A name appearing in more than
+        // one module is a re-export — every module re-exports the shared
+        // primitives it takes, so its callers see one namespace — and it is
+        // checked once, against the module that declares it.
+        //
+        // The identity assertion is what keeps that safe: if a re-export ever
+        // stops being the same declaration, this refuses the build rather than
+        // checking one copy and trusting the other.
+        for (c.modules, 0..) |m, mi| for (@typeInfo(m).@"struct".decls) |d| {
+            // A name that an EARLIER module already declared is a re-export:
+            // every module re-exports the shared primitives it takes so that
+            // its own callers see one namespace. Check it once, where it is
+            // declared. Comparing against earlier modules only — rather than
+            // keeping a list of every name seen — keeps this linear in the
+            // module count instead of quadratic in the declaration count.
+            var earlier = false;
+            for (c.modules, 0..) |other, oi| {
+                if (oi < mi and @hasDecl(other, d.name)) {
+                    // And if a re-export ever stops being the same
+                    // declaration, refuse the build rather than checking one
+                    // copy and trusting the other.
+                    if (@TypeOf(@field(other, d.name)) == type and
+                        @TypeOf(@field(m, d.name)) == type and
+                        @field(other, d.name) != @field(m, d.name))
+                    {
+                        fail("`" ++ d.name ++ "` is declared in two of src/c.zig's " ++
+                            "modules and they are not the same declaration. A module " ++
+                            "re-exports a shared name; it must not redeclare one.");
+                    }
+                    earlier = true;
+                }
+            }
+            if (earlier) continue;
+
+            const Decl = @TypeOf(@field(m, d.name));
 
             // ---- types -----------------------------------------------------
             if (Decl == type) {
-                const Ours = @field(c, d.name);
+                const Ours = @field(m, d.name);
                 const cname = typeCName(d.name);
                 const what = "type " ++ d.name;
                 n.types += 1;
@@ -466,9 +499,9 @@ fn sweepOurs() Counts {
                 const what = "constant " ++ d.name;
                 _ = theirDecl(cname, what);
                 const ours_val: i128 = @intCast(if (@typeInfo(Decl) == .@"enum")
-                    @intFromEnum(@field(c, d.name))
+                    @intFromEnum(@field(m, d.name))
                 else
-                    @field(c, d.name));
+                    @field(m, d.name));
                 const theirs_val: i128 = @intCast(@field(h, cname));
                 if (ours_val != theirs_val) {
                     fail(what ++ " is " ++ std.fmt.comptimePrint("{d}", .{ours_val}) ++
@@ -482,7 +515,7 @@ fn sweepOurs() Counts {
             fail("src/c.zig declares `" ++ d.name ++ "` as a " ++ @tagName(@typeInfo(Decl)) ++
                 ", which this check does not know how to compare. Add a case rather than " ++
                 "leaving it unchecked.");
-        }
+        };
 
         return n;
     }
@@ -511,10 +544,17 @@ fn sweepTheirs() usize {
             if (inline_in_header) continue;
 
             found += 1;
-            if (!@hasDecl(c, d.name)) {
-                missing += 1;
-                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig never declares it");
+            var home: ?type = null;
+            for (c.modules) |m| {
+                if (@hasDecl(m, d.name)) home = m;
             }
+            if (home == null) {
+                missing += 1;
+                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but no module in src/c.zig " ++
+                    "declares it. A module missing from that list is a module neither " ++
+                    "this check nor the misuse sweep covers.");
+            }
+            const Home = home.?;
             // Existence is not enough: the name has to resolve to something
             // that actually links. A Zig helper or a type sitting on the name
             // satisfies `@hasDecl` while the extern is gone.
@@ -524,7 +564,7 @@ fn sweepTheirs() usize {
             // forward sweep's rejection depends on its name filter; this one
             // depends on nothing but the header, so a future change that
             // widens that filter cannot reopen the hole silently.
-            const Ours = @TypeOf(@field(c, d.name));
+            const Ours = @TypeOf(@field(Home, d.name));
             if (@typeInfo(Ours) != .@"fn") {
                 fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++
                     "as a " ++ @tagName(@typeInfo(Ours)) ++ " rather than a function");

@@ -29,7 +29,7 @@
 //! caller must not do is panic, which aborts rather than returning.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/query.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");

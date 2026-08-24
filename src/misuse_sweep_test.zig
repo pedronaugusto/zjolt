@@ -33,6 +33,7 @@
 
 const std = @import("std");
 const c = @import("c.zig");
+const core = c.core;
 
 //=============================================================================
 // What the sweep must not call
@@ -137,14 +138,23 @@ fn sweepBeforeInit() !usize {
     @setEvalBranchQuota(1_000_000);
     var refused: usize = 0;
 
-    inline for (@typeInfo(c).@"struct".decls) |d| {
-        const Decl = @TypeOf(@field(c, d.name));
+    inline for (c.modules, 0..) |m, mi| {
+        inline for (@typeInfo(m).@"struct".decls) |d| {
+            // Skip what an earlier module re-exported: calling the same extern
+            // once per module that re-exports it would inflate the count this
+            // test's floor is measured against.
+            comptime var earlier = false;
+            inline for (c.modules, 0..) |other, oi| {
+                if (oi < mi and @hasDecl(other, d.name)) earlier = true;
+            }
+            if (earlier) continue;
+        const Decl = @TypeOf(@field(m, d.name));
         if (@typeInfo(Decl) != .@"fn") continue;
         if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
-        if (@typeInfo(Decl).@"fn".return_type != c.Result) continue;
+        if (@typeInfo(Decl).@"fn".return_type != core.Result) continue;
         if (comptime isExcluded(d.name)) continue;
 
-        const got = @call(.auto, @field(c, d.name), hostileArgs(Decl));
+        const got = @call(.auto, @field(m, d.name), hostileArgs(Decl));
         if (got != .not_initialized) {
             std.debug.print(
                 "\n{s} returned .{s} before zjoltInit; every result-returning " ++
@@ -155,6 +165,7 @@ fn sweepBeforeInit() !usize {
             return error.EntryPointMissingInitGuard;
         }
         refused += 1;
+    }
     }
 
     return refused;
@@ -171,16 +182,25 @@ fn sweepNulls() !usize {
     @setEvalBranchQuota(1_000_000);
     var survived: usize = 0;
 
-    inline for (@typeInfo(c).@"struct".decls) |d| {
-        const Decl = @TypeOf(@field(c, d.name));
+    inline for (c.modules, 0..) |m, mi| {
+        inline for (@typeInfo(m).@"struct".decls) |d| {
+            // Skip what an earlier module re-exported: calling the same extern
+            // once per module that re-exports it would inflate the count this
+            // test's floor is measured against.
+            comptime var earlier = false;
+            inline for (c.modules, 0..) |other, oi| {
+                if (oi < mi and @hasDecl(other, d.name)) earlier = true;
+            }
+            if (earlier) continue;
+        const Decl = @TypeOf(@field(m, d.name));
         if (@typeInfo(Decl) != .@"fn") continue;
         if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
         if (comptime isExcluded(d.name)) continue;
         if (comptime !takesPointer(Decl)) continue;
 
-        const result = @call(.auto, @field(c, d.name), hostileArgs(Decl));
+        const result = @call(.auto, @field(m, d.name), hostileArgs(Decl));
 
-        if (@TypeOf(result) == c.Result and result == .ok) {
+        if (@TypeOf(result) == core.Result and result == .ok) {
             std.debug.print(
                 "\n{s} returned .ok when every pointer it was given was null\n",
                 .{d.name},
@@ -188,6 +208,7 @@ fn sweepNulls() !usize {
             return error.EntryPointAcceptedNull;
         }
         survived += 1;
+    }
     }
 
     return survived;
@@ -203,8 +224,8 @@ test "every entry point refuses a call made before init" {
     // Whatever ran before this must not have left the library up. Deinit is a
     // no-op when it is already down, and refuses while handles are alive —
     // in which case the premise does not hold and there is nothing to measure.
-    c.zjoltDeinit();
-    if (c.zjoltIsInitialized()) return error.SkipZigTest;
+    core.zjoltDeinit();
+    if (core.zjoltIsInitialized()) return error.SkipZigTest;
 
     const refused = try sweepBeforeInit();
 
@@ -224,9 +245,9 @@ test "every entry point survives null pointers" {
     const allocator = gpa.allocator();
 
     var bridged = @import("memory.zig").bridge(allocator);
-    var desc: c.InitDesc = .{ .allocator = &bridged };
-    try std.testing.expectEqual(c.Result.ok, c.zjoltInitWithConfig(&desc, c.config_id));
-    defer c.zjoltDeinit();
+    var desc: core.InitDesc = .{ .allocator = &bridged };
+    try std.testing.expectEqual(core.Result.ok, core.zjoltInitWithConfig(&desc, core.config_id));
+    defer core.zjoltDeinit();
 
     const survived = try sweepNulls();
     try std.testing.expect(survived >= 100);

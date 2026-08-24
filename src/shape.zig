@@ -6,7 +6,7 @@
 //! is create, create the body, `release`.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/shape.zig");
 const err = @import("error.zig");
 const material_mod = @import("material.zig");
 const math = @import("math.zig");

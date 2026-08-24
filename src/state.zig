@@ -14,7 +14,7 @@
 //! Reached from `PhysicsSystem.state()`.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/state.zig");
 const err = @import("error.zig");
 const body_mod = @import("body.zig");
 

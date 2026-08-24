@@ -121,7 +121,7 @@ echo "drift the ABI cross-check must refuse:"
 
 # Same-sized adjacent fields swapped. The offset SEQUENCE is unchanged, so
 # every positional check and every offsets-only digest passes this.
-try "same-sized adjacent fields swapped" src/c.zig \
+try "same-sized adjacent fields swapped" src/c/core.zig \
 'pub const Vec3 = extern struct {
     x: f32,
     y: f32,' \
@@ -129,23 +129,23 @@ try "same-sized adjacent fields swapped" src/c.zig \
     y: f32,
     x: f32,'
 
-try "a parameter dropped from a function" src/c.zig \
+try "a parameter dropped from a function" src/c/shape.zig \
 'pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;' \
 'pub extern fn zjoltShapeCreateSphere(radius: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;'
 
-try "a parameter widened (f32 -> f64)" src/c.zig \
+try "a parameter widened (f32 -> f64)" src/c/shape.zig \
 'pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;' \
 'pub extern fn zjoltShapeCreateSphere(radius: f64, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;'
 
-try "an enumerator renumbered" src/c.zig \
+try "an enumerator renumbered" src/c/core.zig \
 '    in_air = 3,' \
 '    in_air = 7,'
 
-try "an enum tag narrowed (c_int -> i8)" src/c.zig \
+try "an enum tag narrowed (c_int -> i8)" src/c/core.zig \
 'pub const MotionType = enum(c_int) {' \
 'pub const MotionType = enum(i8) {'
 
-try "a bit mask bit moved" src/c.zig \
+try "a bit mask bit moved" src/c/core.zig \
 'pub const UpdateError = packed struct(u32) {
     manifold_cache_full: bool = false,
     body_pair_cache_full: bool = false,' \
@@ -153,12 +153,12 @@ try "a bit mask bit moved" src/c.zig \
     body_pair_cache_full: bool = false,
     manifold_cache_full: bool = false,'
 
-try "a constant drifted" src/c.zig \
+try "a constant drifted" src/c/core.zig \
 'pub const max_physics_jobs: u32 = 2048;' \
 'pub const max_physics_jobs: u32 = 4096;'
 
 # The reverse direction: the header declares something c.zig does not.
-try "an extern deleted from c.zig" src/c.zig \
+try "an extern deleted from the Zig side" src/c/body.zig \
 'pub extern fn zjoltBodyGetPosition(body: *const Body, out: *RVec3) void;' \
 ''
 
@@ -182,7 +182,7 @@ try "a field's signedness flipped in the header" ffi/zjolt_shape.h \
 # implementation, and the choice only stops mattering while every enumerator is
 # non-negative. This is the precondition that lets the signedness comparison
 # above skip enums, so it has to be enforced, not assumed.
-try "a negative enumerator introduced" src/c.zig \
+try "a negative enumerator introduced" src/c/core.zig \
 'pub const Result = enum(c_int) {
     ok = 0,' \
 'pub const Result = enum(c_int) {
@@ -192,12 +192,21 @@ try "a negative enumerator introduced" src/c.zig \
 # through: the forward sweep skips non-extern functions, and the reverse sweep
 # asked only whether the name existed. The extern it displaced would be gone
 # with neither direction noticing.
-try "an extern replaced by a Zig helper of the same name" src/c.zig \
+try "an extern replaced by a Zig helper of the same name" src/c/body.zig \
 'pub extern fn zjoltBodyGetPosition(body: *const Body, out: *RVec3) void;' \
 'pub fn zjoltBodyGetPosition(body: *const Body, out: *RVec3) void {
     _ = body;
     _ = out;
 }'
+
+# A module silently dropped from src/c.zig's list. This is the failure mode the
+# split introduced and the one that would be worst: both guards discover what
+# to check by walking that list, so a module missing from it is a module
+# neither of them covers, and nothing else would say so.
+try "a module dropped from src/c.zig's module list" src/c.zig \
+'    vehicle,
+' \
+''
 
 #=============================================================================
 # The other guards

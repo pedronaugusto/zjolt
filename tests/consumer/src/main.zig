@@ -41,7 +41,7 @@ pub fn main() !void {
     try zjolt.init(.{ .allocator = gpa });
     defer zjolt.deinit();
 
-    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.max_physics_jobs);
+    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
     defer jobs.deinit();
 
     const system = try zjolt.PhysicsSystem.init(.{

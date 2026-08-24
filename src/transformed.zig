@@ -23,7 +23,7 @@
 //! `liveHandleCount` until you do.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/transformed.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const material_mod = @import("material.zig");
