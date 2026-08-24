@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# zjolt — check that src/c.zig still declares the same functions as ffi/zjolt.h.
+# zjolt — check that src/c.zig still declares the same functions as ffi/*.h.
 #
 # The runtime ABI guard (zjoltAbiLayout, asserted in src/zjolt.zig) covers
 # every struct: sizes, alignments, and a digest over every field name and
@@ -93,7 +93,13 @@ parse_decls() {
   ' <<< "$1"
 }
 
-flatten ffi/zjolt.h > "$work/header.txt"
+# Every public header, not just the umbrella: the surface outgrew one file.
+# Globbed rather than listed, so a header added and forgotten cannot silently
+# drop out of the check. zjolt_internal.h is C++ and implementation-private.
+headers=$(ls ffi/zjolt_*.h | grep -v '/zjolt_internal\.h$')
+[ -z "$headers" ] && { printf '%sno public headers matched%s\n' "$RED" "$OFF" >&2; exit 1; }
+cat $headers > "$work/all-headers.h"
+flatten "$work/all-headers.h" > "$work/header.txt"
 flatten src/c.zig > "$work/externs.txt"
 
 parse_decls "$(cat "$work/header.txt")" "ZJOLT_API[ \t]+" | sort > "$work/header.list"
@@ -103,14 +109,14 @@ header_count=$(wc -l < "$work/header.list" | tr -d ' ')
 extern_count=$(wc -l < "$work/externs.list" | tr -d ' ')
 
 if [ "$header_count" -eq 0 ] || [ "$extern_count" -eq 0 ]; then
-  printf '%sparsed %s declarations from the header and %s from c.zig — one of ' \
+  printf '%sparsed %s declarations from the headers and %s from c.zig — one of ' \
     "$RED" "$header_count" "$extern_count" >&2
   printf 'them is zero, so this check is not actually checking anything.%s\n' \
     "$OFF" >&2
   exit 1
 fi
 
-printf '%s%s functions in ffi/zjolt.h, %s externs in src/c.zig%s\n' \
+printf '%s%s functions in the public headers, %s externs in src/c.zig%s\n' \
   "$DIM" "$header_count" "$extern_count" "$OFF"
 
 status=0
@@ -120,7 +126,7 @@ status=0
 missing=$(comm -23 <(cut -d' ' -f1 "$work/header.list") \
                    <(cut -d' ' -f1 "$work/externs.list") | grep -v '^zjoltInit$' || true)
 if [ -n "$missing" ]; then
-  printf '%sdeclared in ffi/zjolt.h but missing from src/c.zig:%s\n' "$RED" "$OFF" >&2
+  printf '%sdeclared in the public headers but missing from src/c.zig:%s\n' "$RED" "$OFF" >&2
   printf '  %s\n' $missing >&2
   status=1
 fi
@@ -128,7 +134,7 @@ fi
 extra=$(comm -13 <(cut -d' ' -f1 "$work/header.list") \
                  <(cut -d' ' -f1 "$work/externs.list") || true)
 if [ -n "$extra" ]; then
-  printf '%sdeclared in src/c.zig but not exported by ffi/zjolt.h:%s\n' "$RED" "$OFF" >&2
+  printf '%sdeclared in src/c.zig but not exported by any public header:%s\n' "$RED" "$OFF" >&2
   printf '  %s\n' $extra >&2
   status=1
 fi
@@ -138,15 +144,15 @@ while read -r name arity; do
   other=$(awk -v n="$name" '$1 == n { print $2 }' "$work/externs.list")
   [ -z "$other" ] && continue
   if [ "$arity" != "$other" ]; then
-    printf '%s%s takes %s parameters in ffi/zjolt.h but %s in src/c.zig%s\n' \
+    printf '%s%s takes %s parameters in the public headers but %s in src/c.zig%s\n' \
       "$RED" "$name" "$arity" "$other" "$OFF" >&2
     status=1
   fi
 done < "$work/header.list"
 
 if [ $status -ne 0 ]; then
-  printf '\n%sthe C header and the Zig externs have drifted.%s\n' "$RED" "$OFF" >&2
+  printf '\n%sthe C headers and the Zig externs have drifted.%s\n' "$RED" "$OFF" >&2
   exit 1
 fi
 
-printf '%sffi/zjolt.h and src/c.zig declare the same functions%s\n' "$GREEN" "$OFF"
+printf '%sthe public headers and src/c.zig declare the same functions%s\n' "$GREEN" "$OFF"
