@@ -10,8 +10,13 @@
 //   *Create        allocate through the installed allocator and yield a handle
 //                  the caller owns.
 //   *Destroy       accept NULL and are safe to call once.
-//   Shapes         are reference counted: zjoltShapeAddRef / zjoltShapeRelease.
-//                  Everything else is a plain owning handle.
+//   Handles        are either reference counted, released with *AddRef and
+//                  *Release, or plain owning ones freed with *Destroy. Which
+//                  kind a type is is written on the type; there is no single
+//                  rule that covers all of them. Shapes, materials, group
+//                  filters, constraints, path constraint paths, soft-body
+//                  shared settings, skeletons, ragdoll settings and ragdolls
+//                  are the reference-counted ones today.
 //   Query results  borrow nothing; every out-parameter is caller-owned storage.
 //   Callbacks      receive pointers valid only for the duration of the call.
 //
@@ -258,11 +263,18 @@ ZJOLT_API void zjoltDeinit(void);
 
 ZJOLT_API bool zjoltIsInitialized(void);
 
-/// Physics systems, job systems and characters currently alive.
+/// Plain owning handles currently alive, across every kind there is:
+/// physics systems, job systems, characters (both kinds), character contact
+/// listeners, character-vs-character collisions, debug renderers, compute
+/// systems, hair, and vehicle constraints.
 ///
-/// Shapes are not counted: Jolt reference counts them, and their count changes
-/// inside calls zjolt does not mediate, so a number kept here would be wrong
-/// rather than merely absent. Release your shapes anyway — they are freed
+/// The full list matters because zjoltDeinit REFUSES while this is non-zero.
+/// A host that has released only the kinds it remembers has no other way to
+/// find what is holding the library up.
+///
+/// Reference-counted objects are not counted: Jolt owns their counts, which
+/// change inside calls zjolt does not mediate, so a number kept here would be
+/// wrong rather than merely absent. Release them anyway — they are freed
 /// through the installed allocator too.
 ZJOLT_API uint32_t zjoltLiveHandleCount(void);
 
