@@ -21,6 +21,7 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
+#include <Jolt/Physics/Collision/PhysicsMaterial.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeID.h>
 #include <Jolt/Physics/PhysicsSystem.h>
@@ -59,6 +60,12 @@ inline const JPH::Shape *ToJolt(const ZJoltShape *shape) {
 }
 inline const ZJoltShape *ToC(const JPH::Shape *shape) {
   return reinterpret_cast<const ZJoltShape *>(shape);
+}
+inline const JPH::PhysicsMaterial *ToJolt(const ZJoltPhysicsMaterial *material) {
+  return reinterpret_cast<const JPH::PhysicsMaterial *>(material);
+}
+inline const ZJoltPhysicsMaterial *ToC(const JPH::PhysicsMaterial *material) {
+  return reinterpret_cast<const ZJoltPhysicsMaterial *>(material);
 }
 inline const JPH::Body *ToJolt(const ZJoltBody *body) {
   return reinterpret_cast<const JPH::Body *>(body);
@@ -327,6 +334,14 @@ inline JPH::SubShapeID ToJoltSubShapeId(ZJoltSubShapeId id) {
 
 inline ZJoltSubShapeId ToC(const JPH::SubShapeID &id) {
   return static_cast<ZJoltSubShapeId>(id.GetValue());
+}
+
+inline JPH::Color ToJolt(const ZJoltColor &c) {
+  return JPH::Color(c.r, c.g, c.b, c.a);
+}
+
+inline ZJoltColor ToC(JPH::ColorArg c) {
+  return ZJoltColor{c.r, c.g, c.b, c.a};
 }
 
 inline void WriteVec3(ZJoltVec3 *out, JPH::Vec3Arg v) {

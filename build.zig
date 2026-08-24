@@ -159,6 +159,7 @@ const public_headers = [_][]const u8{
     "ffi/zjolt.h",
     "ffi/zjolt_core.h",
     "ffi/zjolt_shape.h",
+    "ffi/zjolt_material.h",
     "ffi/zjolt_system.h",
     "ffi/zjolt_body.h",
     "ffi/zjolt_query.h",
@@ -170,6 +171,7 @@ const public_headers = [_][]const u8{
 const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_core.cpp",
     "ffi/zjolt_shape.cpp",
+    "ffi/zjolt_material.cpp",
     "ffi/zjolt_system.cpp",
     "ffi/zjolt_body.cpp",
     "ffi/zjolt_query.cpp",

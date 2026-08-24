@@ -358,6 +358,49 @@ pub const BodyInterface = struct {
     pub fn getGravityFactor(self: BodyInterface, body: BodyId) f32 {
         return c.zjoltBodyGetGravityFactor(self.handle, body);
     }
+
+    /// The material of one leaf of the body's shape. @see `Shape.material`
+    /// for what a material is and for the sub-shape id rules.
+    ///
+    /// **This is not a way to test whether a body exists.** Jolt takes a body
+    /// lock and answers with the shared default material when it fails, so a
+    /// destroyed body and a body whose shape has no materials of its own read
+    /// identically. That answer is forwarded rather than replaced with an
+    /// invented null, because reporting a failure Jolt did not report would be
+    /// a different contract, not a stricter one. Use `isAdded` when the
+    /// question is really about the body.
+    pub fn getMaterial(
+        self: BodyInterface,
+        body: BodyId,
+        sub_shape_id: c.SubShapeId,
+    ) ?shape_mod.PhysicsMaterial {
+        const handle = c.zjoltBodyGetMaterial(self.handle, body, sub_shape_id) orelse
+            return null;
+        return .{ .handle = handle };
+    }
+
+    /// Tells the system a body's shape changed underneath it — which is what
+    /// the `MutableCompound` methods do.
+    ///
+    /// `previous_center_of_mass` is the shape's centre of mass BEFORE the
+    /// change; the body is moved so its geometry stays where it was. Without
+    /// this call the broad phase and the contact cache go on describing the
+    /// shape as it used to be.
+    pub fn notifyShapeChanged(
+        self: BodyInterface,
+        body: BodyId,
+        previous_center_of_mass: math.Vec3,
+        update_mass_properties: bool,
+        activation: Activation,
+    ) void {
+        c.zjoltBodyNotifyShapeChanged(
+            self.handle,
+            body,
+            &previous_center_of_mass,
+            update_mass_properties,
+            activation,
+        );
+    }
 };
 
 //=============================================================================

@@ -492,6 +492,31 @@ float zjoltBodyGetGravityFactor(const ZJoltPhysicsSystem *system,
   return iface->GetGravityFactor(zjolt::ToJolt(body));
 }
 
+const ZJoltPhysicsMaterial *zjoltBodyGetMaterial(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    ZJoltSubShapeId sub_shape_id) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return nullptr;
+  // Forwarded as-is, including the case a stricter ABI would want to reject:
+  // BodyInterface::GetMaterial answers with PhysicsMaterial::sDefault when its
+  // body lock fails, so a destroyed body reads as a shape with no materials.
+  // See the header — that is documented rather than papered over.
+  return zjolt::ToC(iface->GetMaterial(zjolt::ToJolt(body),
+                                       zjolt::ToJoltSubShapeId(sub_shape_id)));
+}
+
+void zjoltBodyNotifyShapeChanged(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                                 const ZJoltVec3 *previous_center_of_mass,
+                                 bool update_mass_properties,
+                                 ZJoltActivation activation) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || previous_center_of_mass == nullptr) return;
+  iface->NotifyShapeChanged(zjolt::ToJolt(body),
+                            zjolt::ToJolt(*previous_center_of_mass),
+                            update_mass_properties,
+                            ToJoltActivation(activation));
+}
+
 //===----------------------------------------------------------------------===//
 // Bulk read-back
 //===----------------------------------------------------------------------===//

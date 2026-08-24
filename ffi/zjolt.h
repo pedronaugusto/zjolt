@@ -17,6 +17,7 @@
 
 #include "zjolt_body.h"
 #include "zjolt_character.h"
+#include "zjolt_material.h"
 #include "zjolt_query.h"
 #include "zjolt_shape.h"
 #include "zjolt_system.h"
