@@ -421,6 +421,36 @@ inline void WriteRMat44(ZJoltRMat44 *out, JPH::RMat44Arg m) {
   if (out != nullptr) *out = ToCR(m);
 }
 
+/// The other direction of ToC(Mat44Arg): sixteen column-major floats back
+/// into Jolt's four SIMD columns. `sLoadFloat4x4` reads four consecutive
+/// `Float4`s as four columns, which is exactly this layout — the same
+/// reinterpretation `ffi/zjolt_softbody.cpp`'s local `ToJoltMat44` uses for
+/// the identical reason, kept here too since zjolt_math.cpp is the other
+/// translation unit that needs a Mat44 crossing INTO Jolt rather than out.
+inline JPH::Mat44 ToJolt(const ZJoltMat44 &m) {
+  return JPH::Mat44::sLoadFloat4x4(reinterpret_cast<const JPH::Float4 *>(m.m));
+}
+
+/// The other direction of ToCR(RMat44Arg). Built column by column rather than
+/// through sLoadFloat4x4: that loader reads plain `float`s, and ZJoltRMat44's
+/// elements are `ZJoltReal` — `double` under -Ddouble_precision, when they do
+/// not fit a Float4 at all. The upper 3x3 is exact float precision either
+/// way (see zjolt_core.h's note on ZJoltRMat44), so only the cast is doing
+/// anything in a float build; the translation column goes through
+/// ToJoltR(ZJoltRVec3) rather than a bare cast so it keeps this file's usual
+/// one conversion per scalar type.
+inline JPH::RMat44 ToJoltR(const ZJoltRMat44 &m) {
+  const JPH::Vec4 col0(static_cast<float>(m.m[0]), static_cast<float>(m.m[1]),
+                       static_cast<float>(m.m[2]), static_cast<float>(m.m[3]));
+  const JPH::Vec4 col1(static_cast<float>(m.m[4]), static_cast<float>(m.m[5]),
+                       static_cast<float>(m.m[6]), static_cast<float>(m.m[7]));
+  const JPH::Vec4 col2(static_cast<float>(m.m[8]), static_cast<float>(m.m[9]),
+                       static_cast<float>(m.m[10]),
+                       static_cast<float>(m.m[11]));
+  const ZJoltRVec3 translation{m.m[12], m.m[13], m.m[14]};
+  return JPH::RMat44(col0, col1, col2, ToJoltR(translation));
+}
+
 //===----------------------------------------------------------------------===//
 // Query filter adapters
 //
