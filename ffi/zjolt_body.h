@@ -78,10 +78,37 @@ ZJOLT_API void zjoltBodyActivate(ZJoltPhysicsSystem *system, ZJoltBodyId body);
 ZJOLT_API void zjoltBodyDeactivate(ZJoltPhysicsSystem *system,
                                    ZJoltBodyId body);
 
+/// Restarts the clock `time_before_sleep` counts down before an active body is
+/// allowed to sleep. A no-op on a body that is already asleep or not added.
+ZJOLT_API void zjoltBodyResetSleepTimer(ZJoltPhysicsSystem *system,
+                                        ZJoltBodyId body);
+
+/// Which kind of body this is. There is no constructor for a soft body yet, so
+/// this is only ever ZJOLT_BODY_TYPE_RIGID_BODY through this ABI — it exists so
+/// a body read back by id always answers.
+///
+/// ZJOLT_BODY_TYPE_RIGID_BODY when `system` is NULL or the body lock fails,
+/// which is Jolt's own default rather than one this binding invented.
+typedef enum ZJoltBodyType {
+  ZJOLT_BODY_TYPE_RIGID_BODY = 0,
+  ZJOLT_BODY_TYPE_SOFT_BODY = 1,
+} ZJoltBodyType;
+
+ZJOLT_API ZJoltBodyType zjoltBodyGetBodyType(const ZJoltPhysicsSystem *system,
+                                             ZJoltBodyId body);
+
 ZJOLT_API void zjoltBodySetMotionType(ZJoltPhysicsSystem *system,
                                       ZJoltBodyId body, ZJoltMotionType type,
                                       ZJoltActivation activation);
 ZJOLT_API ZJoltMotionType zjoltBodyGetMotionType(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// How well this body detects collisions when it moves fast. NULL system or a
+/// failed body lock reads back ZJOLT_MOTION_QUALITY_DISCRETE.
+ZJOLT_API void zjoltBodySetMotionQuality(ZJoltPhysicsSystem *system,
+                                         ZJoltBodyId body,
+                                         ZJoltMotionQuality quality);
+ZJOLT_API ZJoltMotionQuality zjoltBodyGetMotionQuality(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body);
 
 /// Teleport: places the body immediately, ignoring the collision that puts it
@@ -98,6 +125,17 @@ ZJOLT_API void zjoltBodyGetPositionAndRotation(
 ZJOLT_API void zjoltBodyGetCenterOfMassPosition(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltRVec3 *out);
 
+/// As zjoltBodySetPositionAndRotation, but skips the broad-phase update and
+/// the activation check entirely when the new pose is close enough to the old
+/// one. Worth using in place of the plain teleport when the caller cannot
+/// already tell "did this actually move" — a networked snapshot applied every
+/// tick, for instance — since that is what would otherwise wake a resting
+/// body and dirty its broad-phase node for nothing. `rotation` may be NULL to
+/// keep the current orientation.
+ZJOLT_API void zjoltBodySetPositionAndRotationWhenChanged(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, ZJoltActivation activation);
+
 /// Drives a kinematic body toward a target over `delta_time`, so it pushes
 /// dynamic bodies out of the way instead of teleporting through them. This is
 /// how a moving platform or an animated character should move.
@@ -106,6 +144,16 @@ ZJOLT_API void zjoltBodyMoveKinematic(ZJoltPhysicsSystem *system,
                                       const ZJoltRVec3 *target_position,
                                       const ZJoltQuat *target_rotation,
                                       float delta_time);
+
+/// Sets position, rotation and both velocities in one lock. Cheaper than the
+/// equivalent separate calls when restoring a full motion state — a network
+/// snapshot, a save-state restore of a single body. Static bodies keep
+/// whatever velocity they had (Jolt has nowhere to store one). `rotation` may
+/// be NULL to keep the current orientation.
+ZJOLT_API void zjoltBodySetPositionRotationAndVelocity(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *linear_velocity,
+    const ZJoltVec3 *angular_velocity);
 
 ZJOLT_API void zjoltBodySetLinearVelocity(ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body,
@@ -117,6 +165,33 @@ ZJOLT_API void zjoltBodySetAngularVelocity(ZJoltPhysicsSystem *system,
                                            const ZJoltVec3 *velocity);
 ZJOLT_API void zjoltBodyGetAngularVelocity(const ZJoltPhysicsSystem *system,
                                            ZJoltBodyId body, ZJoltVec3 *out);
+
+/// Sets both in one lock rather than two.
+ZJOLT_API void zjoltBodySetLinearAndAngularVelocity(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    const ZJoltVec3 *linear_velocity, const ZJoltVec3 *angular_velocity);
+/// Reads both in one lock rather than two. Either out-parameter may be NULL.
+ZJOLT_API void zjoltBodyGetLinearAndAngularVelocity(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    ZJoltVec3 *out_linear_velocity, ZJoltVec3 *out_angular_velocity);
+
+/// Adds to the current linear velocity, clamped the same way
+/// zjoltBodySetLinearVelocity is.
+ZJOLT_API void zjoltBodyAddLinearVelocity(ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body,
+                                          const ZJoltVec3 *linear_velocity);
+ZJOLT_API void zjoltBodyAddLinearAndAngularVelocity(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    const ZJoltVec3 *linear_velocity, const ZJoltVec3 *angular_velocity);
+
+/// Velocity of the point on this body that is currently at `point` (world
+/// space), including the contribution from spin. Zero for a static body, and
+/// zero when the body lock fails — the same answer, which is why
+/// zjoltBodyIsAdded is the way to tell them apart if that matters.
+ZJOLT_API void zjoltBodyGetPointVelocity(const ZJoltPhysicsSystem *system,
+                                         ZJoltBodyId body,
+                                         const ZJoltRVec3 *point,
+                                         ZJoltVec3 *out);
 
 /// Forces and torques accumulate until the next step consumes them; impulses
 /// change velocity immediately. `point` is in world space.
@@ -138,6 +213,20 @@ ZJOLT_API void zjoltBodyAddImpulseAtPoint(ZJoltPhysicsSystem *system,
 ZJOLT_API void zjoltBodyAddAngularImpulse(ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body,
                                           const ZJoltVec3 *angular_impulse);
+
+/// Applies drag and buoyancy for a body partly submerged at
+/// `surface_position`/`surface_normal` (surface plane in world space, normal
+/// pointing out of the fluid) and activates it on success.
+///
+/// Returns false, and does nothing, for a body that is not dynamic or whose
+/// lock fails — the same false Jolt returns, forwarded rather than replaced
+/// with an invented error.
+ZJOLT_API bool zjoltBodyApplyBuoyancyImpulse(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    const ZJoltRVec3 *surface_position, const ZJoltVec3 *surface_normal,
+    float buoyancy, float linear_drag, float angular_drag,
+    const ZJoltVec3 *fluid_velocity, const ZJoltVec3 *gravity,
+    float delta_time);
 
 /// Replaces the shape. With `update_mass_properties` the body's mass and
 /// inertia are recomputed from the new shape.
@@ -169,6 +258,45 @@ ZJOLT_API void zjoltBodySetGravityFactor(ZJoltPhysicsSystem *system,
                                          ZJoltBodyId body, float factor);
 ZJOLT_API float zjoltBodyGetGravityFactor(const ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body);
+
+/// A static or kinematic body has no motion properties to hold this, so these
+/// two are no-ops on one. `velocity` must not be negative — Jolt asserts that
+/// in a build with asserts enabled and reads it as-is otherwise, so passing a
+/// negative one is undefined rather than refused.
+///
+/// The getters answer 500 and 15*pi (Jolt's own construction-time defaults,
+/// `BodyCreationSettings::mMaxLinearVelocity`/`mMaxAngularVelocity`) when
+/// `system` is NULL or the body lock fails — Jolt's own fallback, forwarded
+/// rather than replaced with zero.
+ZJOLT_API void zjoltBodySetMaxLinearVelocity(ZJoltPhysicsSystem *system,
+                                             ZJoltBodyId body, float velocity);
+ZJOLT_API float zjoltBodyGetMaxLinearVelocity(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body);
+ZJOLT_API void zjoltBodySetMaxAngularVelocity(ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body,
+                                              float velocity);
+ZJOLT_API float zjoltBodyGetMaxAngularVelocity(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Merging nearby contact manifolds into one, on by default. Turning it off
+/// for one body invalidates that body's contact cache, so a pair already
+/// resting picks up the change on the next step rather than the one after.
+///
+/// The getter answers true — Jolt's own default — when `system` is NULL or the
+/// body lock fails.
+ZJOLT_API void zjoltBodySetUseManifoldReduction(ZJoltPhysicsSystem *system,
+                                                ZJoltBodyId body,
+                                                bool use_reduction);
+ZJOLT_API bool zjoltBodyGetUseManifoldReduction(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Whether this body reports contacts without responding to them — a trigger
+/// volume. Unlocked counterpart of zjoltBodyIsSensorLocked; NULL system or a
+/// failed body lock answers false.
+ZJOLT_API void zjoltBodySetIsSensor(ZJoltPhysicsSystem *system,
+                                    ZJoltBodyId body, bool is_sensor);
+ZJOLT_API bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system,
+                                 ZJoltBodyId body);
 
 /// The material of one leaf of the body's shape. @see zjoltShapeGetMaterial
 /// for what a material is and for the sub-shape id rules.
