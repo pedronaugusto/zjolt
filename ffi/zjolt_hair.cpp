@@ -36,7 +36,10 @@
 #include <Jolt/Physics/Hair/HairSettings.h>
 #include <Jolt/Physics/Hair/HairShaders.h>
 
+#include <cfloat>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #ifdef JPH_USE_CPU_COMPUTE
 #include <Jolt/Compute/CPU/ComputeSystemCPU.h>
@@ -419,6 +422,13 @@ struct ZJoltHair {
   /// them where they are drawn.
   JPH::RVec3 position = JPH::RVec3::sZero();
   JPH::Quat rotation = JPH::Quat::sIdentity();
+
+  /// How far the worst-matched root ended up from the scalp, as
+  /// HairSettings::Init reported it — a distance here, not the square Jolt
+  /// hands back. Kept because Init writes it to an out-parameter and stores it
+  /// nowhere, so there is no second chance to ask: it is the only signal that a
+  /// groom was authored against a different head than the one it is on.
+  float max_root_distance_to_scalp = 0.0f;
 };
 
 namespace {
@@ -501,6 +511,36 @@ JPH::HairSettings::Material ToJolt(const ZJoltHairMaterial &m) {
   out.mSimulationStrandsFraction = m.simulation_strands_fraction;
   out.mGravityPreloadFactor = m.gravity_preload_factor;
   return out;
+}
+
+/// Every gradient one material carries, in the order the messages name them.
+/// The solver builds a GradientSampler from each of these once per substep
+/// (`Hair.cpp:358-369`), so a degenerate one is not a parameter that does
+/// nothing — it is a NaN in the shader constants.
+struct NamedGradient {
+  const ZJoltHairGradient *gradient;
+  const char *name;
+};
+
+/// A gradient whose fraction range is empty. `GradientSampler` divides by
+/// `mMaxFraction - mMinFraction` with no guard, so this is an infinity in the
+/// multiplier and a NaN out of every sample taken from it.
+bool RangeIsEmpty(const ZJoltHairGradient &g) {
+  return !(g.max_fraction != g.min_fraction);
+}
+
+/// GradientSampler, reproduced. Written out rather than constructed through
+/// Jolt's class because that class is nested inside HairSettings and takes a
+/// JPH gradient, and this has to answer for a ZJoltHairGradient the caller
+/// holds — one that may never have been part of a groom at all.
+float SampleGradient(const ZJoltHairGradient &g, float fraction) {
+  const float multiplier =
+      (g.max - g.min) / (g.max_fraction - g.min_fraction);
+  const float offset = g.min - g.min_fraction * multiplier;
+  const float lo = g.min < g.max ? g.min : g.max;
+  const float hi = g.min > g.max ? g.min : g.max;
+  const float value = offset + fraction * multiplier;
+  return value < lo ? lo : (value > hi ? hi : value);
 }
 
 /// The name of the first hair shader the backend failed to produce, or NULL.
@@ -623,6 +663,36 @@ ZJoltResult ValidateGroom(const ZJoltHairDesc *desc, uint32_t material_count) {
                            "a strand's material index into a byte");
   }
 
+  // A gradient with an empty fraction range. Jolt has no guard for it, and the
+  // symptom is not the parameter misbehaving — it is every vertex of every
+  // strand using that material becoming NaN on the first substep, because the
+  // sampler's multiplier divides by the range and the result reaches the shader
+  // constant buffer.
+  if (desc->materials != nullptr) {
+    for (uint32_t i = 0; i < desc->material_count; ++i) {
+      const ZJoltHairMaterial &m = desc->materials[i];
+      const NamedGradient gradients[] = {
+          {&m.gravity_factor, "gravity_factor"},
+          {&m.hair_radius, "hair_radius"},
+          {&m.world_transform_influence, "world_transform_influence"},
+          {&m.grid_velocity_factor, "grid_velocity_factor"},
+          {&m.global_pose, "global_pose"},
+          {&m.skin_global_pose, "skin_global_pose"},
+      };
+      for (const NamedGradient &named : gradients) {
+        if (RangeIsEmpty(*named.gradient)) {
+          char detail[176];
+          std::snprintf(detail, sizeof(detail),
+                        "material %u's %s has min_fraction equal to "
+                        "max_fraction; Jolt divides by the difference and the "
+                        "NaN reaches every vertex of the material",
+                        i, named.name);
+          return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, detail);
+        }
+      }
+    }
+  }
+
   for (uint32_t s = 0; s < desc->strand_count; ++s) {
     const ZJoltHairStrand &strand = desc->strands[s];
     if (strand.end_vertex > desc->vertex_count ||
@@ -731,6 +801,74 @@ ZJoltResult ReadBackPositions(ZJoltHair *hair, bool render,
   hair->hair->UnlockReadBackBuffers();
 
   return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
+}
+
+/// Everything the two ways of getting a hair share: a JPH::Hair over settings
+/// that are already built, its compute buffers, and the handle.
+///
+/// `settings` arrives already held by the caller's Ref and already through
+/// InitCompute, because that is the step the two paths do differently — one
+/// computes the groom, the other reads it back off disk.
+ZJoltResult FinishHair(ZJoltComputeSystem *compute,
+                       JPH::HairSettings *settings, const JPH::RVec3 &position,
+                       const JPH::Quat &rotation, JPH::ObjectLayer layer,
+                       float max_root_distance_to_scalp, ZJoltHair **out) {
+  ZJoltHair *handle = zjolt::New<ZJoltHair>();
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  JPH::Hair *hair = zjolt::New<JPH::Hair>(
+      static_cast<const JPH::HairSettings *>(settings), position, rotation,
+      layer);
+  if (hair == nullptr) {
+    zjolt::Delete(handle);
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
+  }
+  hair->Init(compute->context->system);
+
+  handle->context = compute->context;
+  handle->settings = settings;
+  handle->hair = hair;
+  handle->position = position;
+  handle->rotation = rotation;
+  handle->max_root_distance_to_scalp = max_root_distance_to_scalp;
+  zjolt::HandleCreated();
+  *out = handle;
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// The baked-groom container
+//===----------------------------------------------------------------------===//
+
+/// The shared container from zjolt_internal.h, under a tag of its own, with
+/// four bytes for the one thing HairSettings::SaveBinaryState does not carry:
+/// the root-to-scalp distance, which Init reports to an out-parameter and never
+/// stores. Losing it across a bake would make zjoltHairGetInfo's answer depend
+/// on how the hair was created.
+constexpr zjolt::ContainerFormat kGroomContainer = {
+    /*magic=*/{'Z', 'J', 'H', 'G'},
+    /*version=*/1,
+    /*extra_size=*/4,
+    /*too_short=*/"too short to be a saved groom",
+    /*wrong_magic=*/"not a groom saved by zjoltHairSaveGroom",
+    /*bad_checksum=*/"the groom payload failed its checksum",
+};
+
+constexpr size_t kGroomHeaderSize = kGroomContainer.HeaderSize();
+
+/// A float through the container's `extra` bytes, which are a byte array.
+/// Punned through a uint32 rather than memcpy'd raw so the blob stays
+/// little-endian on every host, as the rest of the framing is.
+uint32_t FloatBits(float value) {
+  uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+float BitsToFloat(uint32_t bits) {
+  float value = 0.0f;
+  std::memcpy(&value, &bits, sizeof(value));
+  return value;
 }
 
 }  // namespace
@@ -918,25 +1056,11 @@ ZJoltResult zjoltHairCreate(ZJoltComputeSystem *compute,
   settings->Init(max_dist_sq_hair_to_scalp);
   settings->InitCompute(compute->context->system);
 
-  ZJoltHair *handle = zjolt::New<ZJoltHair>();
-  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
-
-  JPH::Hair *hair = zjolt::New<JPH::Hair>(
-      static_cast<const JPH::HairSettings *>(settings),
-      zjolt::ToJoltR(desc->position), zjolt::ToJoltRotation(desc->rotation),
-      static_cast<JPH::ObjectLayer>(desc->object_layer));
-  if (hair == nullptr) {
-    zjolt::Delete(handle);
-    return ZJOLT_RESULT_OUT_OF_MEMORY;
-  }
-  hair->Init(compute->context->system);
-
-  handle->context = compute->context;
-  handle->settings = settings;
-  handle->hair = hair;
-  zjolt::HandleCreated();
-  *out = handle;
-  return ZJOLT_RESULT_OK;
+  return FinishHair(compute, settings,
+                    zjolt::ToJoltR(desc->position),
+                    zjolt::ToJoltRotation(desc->rotation),
+                    static_cast<JPH::ObjectLayer>(desc->object_layer),
+                    std::sqrt(max_dist_sq_hair_to_scalp), out);
 }
 
 void zjoltHairDestroy(ZJoltHair *hair) {
@@ -1077,6 +1201,271 @@ ZJoltResult zjoltHairReadBackRenderPositions(ZJoltHair *hair,
   ZJOLT_ENTER(out_count);
   if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   return ReadBackPositions(hair, true, out_positions, capacity, out_count);
+}
+
+ZJoltResult zjoltHairReadBackScalpVertices(ZJoltHair *hair,
+                                           ZJoltVec3 *out_positions,
+                                           uint32_t capacity,
+                                           uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const uint32_t count =
+      static_cast<uint32_t>(settings->mScalpVertices.size());
+  *out_count = count;
+  // A groom with no scalp has no scalp buffer for ReadBackGPUState to schedule,
+  // so there is nothing to stall for either.
+  if (out_positions == nullptr || count == 0) return ZJOLT_RESULT_OK;
+
+  hair->hair->ReadBackGPUState(hair->context->queue);
+  hair->hair->LockReadBackBuffers();
+  // Null when Hair::Init made no scalp buffer, which is exactly the case the
+  // zero count above has already returned for — but the solver reaches this
+  // pointer through a map that can fail, so it is checked rather than assumed.
+  const JPH::Float3 *source = hair->hair->GetScalpVertices();
+  const uint32_t n = capacity < count ? capacity : count;
+  if (source != nullptr) {
+    for (uint32_t i = 0; i < n; ++i) {
+      out_positions[i] = ZJoltVec3{source[i].x, source[i].y, source[i].z};
+    }
+  }
+  hair->hair->UnlockReadBackBuffers();
+
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairReadBackVertexState(ZJoltHair *hair,
+                                         ZJoltHairVertexState *out_state,
+                                         uint32_t capacity,
+                                         uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const uint32_t count = static_cast<uint32_t>(settings->mSimVertices.size());
+  *out_count = count;
+  if (out_state == nullptr) return ZJOLT_RESULT_OK;
+
+  hair->hair->ReadBackGPUState(hair->context->queue);
+
+  // No Lock/Unlock around this one. ReadBackGPUState un-transposes the position
+  // and velocity buffers into plain CPU arrays of its own before it returns, and
+  // those are what the four accessors below read; the lock exists for the ones
+  // that hand back a still-mapped device buffer — the scalp, the grid and the
+  // render positions.
+  const JPH::Float3 *positions = hair->hair->GetPositions();
+  const JPH::Quat *rotations = hair->hair->GetRotations();
+  const uint32_t n = capacity < count ? capacity : count;
+  if (positions != nullptr && rotations != nullptr) {
+    const JPH::StridedPtr<const JPH::Float3> velocities =
+        hair->hair->GetVelocities();
+    const JPH::StridedPtr<const JPH::Float3> angular =
+        hair->hair->GetAngularVelocities();
+    for (uint32_t i = 0; i < n; ++i) {
+      ZJoltHairVertexState &state = out_state[i];
+      state.position =
+          ZJoltVec3{positions[i].x, positions[i].y, positions[i].z};
+      zjolt::WriteQuat(&state.rotation, rotations[i]);
+      const JPH::Float3 &v = velocities[static_cast<int>(i)];
+      const JPH::Float3 &w = angular[static_cast<int>(i)];
+      state.velocity = ZJoltVec3{v.x, v.y, v.z};
+      state.angular_velocity = ZJoltVec3{w.x, w.y, w.z};
+    }
+  }
+
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairGetSimulatedStrands(const ZJoltHair *hair,
+                                         ZJoltHairStrand *out_strands,
+                                         uint32_t capacity,
+                                         uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const uint32_t count = static_cast<uint32_t>(settings->mSimStrands.size());
+  *out_count = count;
+  if (out_strands == nullptr) return ZJOLT_RESULT_OK;
+
+  const uint32_t n = capacity < count ? capacity : count;
+  for (uint32_t i = 0; i < n; ++i) {
+    const JPH::HairSettings::SStrand &strand = settings->mSimStrands[i];
+    out_strands[i] = ZJoltHairStrand{strand.mStartVtx, strand.mEndVtx,
+                                     strand.mMaterialIndex};
+  }
+
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairGetInfo(const ZJoltHair *hair, ZJoltHairInfo *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(hair, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  out->simulated_vertex_count =
+      static_cast<uint32_t>(settings->mSimVertices.size());
+  out->simulated_strand_count =
+      static_cast<uint32_t>(settings->mSimStrands.size());
+  out->render_vertex_count =
+      static_cast<uint32_t>(settings->mRenderVertices.size());
+  out->render_strand_count =
+      static_cast<uint32_t>(settings->mRenderStrands.size());
+  out->material_count = static_cast<uint32_t>(settings->mMaterials.size());
+  out->joint_count =
+      static_cast<uint32_t>(settings->mScalpInverseBindPose.size());
+  out->max_vertices_per_strand = settings->mMaxVerticesPerStrand;
+  out->padded_vertex_count = settings->GetNumVerticesPadded();
+  zjolt::WriteVec3(&out->simulation_bounds_min, settings->mSimulationBounds.mMin);
+  zjolt::WriteVec3(&out->simulation_bounds_max, settings->mSimulationBounds.mMax);
+  out->grid_size_x = static_cast<uint32_t>(settings->mGridSize.GetX());
+  out->grid_size_y = static_cast<uint32_t>(settings->mGridSize.GetY());
+  out->grid_size_z = static_cast<uint32_t>(settings->mGridSize.GetZ());
+  out->max_root_distance_to_scalp = hair->max_root_distance_to_scalp;
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Baking a groom
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltHairSaveGroom(const ZJoltHair *hair, void *buffer,
+                               size_t capacity, size_t *out_size) {
+  ZJOLT_ENTER(out_size);
+  if (!zjolt::Present(hair, out_size)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  uint8_t *bytes = static_cast<uint8_t *>(buffer);
+
+  // A buffer too small for even the header is counted, not written into:
+  // `bytes + kGroomHeaderSize` would otherwise be a pointer past the end of the
+  // caller's allocation before anything is ever stored through it.
+  const bool count_only = bytes == nullptr || capacity < kGroomHeaderSize;
+
+  // Counting and writing are the same traversal, so the size a query reports
+  // and the size a write consumes cannot drift apart.
+  zjolt::CountingStreamOut stream(
+      count_only ? nullptr : bytes + kGroomHeaderSize,
+      count_only ? 0 : capacity - kGroomHeaderSize);
+  hair->settings->SaveBinaryState(stream);
+
+  const size_t payload_size = stream.Size();
+  *out_size = kGroomHeaderSize + payload_size;
+  if (bytes == nullptr) return ZJOLT_RESULT_OK;
+  if (count_only || capacity < *out_size || stream.IsFailed())
+    return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  uint8_t extra[4];
+  zjolt::WriteLE32(extra, FloatBits(hair->max_root_distance_to_scalp));
+  zjolt::WriteContainerHeader(kGroomContainer, bytes, payload_size, extra);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairCreateFromGroom(ZJoltComputeSystem *compute,
+                                     const void *data, size_t size,
+                                     const ZJoltRVec3 *position,
+                                     const ZJoltQuat *rotation,
+                                     ZJoltObjectLayer object_layer,
+                                     ZJoltHair **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(compute, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (data == nullptr || size == 0) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "no data to restore a groom from");
+  }
+
+  zjolt::ContainerContents contents;
+  const ZJoltResult framed =
+      zjolt::ReadContainer(kGroomContainer, data, size, &contents);
+  if (framed != ZJOLT_RESULT_OK) return framed;
+
+  JPH::HairSettings *raw = zjolt::New<JPH::HairSettings>();
+  if (raw == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+  const JPH::Ref<JPH::HairSettings> settings = raw;
+
+  zjolt::ConstStreamIn stream(contents.payload, contents.payload_size);
+  settings->RestoreBinaryState(stream);
+  if (stream.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the groom data ended before the groom did");
+  }
+  if (!stream.ConsumedAll()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "trailing bytes after the groom");
+  }
+  // A blob that framed and parsed can still describe nothing, and Jolt's own
+  // Init is what would normally have refused it. Every buffer Hair::Init sizes
+  // comes off these arrays, and a zero-length one is a zero-length compute
+  // buffer that the backend has no reason to accept.
+  if (settings->mSimVertices.empty() || settings->mSimStrands.empty() ||
+      settings->mMaterials.empty() || settings->mMaxVerticesPerStrand == 0 ||
+      settings->mNeutralDensity.empty()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the groom parsed but has no strands, materials or "
+                           "density grid in it");
+  }
+
+  settings->InitCompute(compute->context->system);
+
+  return FinishHair(
+      compute, settings,
+      position != nullptr ? zjolt::ToJoltR(*position) : JPH::RVec3::sZero(),
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation)
+                          : JPH::Quat::sIdentity(),
+      static_cast<JPH::ObjectLayer>(object_layer),
+      BitsToFloat(zjolt::ReadLE32(contents.extra)), out);
+}
+
+//===----------------------------------------------------------------------===//
+// Evaluating the authored parameters
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltHairGradientSample(const ZJoltHairGradient *gradient,
+                                    float strand_fraction, float *out_value) {
+  ZJOLT_ENTER(out_value);
+  if (!zjolt::Present(gradient, out_value)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  if (RangeIsEmpty(*gradient)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "a gradient whose min_fraction equals its "
+                           "max_fraction has no value anywhere; Jolt divides "
+                           "by the difference");
+  }
+  // Written as a rejected NOT-in-range so a NaN fails it rather than passing
+  // every comparison it is asked.
+  if (!(strand_fraction > -FLT_MAX && strand_fraction < FLT_MAX)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "strand_fraction must be finite");
+  }
+  *out_value = SampleGradient(*gradient, strand_fraction);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairMaterialGetBendCompliance(
+    const ZJoltHairMaterial *material, float strand_fraction,
+    float *out_value) {
+  ZJOLT_ENTER(out_value);
+  if (!zjolt::Present(material, out_value)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  // Not clamped, refused. Jolt's own version does `uint(fraction * 3)`, which
+  // is undefined for a negative fraction rather than saturating, so a caller
+  // that meant to pass a fraction and passed an index should hear about it.
+  if (!(strand_fraction >= 0.0f && strand_fraction <= 1.0f)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "strand_fraction must be between 0 and 1");
+  }
+
+  float scaled = strand_fraction * 3.0f;
+  uint32_t index = static_cast<uint32_t>(scaled);
+  if (index > 2) index = 2;
+  scaled -= static_cast<float>(index);
+  const float multiplier =
+      material->bend_compliance_multiplier[index] * (1.0f - scaled) +
+      material->bend_compliance_multiplier[index + 1] * scaled;
+  *out_value = multiplier * material->bend_compliance;
+  return ZJOLT_RESULT_OK;
 }
 
 }  // extern "C"

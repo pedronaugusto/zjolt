@@ -1519,6 +1519,249 @@ int main(void) {
   }
 
   //-------------------------------------------------------------------------
+  // Hair, on Jolt's CPU compute backend
+  //
+  // Same scenario as the Zig suite: a groom of two strands of different
+  // lengths on a one-triangle scalp, stepped, read back four quantities at a
+  // time, baked and restored. Every readback here hands the header an array
+  // whose element type the ABI guard can only compare by size — a float3 and a
+  // three-int struct are the same eight bytes to it — so this is the side that
+  // says the layouts agree.
+  //-------------------------------------------------------------------------
+
+  if (zjoltComputeIsCpuSupported()) {
+    ZJoltComputeSystem *compute = NULL;
+    CHECK_OK(zjoltComputeSystemCreateCpu(&compute));
+
+    ZJoltHairMaterial material;
+    zjoltHairMaterialInit(&material);
+    material.enable_collision = false;
+    material.bend_compliance = 1.0e-3f;
+    material.stretch_compliance = 1.0e-5f;
+    material.gravity_factor.min = 1.0f;
+    material.gravity_factor.max = 1.0f;
+    material.gravity_factor.min_fraction = 0.0f;
+    material.gravity_factor.max_fraction = 1.0f;
+    material.global_pose.min = 0.0f;
+    material.global_pose.max = 0.0f;
+    material.grid_velocity_factor.min = 0.0f;
+    material.grid_velocity_factor.max = 0.0f;
+    material.grid_density_force_factor = 0.0f;
+    material.simulation_strands_fraction = 1.0f;
+
+    /* The compliance curve reads the four multipliers as 0%, 33%, 66% and
+       100% of the strand, and the ends of the strand are the ends of it. */
+    material.bend_compliance_multiplier[0] = 1.0f;
+    material.bend_compliance_multiplier[1] = 10.0f;
+    material.bend_compliance_multiplier[2] = 10.0f;
+    material.bend_compliance_multiplier[3] = 1.0f;
+    float compliance = 0.0f;
+    CHECK_OK(zjoltHairMaterialGetBendCompliance(&material, 0.0f, &compliance));
+    CHECK_NEAR(compliance, 1.0e-3f, 1e-9f);
+    CHECK_OK(zjoltHairMaterialGetBendCompliance(&material, 0.5f, &compliance));
+    CHECK_NEAR(compliance, 1.0e-2f, 1e-8f);
+    CHECK(zjoltHairMaterialGetBendCompliance(&material, 1.5f, &compliance) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a strand fraction past the tip is refused rather than truncated");
+
+    /* A gradient ramps between its two fractions and clamps outside them. */
+    ZJoltHairGradient ramp = {0.0f, 1.0f, 0.2f, 0.8f};
+    float sampled = -1.0f;
+    CHECK_OK(zjoltHairGradientSample(&ramp, 0.0f, &sampled));
+    CHECK_NEAR(sampled, 0.0f, 1e-6f);
+    CHECK_OK(zjoltHairGradientSample(&ramp, 0.5f, &sampled));
+    CHECK_NEAR(sampled, 0.5f, 1e-6f);
+    CHECK_OK(zjoltHairGradientSample(&ramp, 1.0f, &sampled));
+    CHECK_NEAR(sampled, 1.0f, 1e-6f);
+    ZJoltHairGradient degenerate = {0.0f, 1.0f, 0.5f, 0.5f};
+    CHECK(zjoltHairGradientSample(&degenerate, 0.5f, &sampled) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "an empty fraction range has no value anywhere");
+
+    static const ZJoltHairVertex kStrandVertices[7] = {
+        {{0.0f, 0.0f, 0.0f}, 0.0f}, {{0.1f, 0.0f, 0.0f}, 1.0f},
+        {{0.2f, 0.0f, 0.0f}, 1.0f}, {{0.3f, 0.0f, 0.0f}, 1.0f},
+        {{0.0f, 0.0f, 0.1f}, 0.0f}, {{0.1f, 0.0f, 0.1f}, 1.0f},
+        {{0.2f, 0.0f, 0.1f}, 1.0f},
+    };
+    static const ZJoltHairStrand kStrands[2] = {{0, 4, 0}, {4, 7, 0}};
+    static const ZJoltVec3 kScalpVertices[3] = {
+        {-0.2f, 0.0f, -0.2f}, {0.4f, 0.0f, -0.2f}, {-0.2f, 0.0f, 0.4f}};
+    static const uint32_t kScalpTriangles[3] = {0, 1, 2};
+    static const ZJoltHairSkinWeight kScalpWeights[3] = {
+        {0, 1.0f}, {0, 1.0f}, {0, 1.0f}};
+    static const float kIdentity[16] = {1, 0, 0, 0, 0, 1, 0, 0,
+                                        0, 0, 1, 0, 0, 0, 0, 1};
+
+    ZJoltHairDesc hair_desc;
+    memset(&hair_desc, 0, sizeof(hair_desc));
+    hair_desc.vertices = kStrandVertices;
+    hair_desc.strands = kStrands;
+    hair_desc.materials = &material;
+    hair_desc.vertex_count = 7;
+    hair_desc.strand_count = 2;
+    hair_desc.material_count = 1;
+    hair_desc.scalp_vertices = kScalpVertices;
+    hair_desc.scalp_triangles = kScalpTriangles;
+    hair_desc.scalp_skin_weights = kScalpWeights;
+    hair_desc.scalp_inverse_bind_pose = kIdentity;
+    hair_desc.scalp_vertex_count = 3;
+    hair_desc.scalp_triangle_count = 1;
+    hair_desc.skin_weights_per_vertex = 1;
+    hair_desc.joint_count = 1;
+    hair_desc.simulation_bounds_padding.x = 0.5f;
+    hair_desc.simulation_bounds_padding.y = 0.5f;
+    hair_desc.simulation_bounds_padding.z = 0.5f;
+    hair_desc.grid_size_x = 4;
+    hair_desc.grid_size_y = 5;
+    hair_desc.grid_size_z = 6;
+    hair_desc.rotation.w = 1.0f;
+    hair_desc.object_layer = LAYER_MOVING;
+
+    /* A material carrying a gradient with no fraction range at all is refused
+       before it can become a groom made of NaN. */
+    ZJoltHairMaterial broken = material;
+    broken.gravity_factor = degenerate;
+    ZJoltHairDesc broken_desc = hair_desc;
+    broken_desc.materials = &broken;
+    ZJoltHair *no_hair = NULL;
+    CHECK(zjoltHairCreate(compute, &broken_desc, &no_hair) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a gradient whose fractions are equal is refused");
+    CHECK(no_hair == NULL, "and no hair came back");
+
+    ZJoltHair *hair = NULL;
+    CHECK_OK(zjoltHairCreate(compute, &hair_desc, &hair));
+
+    ZJoltHairInfo info;
+    memset(&info, 0, sizeof(info));
+    CHECK_OK(zjoltHairGetInfo(hair, &info));
+    CHECK(info.simulated_vertex_count == 7, "every strand is simulated");
+    CHECK(info.simulated_strand_count == 2, "both of them");
+    CHECK(info.render_vertex_count == 7, "and rendered");
+    CHECK(info.max_vertices_per_strand == 4, "the longest strand has four");
+    CHECK(info.padded_vertex_count == 8,
+          "the device buffers are a rectangle, so the short strand is padded");
+    CHECK(info.grid_size_x == 4 && info.grid_size_y == 5 && info.grid_size_z == 6,
+          "the grid is the one that was asked for");
+    CHECK(info.joint_count == 1, "one joint skins the scalp");
+    CHECK(info.max_root_distance_to_scalp < 1.0e-3f,
+          "every root was already on the scalp triangle");
+
+    uint32_t strand_count = 0;
+    ZJoltHairStrand sim_strands[2];
+    CHECK_OK(zjoltHairGetSimulatedStrands(hair, NULL, 0, &strand_count));
+    CHECK(strand_count == 2, "the count comes back without a buffer");
+    CHECK_OK(zjoltHairGetSimulatedStrands(hair, sim_strands, 2, &strand_count));
+    CHECK(sim_strands[0].start_vertex == 0 &&
+              sim_strands[0].end_vertex == sim_strands[1].start_vertex &&
+              sim_strands[1].end_vertex == info.simulated_vertex_count,
+          "the strand ranges tile the simulated vertices exactly");
+
+    CHECK_OK(zjoltHairSetPose(hair, kIdentity, kIdentity, 1));
+    CHECK_OK(zjoltHairUpdate(hair, system, 1.0f / 60.0f));
+
+    uint32_t scalp_count = 0;
+    ZJoltVec3 skinned[3];
+    CHECK_OK(zjoltHairReadBackScalpVertices(hair, skinned, 3, &scalp_count));
+    CHECK(scalp_count == 3, "the scalp reads back a vertex per scalp vertex");
+    for (uint32_t i = 0; i < 3; ++i) {
+      CHECK_NEAR(skinned[i].y, kScalpVertices[i].y, 1e-4f);
+    }
+
+    /* Raise the one joint and the scalp goes with it, which is the step
+       between a pose and hair that follows a head. */
+    float raised[16];
+    memcpy(raised, kIdentity, sizeof(raised));
+    raised[13] = 0.5f;
+    CHECK_OK(zjoltHairSetPose(hair, kIdentity, raised, 1));
+    CHECK_OK(zjoltHairUpdate(hair, system, 1.0f / 60.0f));
+    CHECK_OK(zjoltHairReadBackScalpVertices(hair, skinned, 3, &scalp_count));
+    for (uint32_t i = 0; i < 3; ++i) {
+      CHECK_NEAR(skinned[i].y, kScalpVertices[i].y + 0.5f, 1e-4f);
+    }
+
+    CHECK_OK(zjoltHairSetPose(hair, kIdentity, kIdentity, 1));
+    for (int step = 0; step < 30; ++step) {
+      CHECK_OK(zjoltHairUpdate(hair, system, 1.0f / 60.0f));
+    }
+
+    uint32_t state_count = 0;
+    ZJoltHairVertexState state[7];
+    ZJoltVec3 positions[7];
+    CHECK_OK(zjoltHairReadBackVertexState(hair, state, 7, &state_count));
+    CHECK(state_count == 7, "one state per simulated vertex");
+    CHECK_OK(zjoltHairReadBackPositions(hair, positions, 7, &state_count));
+    for (uint32_t i = 0; i < 7; ++i) {
+      CHECK_NEAR(state[i].position.x, positions[i].x, 1e-5f);
+      CHECK_NEAR(state[i].position.y, positions[i].y, 1e-5f);
+      CHECK_NEAR(state[i].position.z, positions[i].z, 1e-5f);
+      float length_sq = state[i].rotation.x * state[i].rotation.x +
+                        state[i].rotation.y * state[i].rotation.y +
+                        state[i].rotation.z * state[i].rotation.z +
+                        state[i].rotation.w * state[i].rotation.w;
+      CHECK_NEAR(length_sq, 1.0f, 1e-3f);
+    }
+    {
+      const uint32_t tip = sim_strands[0].end_vertex - 1;
+      float speed = fabsf(state[tip].velocity.x) + fabsf(state[tip].velocity.y) +
+                    fabsf(state[tip].velocity.z);
+      CHECK(speed > 1e-3f, "the free tip is moving");
+      CHECK_NEAR(state[sim_strands[0].start_vertex].velocity.y, 0.0f, 1e-4f);
+    }
+
+    /* A short buffer is filled as far as it goes and says so. */
+    uint32_t truncated_count = 0;
+    CHECK(zjoltHairReadBackVertexState(hair, state, 3, &truncated_count) ==
+              ZJOLT_RESULT_BUFFER_TOO_SMALL,
+          "a short buffer is refused with the required count in hand");
+    CHECK(truncated_count == 7, "and the count is the whole thing");
+
+    /* Bake the groom, throw the hair away, and build it again from the blob. */
+    size_t groom_size = 0;
+    CHECK_OK(zjoltHairSaveGroom(hair, NULL, 0, &groom_size));
+    CHECK(groom_size > 0, "a built groom has a size");
+    unsigned char *groom = (unsigned char *)malloc(groom_size);
+    CHECK(groom != NULL, "the groom buffer allocated");
+    if (groom != NULL) {
+      size_t written = 0;
+      CHECK(zjoltHairSaveGroom(hair, groom, groom_size - 1, &written) ==
+                ZJOLT_RESULT_BUFFER_TOO_SMALL,
+            "a buffer one byte short is refused");
+      CHECK_OK(zjoltHairSaveGroom(hair, groom, groom_size, &written));
+      CHECK(written == groom_size, "the size query and the write agree");
+
+      ZJoltHair *restored = NULL;
+      ZJoltQuat identity_rotation = {0.0f, 0.0f, 0.0f, 1.0f};
+      CHECK_OK(zjoltHairCreateFromGroom(compute, groom, groom_size, NULL,
+                                        &identity_rotation, LAYER_MOVING,
+                                        &restored));
+
+      ZJoltHairInfo restored_info;
+      memset(&restored_info, 0, sizeof(restored_info));
+      CHECK_OK(zjoltHairGetInfo(restored, &restored_info));
+      CHECK(memcmp(&info, &restored_info, sizeof(info)) == 0,
+            "a restored groom is the same groom, field for field");
+
+      CHECK_OK(zjoltHairSetPose(restored, kIdentity, kIdentity, 1));
+      CHECK_OK(zjoltHairUpdate(restored, system, 1.0f / 60.0f));
+      zjoltHairDestroy(restored);
+
+      groom[groom_size - 1] ^= 0xffu;
+      restored = NULL;
+      CHECK(zjoltHairCreateFromGroom(compute, groom, groom_size, NULL, NULL,
+                                     LAYER_MOVING, &restored) ==
+                ZJOLT_RESULT_BAD_FORMAT,
+            "a damaged groom fails its checksum");
+      CHECK(restored == NULL, "and nothing came back");
+      free(groom);
+    }
+
+    zjoltHairDestroy(hair);
+    zjoltComputeSystemDestroy(compute);
+  }
+
+  //-------------------------------------------------------------------------
   // Teardown
   //-------------------------------------------------------------------------
 

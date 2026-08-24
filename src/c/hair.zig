@@ -114,6 +114,30 @@ pub const HairMaterial = extern struct {
     gravity_preload_factor: f32,
 };
 
+pub const HairVertexState = extern struct {
+    position: Vec3,
+    rotation: Quat,
+    velocity: Vec3,
+    angular_velocity: Vec3,
+};
+
+pub const HairInfo = extern struct {
+    simulated_vertex_count: u32,
+    simulated_strand_count: u32,
+    render_vertex_count: u32,
+    render_strand_count: u32,
+    material_count: u32,
+    joint_count: u32,
+    max_vertices_per_strand: u32,
+    padded_vertex_count: u32,
+    simulation_bounds_min: Vec3,
+    simulation_bounds_max: Vec3,
+    grid_size_x: u32,
+    grid_size_y: u32,
+    grid_size_z: u32,
+    max_root_distance_to_scalp: f32,
+};
+
 pub const HairDesc = extern struct {
     vertices: ?[*]const HairVertex,
     strands: ?[*]const HairStrand,
@@ -172,3 +196,19 @@ pub extern fn zjoltHairUpdate(hair: *Hair, system: *PhysicsSystem, delta_time: f
 pub extern fn zjoltHairReadBackPositions(hair: *Hair, out_positions: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltHairReadBackRenderPositions(hair: *Hair, out_positions: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltHairReadBackScalpVertices(hair: *Hair, out_positions: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltHairReadBackVertexState(hair: *Hair, out_state: ?[*]HairVertexState, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltHairGetSimulatedStrands(hair: *const Hair, out_strands: ?[*]HairStrand, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltHairGetInfo(hair: *const Hair, out: *HairInfo) Result;
+
+pub extern fn zjoltHairSaveGroom(hair: *const Hair, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
+
+pub extern fn zjoltHairCreateFromGroom(compute: *ComputeSystem, data: [*]const u8, size: usize, position: ?*const RVec3, rotation: ?*const Quat, object_layer: ObjectLayer, out: **Hair) Result;
+
+pub extern fn zjoltHairGradientSample(gradient: *const HairGradient, strand_fraction: f32, out_value: *f32) Result;
+
+pub extern fn zjoltHairMaterialGetBendCompliance(material: *const HairMaterial, strand_fraction: f32, out_value: *f32) Result;
