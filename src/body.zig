@@ -15,6 +15,7 @@ const c = @import("c.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const shape_mod = @import("shape.zig");
+const group_mod = @import("group.zig");
 
 pub const BodyId = c.BodyId;
 pub const invalid_body_id = c.body_id_invalid;
@@ -400,6 +401,53 @@ pub const BodyInterface = struct {
             update_mass_properties,
             activation,
         );
+    }
+
+    //-------------------------------------------------------------------------
+    // Collision groups
+    //
+    // Exceptions between individual bodies, where object layers can only draw
+    // a line between kinds of body. See `group.zig`.
+    //-------------------------------------------------------------------------
+
+    /// The body takes its own reference on `group.filter` and drops its
+    /// previous one.
+    ///
+    /// Changing this on a body already resting on another does not take effect
+    /// until the cached pair is dropped — see `invalidateContactCache`.
+    pub fn setCollisionGroup(
+        self: BodyInterface,
+        body: BodyId,
+        group: group_mod.CollisionGroup,
+    ) void {
+        const raw = group_mod.toC(group);
+        c.zjoltBodySetCollisionGroup(self.handle, body, &raw);
+    }
+
+    /// A stale body id is NOT distinguishable from a body with no group: Jolt
+    /// returns its "invalid" group when the body lock fails, which is exactly
+    /// what a group-less body carries. Ask `isAdded` first if that matters.
+    ///
+    /// The filter that comes back is borrowed and holds no reference of its
+    /// own. Call `addRef` on it if you mean to keep it.
+    pub fn getCollisionGroup(
+        self: BodyInterface,
+        body: BodyId,
+    ) group_mod.CollisionGroup {
+        var raw: c.CollisionGroup = undefined;
+        c.zjoltBodyGetCollisionGroup(self.handle, body, &raw);
+        return group_mod.fromC(raw);
+    }
+
+    /// Drops the cached collision result for every pair involving this body,
+    /// so the next step re-evaluates them.
+    ///
+    /// This is what makes a collision-group change take effect on a pair that
+    /// is already resting. `PhysicsSettings.use_body_pair_contact_cache` is on
+    /// by default, and it skips the narrow phase for a pair whose relative
+    /// transform has not moved — which a group change does not.
+    pub fn invalidateContactCache(self: BodyInterface, body: BodyId) void {
+        c.zjoltBodyInvalidateContactCache(self.handle, body);
     }
 };
 

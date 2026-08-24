@@ -7,6 +7,9 @@ const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const query_mod = @import("query.zig");
+const broadphase_mod = @import("broadphase.zig");
+const batch_mod = @import("batch.zig");
+const state_mod = @import("state.zig");
 
 pub const ObjectLayer = c.ObjectLayer;
 pub const BroadPhaseLayer = c.BroadPhaseLayer;
@@ -239,8 +242,205 @@ pub fn bodyActivationListener(comptime T: type, context: *T) c.BodyActivationLis
 }
 
 //=============================================================================
+// Callbacks that can fail
+//
+// Nothing may unwind out of a Jolt callback. Jolt compiles with exceptions
+// off, so an exception crossing one is `std::terminate` — and a Zig panic
+// unwinding out of a step listener or a combine callback skips the solver's
+// lock destructors and PERMANENTLY DEADLOCKS the next `step`, silently and
+// much later, with nothing to connect it to its cause.
+//
+// So the shims below catch. The error goes into the wrapper the host owns and
+// is re-raised by `check` after the step returns, which is the point in the
+// frame where a host can actually do something about it.
+//=============================================================================
+
+const ErrorInt = std.meta.Int(.unsigned, @bitSizeOf(anyerror));
+
+/// The first error a callback signalled, whichever job thread it ran on.
+///
+/// Atomic because a combine callback is called concurrently for different
+/// contacts, and because step listeners for one system can be spread across
+/// jobs. First wins: the one that started the trouble is more useful than the
+/// last one to notice it.
+const Failure = struct {
+    code: std.atomic.Value(ErrorInt) = std.atomic.Value(ErrorInt).init(0),
+
+    fn record(self: *Failure, e: anyerror) void {
+        _ = self.code.cmpxchgStrong(0, @intFromError(e), .monotonic, .monotonic);
+    }
+
+    fn take(self: *Failure) ?anyerror {
+        const code = self.code.swap(0, .monotonic);
+        return if (code == 0) null else @errorFromInt(code);
+    }
+};
+
+fn returnsError(comptime Fn: type) bool {
+    const ret = @typeInfo(Fn).@"fn".return_type orelse return false;
+    return @typeInfo(ret) == .error_union;
+}
+
+pub const StepListenerContext = c.StepListenerContext;
+pub const CombineInfo = c.CombineInfo;
+
+/// A host callback run once per collision step, before that step's collision
+/// detection.
+///
+/// This is where to apply your own forces — buoyancy, thrusters, wind —
+/// because it happens inside the sub-step loop, so a frame split into several
+/// collision steps applies the force at each one rather than once for the
+/// whole frame.
+///
+/// `T` declares `pub fn onStep(self: *T, ctx: *const StepListenerContext) void`
+/// or the same returning `!void`. Every body and constraint mutex is held for
+/// the duration, so it may READ and WRITE bodies but must not add or remove
+/// them, and must not call back into the system.
+///
+/// Jolt does not call step listeners when there are no active bodies, or when
+/// the step's delta time is zero. This is not a frame tick.
+///
+/// ```zig
+/// var thrusters: Thrusters = .{};
+/// var listener: zjolt.StepListener(Thrusters) = .init(&thrusters);
+/// try listener.attach(system);
+/// defer listener.detach(system) catch {};
+///
+/// _ = try system.step(dt, 1, jobs);
+/// try listener.check();   // re-raises whatever onStep signalled
+/// ```
+///
+/// The value must not move once attached: the C side holds a pointer to it.
+pub fn StepListener(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        context: *T,
+        failure: Failure = .{},
+        handle: ?*c.StepListener = null,
+
+        pub fn init(context: *T) Self {
+            return .{ .context = context };
+        }
+
+        fn thunk(user: ?*anyopaque, ctx: *const StepListenerContext) callconv(.c) void {
+            const self: *Self = @ptrCast(@alignCast(user.?));
+            if (comptime returnsError(@TypeOf(T.onStep))) {
+                T.onStep(self.context, ctx) catch |e| self.failure.record(e);
+            } else {
+                T.onStep(self.context, ctx);
+            }
+        }
+
+        pub fn attach(self: *Self, system: PhysicsSystem) err.Error!void {
+            var handle: *c.StepListener = undefined;
+            try err.check(c.zjoltPhysicsSystemAddStepListener(
+                system.handle,
+                thunk,
+                @ptrCast(self),
+                &handle,
+            ));
+            self.handle = handle;
+        }
+
+        /// Removes the listener. Attaching twice yields two listeners, so a
+        /// detach is per attach; detaching one that is not attached does
+        /// nothing.
+        pub fn detach(self: *Self, system: PhysicsSystem) err.Error!void {
+            const handle = self.handle orelse return;
+            self.handle = null;
+            try err.check(c.zjoltPhysicsSystemRemoveStepListener(system.handle, handle));
+        }
+
+        /// Re-raises the first error the callback signalled since the last
+        /// call, and clears it. A callback that failed does NOT stop the step
+        /// or leave the system unusable — it ran, it returned, and this is
+        /// where you find out.
+        pub fn check(self: *Self) anyerror!void {
+            if (self.failure.take()) |e| return e;
+        }
+    };
+}
+
+/// A host answer to "what friction, or restitution, does this contact get".
+///
+/// Jolt's defaults are `sqrt(f1 * f2)` and `max(r1, r2)`; a host with a
+/// material table usually wants its own. `T` declares
+/// `pub fn combine(self: *T, info: *const CombineInfo) f32`, or the same
+/// returning `!f32`.
+///
+/// This runs on Jolt's job threads DURING a step, once per contact, and is
+/// subject to the same rules as a contact listener: re-entrant, no calls back
+/// into the system. `info` carries both bodies' own values, so it needs
+/// nothing else.
+///
+/// A callback that signals an error yields 0 for that contact — visibly wrong
+/// rather than plausibly wrong — and the error comes back out of `check`.
+///
+/// The value must not move once attached.
+pub fn CombineCallback(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        context: *T,
+        failure: Failure = .{},
+
+        pub fn init(context: *T) Self {
+            return .{ .context = context };
+        }
+
+        fn thunk(user: ?*anyopaque, info: *const CombineInfo) callconv(.c) f32 {
+            const self: *Self = @ptrCast(@alignCast(user.?));
+            if (comptime returnsError(@TypeOf(T.combine))) {
+                return T.combine(self.context, info) catch |e| {
+                    self.failure.record(e);
+                    return 0;
+                };
+            }
+            return T.combine(self.context, info);
+        }
+
+        pub fn attachFriction(self: *Self, system: PhysicsSystem) err.Error!void {
+            try err.check(c.zjoltPhysicsSystemSetCombineFriction(
+                system.handle,
+                thunk,
+                @ptrCast(self),
+            ));
+        }
+
+        pub fn attachRestitution(self: *Self, system: PhysicsSystem) err.Error!void {
+            try err.check(c.zjoltPhysicsSystemSetCombineRestitution(
+                system.handle,
+                thunk,
+                @ptrCast(self),
+            ));
+        }
+
+        /// @see StepListener.check
+        pub fn check(self: *Self) anyerror!void {
+            if (self.failure.take()) |e| return e;
+        }
+    };
+}
+
+//=============================================================================
 // Physics system
 //=============================================================================
+
+/// The constants of the solver. Jolt's `PhysicsSettings`, field for field;
+/// what each one means is documented in `ffi/zjolt_system.h`.
+///
+/// Read the current ones, change what you mean, write them back — there is no
+/// per-field setter because several of these interact.
+pub const PhysicsSettings = c.PhysicsSettings;
+
+/// Jolt's own defaults, read out of a default-constructed `PhysicsSettings`
+/// rather than transcribed, so they cannot drift from the vendored library.
+pub fn defaultPhysicsSettings() PhysicsSettings {
+    var settings: PhysicsSettings = undefined;
+    c.zjoltPhysicsSettingsInit(&settings);
+    return settings;
+}
 
 /// What a step silently dropped, if anything. A non-zero value means contacts
 /// were ignored and the matching limit in `Options` should be raised — the
@@ -299,6 +499,22 @@ pub const PhysicsSystem = struct {
         return .{ .handle = self.handle };
     }
 
+    /// Bounding-box queries: which bodies are roughly there. Cheaper than
+    /// `queries()` and coarser — body ids only, no contact points.
+    pub fn broadPhase(self: PhysicsSystem) broadphase_mod.BroadPhase {
+        return .{ .handle = self.handle };
+    }
+
+    /// Adding, removing and waking many bodies at once.
+    pub fn batch(self: PhysicsSystem) batch_mod.Batch {
+        return .{ .handle = self.handle };
+    }
+
+    /// Saving and restoring the state a step changes.
+    pub fn state(self: PhysicsSystem) state_mod.State {
+        return .{ .handle = self.handle };
+    }
+
     //-------------------------------------------------------------------------
     // World properties
     //-------------------------------------------------------------------------
@@ -325,6 +541,63 @@ pub const PhysicsSystem = struct {
 
     pub fn numActiveBodies(self: PhysicsSystem) u32 {
         return c.zjoltPhysicsSystemGetNumActiveBodies(self.handle);
+    }
+
+    /// The ceiling this system was created with, which cannot grow.
+    pub fn maxBodies(self: PhysicsSystem) u32 {
+        return c.zjoltPhysicsSystemGetMaxBodies(self.handle);
+    }
+
+    /// True if the two bodies were touching during the LAST step.
+    ///
+    /// This reads the contact cache, so it answers a question about the step
+    /// that has already run rather than about where the bodies are now — which
+    /// is what a gameplay rule usually wants, and far cheaper than an overlap
+    /// query. False before the first step, and not to be called during one.
+    pub fn wereBodiesInContact(
+        self: PhysicsSystem,
+        body1: body_mod.BodyId,
+        body2: body_mod.BodyId,
+    ) bool {
+        return c.zjoltPhysicsSystemWereBodiesInContact(self.handle, body1, body2);
+    }
+
+    //-------------------------------------------------------------------------
+    // Simulation settings
+    //-------------------------------------------------------------------------
+
+    pub fn getSettings(self: PhysicsSystem) PhysicsSettings {
+        var settings: PhysicsSettings = undefined;
+        c.zjoltPhysicsSystemGetSettings(self.handle, &settings);
+        return settings;
+    }
+
+    /// Applies every field at once, from the next step onwards.
+    ///
+    /// `error.InvalidArgument` for a non-positive batch size, batches per job
+    /// or in-flight pair count, and for a zero velocity iteration count. Jolt
+    /// asserts none of those — the first two are a loop stride and a divisor
+    /// inside the step, so a zero there is a step that never finishes or a
+    /// division by zero, several frames from the call that caused it.
+    pub fn setSettings(self: PhysicsSystem, settings: PhysicsSettings) err.Error!void {
+        try err.check(c.zjoltPhysicsSystemSetSettings(self.handle, &settings));
+    }
+
+    //-------------------------------------------------------------------------
+    // Combine callbacks
+    //
+    // Installed through `CombineCallback`, which is what carries the error out
+    // of a callback rather than letting it unwind. These two clear them.
+    //-------------------------------------------------------------------------
+
+    /// Puts Jolt's default back: the geometric mean `sqrt(f1 * f2)`.
+    pub fn clearCombineFriction(self: PhysicsSystem) err.Error!void {
+        try err.check(c.zjoltPhysicsSystemSetCombineFriction(self.handle, null, null));
+    }
+
+    /// Puts Jolt's default back: `max(r1, r2)`.
+    pub fn clearCombineRestitution(self: PhysicsSystem) err.Error!void {
+        try err.check(c.zjoltPhysicsSystemSetCombineRestitution(self.handle, null, null));
     }
 
     //-------------------------------------------------------------------------

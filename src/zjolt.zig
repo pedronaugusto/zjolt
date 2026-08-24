@@ -43,6 +43,10 @@ const body_mod = @import("body.zig");
 const query_mod = @import("query.zig");
 const system_mod = @import("system.zig");
 const character_mod = @import("character.zig");
+const broadphase_mod = @import("broadphase.zig");
+const batch_mod = @import("batch.zig");
+const group_mod = @import("group.zig");
+const state_mod = @import("state.zig");
 
 //=============================================================================
 // Public surface
@@ -112,6 +116,29 @@ pub const SubShapeIdPair = system_mod.SubShapeIdPair;
 pub const ValidateResult = system_mod.ValidateResult;
 pub const contactPointsOn1 = system_mod.contactPointsOn1;
 pub const contactPointsOn2 = system_mod.contactPointsOn2;
+
+pub const PhysicsSettings = system_mod.PhysicsSettings;
+pub const defaultPhysicsSettings = system_mod.defaultPhysicsSettings;
+pub const StepListener = system_mod.StepListener;
+pub const StepListenerContext = system_mod.StepListenerContext;
+pub const CombineCallback = system_mod.CombineCallback;
+pub const CombineInfo = system_mod.CombineInfo;
+
+pub const BroadPhase = broadphase_mod.BroadPhase;
+pub const BroadPhaseFilters = broadphase_mod.Filters;
+pub const BroadPhaseCastHit = broadphase_mod.CastHit;
+pub const OrientedBox = broadphase_mod.OrientedBox;
+
+pub const Batch = batch_mod.Batch;
+pub const AddBatch = batch_mod.AddBatch;
+
+pub const GroupFilter = group_mod.GroupFilter;
+pub const CollisionGroup = group_mod.CollisionGroup;
+pub const collision_group_invalid = group_mod.invalid;
+pub const max_sub_groups = group_mod.max_sub_groups;
+
+pub const State = state_mod.State;
+pub const StateRecorderState = state_mod.RecorderState;
 
 pub const Queries = query_mod.Queries;
 pub const QueryFilters = query_mod.Filters;
@@ -257,6 +284,10 @@ test {
     _ = query_mod;
     _ = system_mod;
     _ = character_mod;
+    _ = broadphase_mod;
+    _ = batch_mod;
+    _ = group_mod;
+    _ = state_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
