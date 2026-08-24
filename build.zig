@@ -192,11 +192,24 @@ pub fn build(b: *std.Build) void {
             "enable_asserts",
             "Keep Jolt's internal asserts (defaults to on in Debug)",
         ) orelse (optimize == .Debug),
+        // Off by default, and deliberately NOT tied to `optimize`.
+        //
+        // Zig's full C sanitizer emits calls into a runtime that is linked
+        // only into a compilation that is itself sanitized. Defaulting it on
+        // in Debug means a consumer who writes `b.dependency("zjolt", .{})` —
+        // forgetting to forward `optimize`, the most common Zig packaging
+        // mistake — gets a Debug zjolt inside a release executable and a link
+        // failure reading `undefined symbol: __ubsan_handle_shift_out_of_bounds`,
+        // which names nothing they can act on.
+        //
+        // zjolt's own suite turns it on explicitly instead: `ci/run.sh` and CI
+        // both pass `-Dsanitize_c=true` for the Debug runs. A library should
+        // not decide that its consumers are running a sanitizer.
         .sanitize_c = b.option(
             bool,
             "sanitize_c",
-            "Keep Zig's C undefined-behaviour sanitizer enabled",
-        ) orelse (optimize == .Debug),
+            "Compile the C and C++ with Zig's undefined-behaviour sanitizer",
+        ) orelse false,
         .double_precision = b.option(
             bool,
             "double_precision",
@@ -305,9 +318,16 @@ pub fn build(b: *std.Build) void {
     // @cImport-ing the header, so nothing Zig-side compiles C.
     module.linkLibrary(lib);
 
-    // Only installed when zjolt is built directly; as a dependency the
-    // consumer decides what lands in its prefix.
-    if (b.pkg_hash.len == 0) b.installArtifact(lib);
+    // Registered unconditionally, including when zjolt is consumed as a
+    // dependency. `std.Build.Dependency.artifact` finds an artifact by
+    // scanning the dependency's install step, so anything NOT installed here
+    // is invisible to a consumer — `dep.artifact("zjolt")` panics rather than
+    // failing gracefully, and the installed headers go with it.
+    //
+    // This does not put zjolt's library in a consumer's prefix: a dependency's
+    // install step only runs when something the consumer builds actually
+    // depends on it. `tests/consumer` is what keeps this honest.
+    b.installArtifact(lib);
 
     //=====================================================================
     // Tests.

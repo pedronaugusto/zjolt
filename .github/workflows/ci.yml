@@ -37,15 +37,16 @@ jobs:
       # Only our own sources: libs/JoltPhysics is vendored verbatim and
       # reformatting it would make the next re-vendor an unreadable diff.
       - name: Formatting
-        run: zig fmt --check src build.zig
+        run: zig fmt --check src tests/consumer build.zig
 
-      # Zig's C undefined-behaviour sanitizer is on by default in Debug, so
-      # this is the run that would catch UB in zjolt's own code.
+      # The sanitizer is opt-in, because a library must not force its runtime
+      # into a consumer's link. zjolt's own Debug run asks for it, and this is
+      # what would catch UB in zjolt's own C++.
       - name: Test — Debug, sanitizer on
-        run: zig build test -Doptimize=Debug
+        run: zig build test -Doptimize=Debug -Dsanitize_c=true
 
-      - name: Test — Debug, sanitizer off
-        run: zig build test -Doptimize=Debug -Dsanitize_c=false
+      - name: Test — Debug, defaults
+        run: zig build test -Doptimize=Debug
 
       - name: Test — ReleaseSafe
         run: zig build test -Doptimize=ReleaseSafe
@@ -60,6 +61,13 @@ jobs:
       # real C contract, not a private detail of the wrapper.
       - name: Test — C ABI standalone
         run: zig build test-c
+
+      # Consuming zjolt as a dependency exercises a different code path from
+      # building it — artifact registration and installed-header spelling are
+      # invisible to the in-repo suite. See tests/consumer/build.zig.
+      - name: Test — as a downstream dependency
+        working-directory: tests/consumer
+        run: zig build run
 
       # Zig's default ABI for Windows is gnu, so every step above exercises
       # that one and the MSVC branches in build.zig would never be built at

@@ -6,7 +6,7 @@
 # fixed on your own machine instead of in a pull request.
 #
 # Usage:
-#   ci/run.sh          # the inner loop: hygiene, native Debug, the C smoke test
+#   ci/run.sh          # the inner loop: hygiene, native Debug, C smoke, consumer
 #   ci/run.sh --full   # everything CI runs, minus the jobs that need network
 #
 # The default is trimmed rather than complete, and that is a deliberate
@@ -77,21 +77,27 @@ section 'Hygiene'
 
 # Only our own Zig sources: libs/JoltPhysics is vendored verbatim and must not
 # be reformatted, or the next re-vendor becomes an unreadable diff.
-run 'zig fmt (src, build.zig)' zig fmt --check src build.zig
+run 'zig fmt (src, tests, build.zig)' zig fmt --check src tests/consumer build.zig
 
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------
 
-# Default config: Zig's C sanitizer is on in Debug, so this is the run that
-# would catch undefined behaviour in our own code.
-run 'test Debug (UBSan on)' zig build test -Doptimize=Debug
+# The C sanitizer is opt-in — a library must not force its runtime into a
+# consumer's link — so zjolt's own Debug run asks for it explicitly. This is
+# the run that would catch undefined behaviour in our own C++.
+run 'test Debug (UBSan on)' zig build test -Doptimize=Debug -Dsanitize_c=true
 
 # The C boundary on its own, with no Zig in the picture.
 run 'test-c (C ABI standalone)' zig build test-c
 
+# Consuming zjolt as a dependency is a different code path from building it —
+# artifact registration and installed-header spelling are invisible to the
+# in-repo suite. See tests/consumer/build.zig.
+run 'consumer (module + artifact)' env -C tests/consumer zig build run
+
 if [ $FULL -eq 1 ]; then
-  run 'test Debug (UBSan off)' zig build test -Doptimize=Debug -Dsanitize_c=false
+  run 'test Debug (defaults, UBSan off)' zig build test -Doptimize=Debug
   for mode in ReleaseSafe ReleaseFast ReleaseSmall; do
     run "test $mode" zig build test -Doptimize="$mode"
   done
