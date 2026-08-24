@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# zjolt — mutation test for the ABI cross-check.
+# zjolt — mutation test for the guards.
 #
 # `src/abi_check.zig` compares every extern declaration in `src/c.zig` against
 # the real `ffi/zjolt.h` by reflection. It is the one test in this repo that
@@ -15,8 +15,16 @@
 # notably the field swap, which leaves every offset in the struct unchanged and
 # so defeats any positional or offsets-only comparison.
 #
+# Four of the mutations aim at the other guards instead — the entry-point
+# preamble, the allocator seam, the callback error path, and the analysis
+# sweep. Each of those names the test that must catch it, so a mutation that
+# fails the build for an unrelated reason is reported as a WRONG FAILURE
+# rather than counted as the guard doing its job. That distinction is not
+# theoretical: three of the four were miscounted on the first run here, and
+# the check said so.
+#
 # Not part of the default `ci/run.sh` — it rebuilds once per mutation. It runs
-# under `--full`, and should be run by hand whenever `abi_check.zig` is edited.
+# under `--full`, and should be run by hand whenever a guard is edited.
 #
 # Usage: ci/check-abi-drift.sh
 
@@ -38,8 +46,22 @@ restore() {
 trap 'restore; exit 130' INT TERM
 
 # try <description> <file> <from> <to>
+#
+# Asserts the ABI cross-check refuses the mutation, by its own message.
 try() {
-  local what="$1" file="$2" from="$3" to="$4"
+  expect 'zjolt ABI drift: .*' "$@"
+}
+
+# expect <signal> <description> <file> <from> <to>
+#
+# `signal` is a grep pattern the build output must contain. Requiring a
+# specific signal rather than merely a non-zero exit is the whole point: a
+# mutation that fails the build for an unrelated reason — a typo in the
+# replacement, a stale anchor landing somewhere odd — would otherwise be
+# counted as the guard doing its job. Every mutation below names the thing
+# that is supposed to notice it.
+expect() {
+  local signal="$1" what="$2" file="$3" from="$4" to="$5"
 
   cp "$file" "$file.bak"
   backups=("$file")
@@ -72,11 +94,13 @@ PY
   fi
 
   local msg
-  msg=$(printf '%s' "$out" | grep -m1 -o 'zjolt ABI drift: .*')
+  msg=$(printf '%s' "$out" | grep -m1 -o "$signal")
   if [ -z "$msg" ]; then
-    # The build failed, but for some other reason — that is not the check
-    # doing its job, and a green count here would be a lie.
+    # The build failed, but not for the reason this mutation was aimed at.
+    # That is not the guard doing its job, and a green count here would be a
+    # lie about which guard is load-bearing.
     printf '  WRONG FAILURE %s\n' "$what"
+    printf '                expected to see: %s\n' "$signal"
     printf '%s\n' "$out" | tail -5 | sed 's/^/      | /'
     fail=$((fail + 1))
     return
@@ -174,6 +198,67 @@ try "an extern replaced by a Zig helper of the same name" src/c.zig \
     _ = body;
     _ = out;
 }'
+
+#=============================================================================
+# The other guards
+#
+# Everything above mutates the ABI cross-check. It is not the only guard in
+# this repository, and a guard nothing tests is a guard nobody has checked —
+# so each of the rest gets one deliberate break, and each names the test that
+# is supposed to notice.
+#=============================================================================
+
+echo
+echo "other guards, each named by the test that must catch it:"
+
+# The entry-point preamble. Every entry point opens with ZJOLT_ENTER, which is
+# what turns a call made before zjoltInit into ZJOLT_RESULT_NOT_INITIALIZED
+# rather than a walk through Jolt's uninitialised allocator. Take it off one
+# entry point and the sweep that calls all of them before init must say so.
+expect 'every entry point refuses a call made before init' \
+  "the entry-point preamble removed from one entry point" ffi/zjolt_shape.cpp \
+'                                   ZJoltShape **out) {
+  ZJOLT_ENTER(out);' \
+'                                   ZJoltShape **out) {'
+
+# The allocator seam. Every Jolt allocation is supposed to go through the
+# host allocator. Leave Jolt on its own and nothing crashes — the numbers
+# simply stop being true, which is exactly the kind of break that survives a
+# casual read. The C smoke test counts, so it is the one that must notice.
+expect 'the allocator seam is not being used' \
+  "the allocator seam bypassed" ffi/zjolt_core.cpp \
+'    g_allocator = host;
+    JPH::Allocate = HostAllocate;
+    JPH::Reallocate = HostReallocate;
+    JPH::Free = HostFree;
+    JPH::AlignedAllocate = HostAlignedAllocate;
+    JPH::AlignedFree = HostAlignedFree;' \
+'    g_allocator = host;
+    JPH::RegisterDefaultAllocator();'
+
+# The callback error path. Nothing may unwind out of a Jolt callback, so a
+# failing callback stashes its error for `check` to raise afterwards. Drop the
+# stash and the failure is swallowed silently, which is the worst possible
+# shape for it.
+expect 'the contact listener fires' \
+  "a failing callback's error dropped instead of stashed" src/character.zig \
+'    fn record(self: *Failure, e: anyerror) void {
+        _ = self.code.cmpxchgStrong(0, @intFromError(e), .monotonic, .monotonic);
+    }' \
+'    fn record(self: *Failure, e: anyerror) void {
+        _ = self;
+        var swallowed = e;
+        _ = &swallowed;
+    }'
+
+# The analysis sweep. Zig never semantically analyses a `pub fn` nobody calls,
+# so a wrapper can be broken and still ship; src/analysis_test.zig takes the
+# address of every one to force it. Break a wrapper no test calls, and the
+# sweep is the only thing between that and a green build.
+expect 'zjoltTransformedShapeGetWorldSpaceBoundsTYPO' \
+  "a wrapper no test calls left referring to a name that is gone" src/transformed.zig \
+'        c.zjoltTransformedShapeGetWorldSpaceBounds(self.handle, &out);' \
+'        c.zjoltTransformedShapeGetWorldSpaceBoundsTYPO(self.handle, &out);'
 
 printf '\ncaught: %d   missed: %d\n' "$pass" "$fail"
 [ $fail -eq 0 ]

@@ -33,12 +33,6 @@ nobody can evaluate.
 
 ## Guards
 
-- **The mutation test covers only ABI drift.** `ci/check-abi-drift.sh` proves
-  the cross-check refuses twelve kinds of skew. Every other guard in the package
-  — the allocator seam, the entry-point preamble, the callback error path — is
-  unmutated, and a guard nothing tests is a guard nobody has checked. Widening
-  it should also assert *which named test* catches each mutation, so a mutation
-  that fails the build for an unrelated reason is reported rather than counted.
 - **README numbers rot silently.** Test counts and entry-point counts are
   written by hand and nothing recomputes them.
 
