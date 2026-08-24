@@ -105,8 +105,21 @@ grep -qE 'virtual[^;]*=[[:space:]]*0[[:space:]]*;' "$header" &&
 if [ -f "$JOLT/Jolt/Physics/${name}Settings.h" ] ||
    grep -qE "^[[:space:]]*(class|struct)[[:space:]]+(JPH_EXPORT[[:space:]]+)?${name}Settings\b" \
      "$header" "$(dirname "$header")"/*.h 2>/dev/null; then
-  printf '  Has a %sSettings companion — build it on the STACK; settings objects\n' "$name"
-  printf '    do not cross the boundary (see BINDING.md).\n'
+  # Most settings types exist only to construct something and are dead after,
+  # so the stack is right. Not all: a settings object that is itself reference
+  # counted is one the finished object keeps consulting, and putting THAT on
+  # the stack hands out a dangling reference. Say which case this is rather
+  # than giving one blanket instruction that is wrong a fraction of the time.
+  settings_hdr=$(find "$JOLT" -name "${name}Settings.h" 2>/dev/null | head -1)
+  [ -z "$settings_hdr" ] && settings_hdr="$header"
+  if grep -qE "(class|struct).*${name}Settings[^;]*RefTarget" "$settings_hdr" 2>/dev/null; then
+    printf '  Has a %sSettings companion, and it is %sREFERENCE COUNTED%s — the\n' "$name" "$Y" "$O"
+    printf '    finished object keeps consulting it, so it outlives construction.\n'
+    printf '    Bind it as a handle; the stack would hand out a dangling reference.\n'
+  else
+    printf '  Has a %sSettings companion — build it on the STACK; settings objects\n' "$name"
+    printf '    do not cross the boundary (see BINDING.md).\n'
+  fi
 fi
 
 #-----------------------------------------------------------------------------
