@@ -288,6 +288,9 @@ pub const PhysicsSystem = opaque {};
 pub const JobSystem = opaque {};
 pub const Body = opaque {};
 pub const Character = opaque {};
+pub const RigidCharacter = opaque {};
+pub const CharacterContactListener = opaque {};
+pub const CharacterVsCharacterCollision = opaque {};
 pub const GroupFilter = opaque {};
 pub const StepListener = opaque {};
 pub const BodyAddBatch = opaque {};
@@ -871,6 +874,173 @@ pub extern fn zjoltCharacterUpdateGroundVelocity(character: *Character) void;
 pub extern fn zjoltCharacterSetShape(character: *Character, shape: *const Shape, max_penetration_depth: f32, filters: ?*const QueryFilters, out_changed: ?*bool) Result;
 pub extern fn zjoltCharacterGetShape(character: *const Character) ?*const Shape;
 pub extern fn zjoltCharacterGetInnerBodyId(character: *const Character) BodyId;
+
+//=============================================================================
+// CharacterBase, on the virtual character
+//=============================================================================
+
+pub const CharacterId = u32;
+pub const character_id_invalid: CharacterId = 0xffff_ffff;
+
+pub extern fn zjoltCharacterGetId(character: *const Character) CharacterId;
+pub extern fn zjoltCharacterGetUp(character: *const Character, out: *Vec3) void;
+pub extern fn zjoltCharacterSetUp(character: *Character, up: *const Vec3) void;
+pub extern fn zjoltCharacterSetMaxSlopeAngle(character: *Character, radians: f32) void;
+pub extern fn zjoltCharacterGetCosMaxSlopeAngle(character: *const Character) f32;
+pub extern fn zjoltCharacterIsSlopeTooSteep(character: *const Character, normal: *const Vec3) bool;
+pub extern fn zjoltCharacterGetGroundMaterial(character: *const Character) ?*const PhysicsMaterial;
+pub extern fn zjoltCharacterGetGroundSubShapeId(character: *const Character) SubShapeId;
+pub extern fn zjoltCharacterGetMass(character: *const Character) f32;
+pub extern fn zjoltCharacterSetMass(character: *Character, mass: f32) void;
+pub extern fn zjoltCharacterGetMaxStrength(character: *const Character) f32;
+pub extern fn zjoltCharacterSetMaxStrength(character: *Character, max_strength: f32) void;
+pub extern fn zjoltCharacterGetPenetrationRecoverySpeed(character: *const Character) f32;
+pub extern fn zjoltCharacterSetPenetrationRecoverySpeed(character: *Character, speed: f32) void;
+pub extern fn zjoltCharacterGetEnhancedInternalEdgeRemoval(character: *const Character) bool;
+pub extern fn zjoltCharacterSetEnhancedInternalEdgeRemoval(character: *Character, apply: bool) void;
+pub extern fn zjoltCharacterGetCharacterPadding(character: *const Character) f32;
+pub extern fn zjoltCharacterGetMaxNumHits(character: *const Character) u32;
+pub extern fn zjoltCharacterSetMaxNumHits(character: *Character, max_hits: u32) void;
+pub extern fn zjoltCharacterGetHitReductionCosMaxAngle(character: *const Character) f32;
+pub extern fn zjoltCharacterSetHitReductionCosMaxAngle(character: *Character, cos_max_angle: f32) void;
+pub extern fn zjoltCharacterGetMaxHitsExceeded(character: *const Character) bool;
+pub extern fn zjoltCharacterGetShapeOffset(character: *const Character, out: *Vec3) void;
+pub extern fn zjoltCharacterSetShapeOffset(character: *Character, offset: *const Vec3) void;
+pub extern fn zjoltCharacterGetUserData(character: *const Character) u64;
+pub extern fn zjoltCharacterSetUserData(character: *Character, user_data: u64) void;
+pub extern fn zjoltCharacterCancelVelocityTowardsSteepSlopes(character: *const Character, desired_velocity: *const Vec3, out: *Vec3) void;
+pub extern fn zjoltCharacterStartTrackingContactChanges(character: *Character) void;
+pub extern fn zjoltCharacterFinishTrackingContactChanges(character: *Character) void;
+
+//=============================================================================
+// Stair walking and floor sticking, standalone
+//=============================================================================
+
+pub extern fn zjoltCharacterCanWalkStairs(character: *const Character, linear_velocity: *const Vec3) bool;
+pub extern fn zjoltCharacterWalkStairs(character: *Character, delta_time: f32, step_up: *const Vec3, step_forward: *const Vec3, step_forward_test: *const Vec3, step_down_extra: *const Vec3, filters: ?*const QueryFilters, out_stepped: ?*bool) Result;
+pub extern fn zjoltCharacterStickToFloor(character: *Character, step_down: *const Vec3, filters: ?*const QueryFilters, out_stuck: ?*bool) Result;
+pub extern fn zjoltCharacterRefreshContacts(character: *Character, filters: ?*const QueryFilters) Result;
+
+pub const CharacterContact = extern struct {
+    body_b: BodyId,
+    character_id_b: CharacterId,
+    sub_shape_id_b: SubShapeId,
+    position: RVec3,
+    linear_velocity: Vec3,
+    contact_normal: Vec3,
+    surface_normal: Vec3,
+    distance: f32,
+    fraction: f32,
+    motion_type_b: MotionType,
+    is_sensor_b: bool,
+    user_data: u64,
+    material: ?*const PhysicsMaterial,
+    had_collision: bool,
+    was_discarded: bool,
+    can_push_character: bool,
+    is_back_facing_contact: bool,
+};
+
+pub extern fn zjoltCharacterGetActiveContacts(character: *const Character, out_contacts: ?[*]CharacterContact, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltCharacterHasCollidedWithBody(character: *const Character, body: BodyId) bool;
+pub extern fn zjoltCharacterHasCollidedWithCharacter(character: *const Character, other_character_id: CharacterId) bool;
+
+//=============================================================================
+// CharacterContactListener
+//=============================================================================
+
+pub const CharacterContactSettings = extern struct {
+    can_push_character: bool,
+    can_receive_impulses: bool,
+};
+
+pub const CharacterContactListenerCallbacks = extern struct {
+    on_adjust_body_velocity: ?*const fn (user: ?*anyopaque, character: CharacterId, body2: BodyId, io_linear_velocity: *Vec3, io_angular_velocity: *Vec3) callconv(.c) void = null,
+    on_contact_validate: ?*const fn (user: ?*anyopaque, character: CharacterId, contact: *const CharacterContact) callconv(.c) bool = null,
+    on_contact_added: ?*const fn (user: ?*anyopaque, character: CharacterId, contact: *const CharacterContact, io_settings: *CharacterContactSettings) callconv(.c) void = null,
+    on_contact_persisted: ?*const fn (user: ?*anyopaque, character: CharacterId, contact: *const CharacterContact, io_settings: *CharacterContactSettings) callconv(.c) void = null,
+    on_contact_removed: ?*const fn (user: ?*anyopaque, character: CharacterId, body_id2: BodyId, sub_shape_id2: SubShapeId) callconv(.c) void = null,
+    on_character_contact_validate: ?*const fn (user: ?*anyopaque, character: CharacterId, contact: *const CharacterContact) callconv(.c) bool = null,
+    on_character_contact_added: ?*const fn (user: ?*anyopaque, character: CharacterId, contact: *const CharacterContact, io_settings: *CharacterContactSettings) callconv(.c) void = null,
+    on_character_contact_persisted: ?*const fn (user: ?*anyopaque, character: CharacterId, contact: *const CharacterContact, io_settings: *CharacterContactSettings) callconv(.c) void = null,
+    on_character_contact_removed: ?*const fn (user: ?*anyopaque, character: CharacterId, other_character_id: CharacterId, sub_shape_id2: SubShapeId) callconv(.c) void = null,
+    on_contact_solve: ?*const fn (user: ?*anyopaque, character: CharacterId, body_id2: BodyId, sub_shape_id2: SubShapeId, contact_position: *const RVec3, contact_normal: *const Vec3, contact_velocity: *const Vec3, contact_material: ?*const PhysicsMaterial, character_velocity: *const Vec3, io_new_character_velocity: *Vec3) callconv(.c) void = null,
+    on_character_contact_solve: ?*const fn (user: ?*anyopaque, character: CharacterId, other_character: CharacterId, sub_shape_id2: SubShapeId, contact_position: *const RVec3, contact_normal: *const Vec3, contact_velocity: *const Vec3, contact_material: ?*const PhysicsMaterial, character_velocity: *const Vec3, io_new_character_velocity: *Vec3) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
+pub extern fn zjoltCharacterContactListenerCreate(callbacks: *const CharacterContactListenerCallbacks, out: **CharacterContactListener) Result;
+pub extern fn zjoltCharacterContactListenerDestroy(listener: ?*CharacterContactListener) void;
+pub extern fn zjoltCharacterSetListener(character: *Character, listener: ?*CharacterContactListener) void;
+
+//=============================================================================
+// Character-vs-character collision
+//=============================================================================
+
+pub extern fn zjoltCharacterVsCharacterCollisionCreate(out: **CharacterVsCharacterCollision) Result;
+pub extern fn zjoltCharacterVsCharacterCollisionDestroy(collision: ?*CharacterVsCharacterCollision) void;
+pub extern fn zjoltCharacterVsCharacterCollisionAdd(collision: *CharacterVsCharacterCollision, character: *Character) void;
+pub extern fn zjoltCharacterVsCharacterCollisionRemove(collision: *CharacterVsCharacterCollision, character: *const Character) void;
+pub extern fn zjoltCharacterSetCharacterVsCharacterCollision(character: *Character, collision: ?*CharacterVsCharacterCollision) void;
+
+//=============================================================================
+// RigidCharacter
+//=============================================================================
+
+pub const RigidCharacterDesc = extern struct {
+    shape: ?*const Shape,
+    position: RVec3,
+    rotation: Quat,
+    user_data: u64,
+    up: Vec3,
+    max_slope_angle: f32,
+    enhanced_internal_edge_removal: bool,
+    layer: ObjectLayer,
+    mass: f32,
+    friction: f32,
+    gravity_factor: f32,
+    allowed_dofs: AllowedDofs,
+};
+
+pub extern fn zjoltRigidCharacterDescInit(desc: *RigidCharacterDesc) void;
+pub extern fn zjoltRigidCharacterCreate(system: *PhysicsSystem, desc: *const RigidCharacterDesc, out: **RigidCharacter) Result;
+pub extern fn zjoltRigidCharacterDestroy(character: ?*RigidCharacter) void;
+pub extern fn zjoltRigidCharacterAddToPhysicsSystem(character: *RigidCharacter, activation: Activation) void;
+pub extern fn zjoltRigidCharacterRemoveFromPhysicsSystem(character: *RigidCharacter) void;
+pub extern fn zjoltRigidCharacterActivate(character: *RigidCharacter) void;
+pub extern fn zjoltRigidCharacterPostSimulation(character: *RigidCharacter, max_separation_distance: f32) void;
+pub extern fn zjoltRigidCharacterSetLinearAndAngularVelocity(character: *RigidCharacter, linear_velocity: *const Vec3, angular_velocity: *const Vec3) void;
+pub extern fn zjoltRigidCharacterGetLinearVelocity(character: *const RigidCharacter, out: *Vec3) void;
+pub extern fn zjoltRigidCharacterSetLinearVelocity(character: *RigidCharacter, velocity: *const Vec3) void;
+pub extern fn zjoltRigidCharacterAddLinearVelocity(character: *RigidCharacter, velocity: *const Vec3) void;
+pub extern fn zjoltRigidCharacterAddImpulse(character: *RigidCharacter, impulse: *const Vec3) void;
+pub extern fn zjoltRigidCharacterGetBodyId(character: *const RigidCharacter) BodyId;
+pub extern fn zjoltRigidCharacterGetPositionAndRotation(character: *const RigidCharacter, out_position: ?*RVec3, out_rotation: ?*Quat) void;
+pub extern fn zjoltRigidCharacterSetPositionAndRotation(character: *RigidCharacter, position: *const RVec3, rotation: *const Quat, activation: Activation) void;
+pub extern fn zjoltRigidCharacterGetPosition(character: *const RigidCharacter, out: *RVec3) void;
+pub extern fn zjoltRigidCharacterSetPosition(character: *RigidCharacter, position: *const RVec3, activation: Activation) void;
+pub extern fn zjoltRigidCharacterGetRotation(character: *const RigidCharacter, out: *Quat) void;
+pub extern fn zjoltRigidCharacterSetRotation(character: *RigidCharacter, rotation: *const Quat, activation: Activation) void;
+pub extern fn zjoltRigidCharacterGetCenterOfMassPosition(character: *const RigidCharacter, out: *RVec3) void;
+pub extern fn zjoltRigidCharacterGetLayer(character: *const RigidCharacter) ObjectLayer;
+pub extern fn zjoltRigidCharacterSetLayer(character: *RigidCharacter, layer: ObjectLayer) void;
+pub extern fn zjoltRigidCharacterSetShape(character: *RigidCharacter, shape: *const Shape, max_penetration_depth: f32, out_changed: ?*bool) Result;
+pub extern fn zjoltRigidCharacterGetShape(character: *const RigidCharacter) ?*const Shape;
+pub extern fn zjoltRigidCharacterGetId(character: *const RigidCharacter) CharacterId;
+pub extern fn zjoltRigidCharacterGetUp(character: *const RigidCharacter, out: *Vec3) void;
+pub extern fn zjoltRigidCharacterSetUp(character: *RigidCharacter, up: *const Vec3) void;
+pub extern fn zjoltRigidCharacterSetMaxSlopeAngle(character: *RigidCharacter, radians: f32) void;
+pub extern fn zjoltRigidCharacterGetCosMaxSlopeAngle(character: *const RigidCharacter) f32;
+pub extern fn zjoltRigidCharacterIsSlopeTooSteep(character: *const RigidCharacter, normal: *const Vec3) bool;
+pub extern fn zjoltRigidCharacterGetGroundState(character: *const RigidCharacter) GroundState;
+pub extern fn zjoltRigidCharacterIsSupported(character: *const RigidCharacter) bool;
+pub extern fn zjoltRigidCharacterGetGroundPosition(character: *const RigidCharacter, out: *RVec3) void;
+pub extern fn zjoltRigidCharacterGetGroundNormal(character: *const RigidCharacter, out: *Vec3) void;
+pub extern fn zjoltRigidCharacterGetGroundVelocity(character: *const RigidCharacter, out: *Vec3) void;
+pub extern fn zjoltRigidCharacterGetGroundMaterial(character: *const RigidCharacter) ?*const PhysicsMaterial;
+pub extern fn zjoltRigidCharacterGetGroundBodyId(character: *const RigidCharacter) BodyId;
+pub extern fn zjoltRigidCharacterGetGroundSubShapeId(character: *const RigidCharacter) SubShapeId;
+pub extern fn zjoltRigidCharacterGetGroundUserData(character: *const RigidCharacter) u64;
 
 pub extern fn zjoltPhysicsSystemGetMaxBodies(system: *const PhysicsSystem) u32;
 pub extern fn zjoltPhysicsSystemWereBodiesInContact(system: *const PhysicsSystem, body1: BodyId, body2: BodyId) bool;

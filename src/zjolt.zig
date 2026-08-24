@@ -158,6 +158,13 @@ pub const GroundState = character_mod.GroundState;
 pub const BackFaceMode = character_mod.BackFaceMode;
 pub const CharacterUpdateSettings = character_mod.UpdateSettings;
 pub const defaultCharacterUpdateSettings = character_mod.defaultUpdateSettings;
+pub const CharacterId = character_mod.CharacterId;
+pub const invalid_character_id = character_mod.invalid_character_id;
+pub const CharacterContact = character_mod.CharacterContact;
+pub const CharacterContactSettings = character_mod.CharacterContactSettings;
+pub const CharacterContactListener = character_mod.ContactListener;
+pub const CharacterVsCharacterCollision = character_mod.CharacterVsCharacterCollision;
+pub const RigidCharacter = character_mod.RigidCharacter;
 
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
