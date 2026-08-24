@@ -378,6 +378,16 @@ pub const Constraint = struct {
         return c.zjoltConstraintIsActive(self.handle);
     }
 
+    /// Wakes both of its bodies — the pairwise counterpart of
+    /// `BodyInterface.activate`, for when what a caller has in hand is the
+    /// joint rather than either body it names.
+    ///
+    /// Same two refusals as `addTo`: not a two-body constraint, or its bodies
+    /// do not belong to `system`.
+    pub fn activate(self: Constraint, system: system_mod.PhysicsSystem) err.Error!void {
+        try err.check(c.zjoltConstraintActivate(system.handle, self.handle));
+    }
+
     pub fn setUserData(self: Constraint, user_data: u64) void {
         c.zjoltConstraintSetUserData(self.handle, user_data);
     }
@@ -1362,4 +1372,55 @@ test "a six-DOF constraint reports back the limits it was told to keep" {
         try std.testing.expectApproxEqAbs(case.min, limits.min, 1.0e-5);
         try std.testing.expectApproxEqAbs(case.max, limits.max, 1.0e-5);
     }
+}
+
+test "activating a constraint wakes both bodies it joins, not a third" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const system = try zjolt.PhysicsSystem.init(.{
+        .layers = zjolt.layersFromType(TestLayers),
+        .max_bodies = 64,
+    });
+    defer system.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.5, 0.5), .{});
+    defer shape.release();
+
+    const bodies = system.bodies();
+    const a = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = TestLayers.moving,
+        .motion_type = .dynamic,
+        .position = zjolt.rvec3(0, 0, 0),
+    }, .dont_activate);
+    const b = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = TestLayers.moving,
+        .motion_type = .dynamic,
+        .position = zjolt.rvec3(2, 0, 0),
+    }, .dont_activate);
+    // Bystander: joined to nothing, must stay asleep throughout.
+    const bystander = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = TestLayers.moving,
+        .motion_type = .dynamic,
+        .position = zjolt.rvec3(4, 0, 0),
+    }, .dont_activate);
+
+    try std.testing.expect(!bodies.isActive(a));
+    try std.testing.expect(!bodies.isActive(b));
+
+    var point = try Constraint.initPoint(system, a, b, .{
+        .point1 = zjolt.rvec3(1, 0, 0),
+        .point2 = zjolt.rvec3(1, 0, 0),
+    });
+    defer point.release();
+
+    try point.addTo(system);
+
+    try point.activate(system);
+    try std.testing.expect(bodies.isActive(a));
+    try std.testing.expect(bodies.isActive(b));
+    try std.testing.expect(!bodies.isActive(bystander));
 }

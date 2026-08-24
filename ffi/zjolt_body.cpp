@@ -231,11 +231,58 @@ ZJoltResult zjoltBodyCreate(ZJoltPhysicsSystem *system,
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltBodyCreateWithId(ZJoltPhysicsSystem *system,
+                                  const ZJoltBodyDesc *desc, ZJoltBodyId id,
+                                  ZJoltBodyId *out) {
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out, (ZJoltBodyId)ZJOLT_BODY_ID_INVALID));
+  if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (id == JPH::BodyID::cInvalidBodyID) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "id: ZJOLT_BODY_ID_INVALID does not name a body");
+  }
+  // JPH::BodyID's own constructor asserts this bit is clear rather than
+  // reporting it; an id round-tripped from Jolt never sets it, but one built
+  // by hand from an arbitrary integer might, so this is checked ahead of
+  // ever constructing a JPH::BodyID from it.
+  if ((id & JPH::BodyID::cBroadPhaseBit) != 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "id: bit 31 is reserved for the broad phase and cannot be set in a "
+        "custom body id");
+  }
+
+  JPH::BodyCreationSettings settings;
+  const ZJoltResult built = BuildCreationSettings(*desc, &settings);
+  if (built != ZJOLT_RESULT_OK) return built;
+
+  JPH::Body *body =
+      Interface(system)->CreateBodyWithID(zjolt::ToJolt(id), settings);
+  if (body == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "id: already names a live body, or its index is beyond max_bodies");
+  }
+  *out = zjolt::ToC(body->GetID());
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                   const ZJoltBodyDesc *desc,
                                   ZJoltActivation activation,
                                   ZJoltBodyId *out) {
   const ZJoltResult created = zjoltBodyCreate(system, desc, out);
+  if (created != ZJOLT_RESULT_OK) return created;
+  Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(activation));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyCreateAndAddWithId(ZJoltPhysicsSystem *system,
+                                        const ZJoltBodyDesc *desc,
+                                        ZJoltBodyId id,
+                                        ZJoltActivation activation,
+                                        ZJoltBodyId *out) {
+  const ZJoltResult created = zjoltBodyCreateWithId(system, desc, id, out);
   if (created != ZJOLT_RESULT_OK) return created;
   Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(activation));
   return ZJOLT_RESULT_OK;
@@ -573,6 +620,15 @@ void zjoltBodyAddTorque(ZJoltPhysicsSystem *system, ZJoltBodyId body,
   iface->AddTorque(zjolt::ToJolt(body), zjolt::ToJolt(*torque));
 }
 
+void zjoltBodyAddForceAndTorque(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                                const ZJoltVec3 *force,
+                                const ZJoltVec3 *torque) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || force == nullptr || torque == nullptr) return;
+  iface->AddForceAndTorque(zjolt::ToJolt(body), zjolt::ToJolt(*force),
+                           zjolt::ToJolt(*torque));
+}
+
 void zjoltBodyAddImpulse(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                          const ZJoltVec3 *impulse) {
   JPH::BodyInterface *iface = Interface(system);
@@ -743,6 +799,98 @@ bool zjoltBodyGetUseManifoldReduction(const ZJoltPhysicsSystem *system,
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return true;
   return iface->GetUseManifoldReduction(zjolt::ToJolt(body));
+}
+
+// AllowSleeping and the two dampings live on JPH::Body / JPH::MotionProperties
+// directly rather than on BodyInterface, so unlike the accessors around them
+// these take the lock themselves, and check IsStatic() before touching
+// motion properties a static body does not have — Jolt's own
+// Body::GetAllowSleeping does not check, and dereferences a null one.
+
+void zjoltBodySetAllowSleeping(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                               bool allow) {
+  if (system == nullptr) return;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return;
+  JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return;
+  jolt_body.SetAllowSleeping(allow);
+}
+
+bool zjoltBodyGetAllowSleeping(const ZJoltPhysicsSystem *system,
+                               ZJoltBodyId body) {
+  if (system == nullptr) return true;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return true;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return true;
+  return jolt_body.GetAllowSleeping();
+}
+
+ZJoltResult zjoltBodySetLinearDamping(ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body, float damping) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (damping < 0.0f) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "damping: must not be negative");
+  }
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsStatic()) {
+    jolt_body.GetMotionProperties()->SetLinearDamping(damping);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+float zjoltBodyGetLinearDamping(const ZJoltPhysicsSystem *system,
+                                ZJoltBodyId body) {
+  if (system == nullptr) return 0.05f;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return 0.05f;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return 0.05f;
+  return jolt_body.GetMotionProperties()->GetLinearDamping();
+}
+
+ZJoltResult zjoltBodySetAngularDamping(ZJoltPhysicsSystem *system,
+                                       ZJoltBodyId body, float damping) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (damping < 0.0f) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "damping: must not be negative");
+  }
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsStatic()) {
+    jolt_body.GetMotionProperties()->SetAngularDamping(damping);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+float zjoltBodyGetAngularDamping(const ZJoltPhysicsSystem *system,
+                                 ZJoltBodyId body) {
+  if (system == nullptr) return 0.05f;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return 0.05f;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return 0.05f;
+  return jolt_body.GetMotionProperties()->GetAngularDamping();
 }
 
 void zjoltBodySetIsSensor(ZJoltPhysicsSystem *system, ZJoltBodyId body,

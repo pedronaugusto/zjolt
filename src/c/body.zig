@@ -83,6 +83,10 @@ pub extern fn zjoltBodyCreate(system: *PhysicsSystem, desc: *const BodyDesc, out
 
 pub extern fn zjoltBodyCreateAndAdd(system: *PhysicsSystem, desc: *const BodyDesc, activation: Activation, out: *BodyId) Result;
 
+pub extern fn zjoltBodyCreateWithId(system: *PhysicsSystem, desc: *const BodyDesc, id: BodyId, out: *BodyId) Result;
+
+pub extern fn zjoltBodyCreateAndAddWithId(system: *PhysicsSystem, desc: *const BodyDesc, id: BodyId, activation: Activation, out: *BodyId) Result;
+
 pub extern fn zjoltBodyDestroy(system: *PhysicsSystem, body: BodyId) void;
 
 pub extern fn zjoltBodyAdd(system: *PhysicsSystem, body: BodyId, activation: Activation) void;
@@ -151,6 +155,8 @@ pub extern fn zjoltBodyAddForceAtPoint(system: *PhysicsSystem, body: BodyId, for
 
 pub extern fn zjoltBodyAddTorque(system: *PhysicsSystem, body: BodyId, torque: *const Vec3) void;
 
+pub extern fn zjoltBodyAddForceAndTorque(system: *PhysicsSystem, body: BodyId, force: *const Vec3, torque: *const Vec3) void;
+
 pub extern fn zjoltBodyAddImpulse(system: *PhysicsSystem, body: BodyId, impulse: *const Vec3) void;
 
 pub extern fn zjoltBodyAddImpulseAtPoint(system: *PhysicsSystem, body: BodyId, impulse: *const Vec3, point: *const RVec3) void;
@@ -192,6 +198,18 @@ pub extern fn zjoltBodyGetMaxAngularVelocity(system: *const PhysicsSystem, body:
 pub extern fn zjoltBodySetUseManifoldReduction(system: *PhysicsSystem, body: BodyId, use_reduction: bool) void;
 
 pub extern fn zjoltBodyGetUseManifoldReduction(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodySetAllowSleeping(system: *PhysicsSystem, body: BodyId, allow: bool) void;
+
+pub extern fn zjoltBodyGetAllowSleeping(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodySetLinearDamping(system: *PhysicsSystem, body: BodyId, damping: f32) Result;
+
+pub extern fn zjoltBodyGetLinearDamping(system: *const PhysicsSystem, body: BodyId) f32;
+
+pub extern fn zjoltBodySetAngularDamping(system: *PhysicsSystem, body: BodyId, damping: f32) Result;
+
+pub extern fn zjoltBodyGetAngularDamping(system: *const PhysicsSystem, body: BodyId) f32;
 
 pub extern fn zjoltBodySetIsSensor(system: *PhysicsSystem, body: BodyId, is_sensor: bool) void;
 
