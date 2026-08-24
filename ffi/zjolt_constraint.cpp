@@ -2855,17 +2855,17 @@ ZJoltResult zjoltPathConstraintSetPath(ZJoltConstraint *constraint,
   return ZJOLT_RESULT_OK;
 }
 
-const ZJoltPathConstraintPath *zjoltPathConstraintGetPath(
-    const ZJoltConstraint *constraint) {
-  if (constraint == nullptr) return nullptr;
-  const JPH::Constraint *base = zjolt::ToJolt(constraint);
-  if (base->GetSubType() != JPH::EConstraintSubType::Path) return nullptr;
-  const JPH::PathConstraint *joint =
-      static_cast<const JPH::PathConstraint *>(base);
+ZJoltResult zjoltPathConstraintGetPath(const ZJoltConstraint *constraint,
+                                       const ZJoltPathConstraintPath **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  *out = nullptr;
+  ZJOLT_NARROW(PathConstraint, Path, joint);
 
   // Borrowed, and const_cast only to reach the ToC overload: the handle the
   // caller gets back is a `const` one, and nothing here mutates the path.
-  return zjolt::ToC(const_cast<JPH::PathConstraintPath *>(joint->GetPath()));
+  *out = zjolt::ToC(const_cast<JPH::PathConstraintPath *>(joint->GetPath()));
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltPathConstraintGetPathFraction(const ZJoltConstraint *constraint,

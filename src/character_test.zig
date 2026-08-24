@@ -327,8 +327,8 @@ test "the contact listener fires, and a listener that signals an error leaves th
     var listener = zjolt.CharacterContactListener(Recorder).init(&recorder);
     try listener.attach();
     defer listener.deinit();
-    character.setListener(listener.handle);
-    defer character.setListener(null);
+    try character.setListener(listener.handle);
+    defer character.setListener(null) catch {};
 
     const settings = zjolt.defaultCharacterUpdateSettings();
 
