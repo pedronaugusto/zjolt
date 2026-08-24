@@ -1076,12 +1076,7 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
     try std.testing.expectEqual(world.floor, floor_hit.body);
 
     // Far from anything.
-    try std.testing.expect((try queries.castRayClosest(
-        zjolt.rvec3(1000, 1000, 1000),
-        zjolt.vec3(0, -1, 0),
-        null,
-        null,
-    )) == null);
+    try std.testing.expect((try queries.castRayClosest(zjolt.rvec3(1000, 1000, 1000), zjolt.vec3(0, -1, 0), null, null)) == null);
 
     // The point tests: inside the ball, and in open air above it.
     try std.testing.expect((try queries.countPointHits(zjolt.rvec3(0, 2, 0), null)) >= 1);
@@ -1146,7 +1141,7 @@ const Stack = struct {
         var world = try World.init();
         errdefer world.deinit();
 
-        const shape = try zjolt.Shape.initSphere(0.5, 0);
+        const shape = try zjolt.Shape.initSphere(0.5, .{});
         errdefer shape.release();
 
         var spheres: [4]zjolt.BodyId = undefined;
@@ -1920,6 +1915,7 @@ test "a height field's surface is where its samples say, and a hole is a hole" {
         zjolt.rvec3(2.5, 10, 2.5),
         zjolt.vec3(0, -20, 0),
         null,
+        null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(terrain, solid.body);
     try std.testing.expectApproxEqAbs(
@@ -1933,6 +1929,7 @@ test "a height field's surface is where its samples say, and a hole is a hole" {
     const through = (try queries.castRayClosest(
         zjolt.rvec3(0.5, 10, 0.5),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(world.floor, through.body);
@@ -1972,6 +1969,7 @@ test "a static compound collides at each of its children and nowhere between" {
             zjolt.rvec3(x, 10, 0),
             zjolt.vec3(0, -20, 0),
             null,
+            null,
         )) orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(body, hit.body);
     }
@@ -1979,6 +1977,7 @@ test "a static compound collides at each of its children and nowhere between" {
     const between = (try queries.castRayClosest(
         zjolt.rvec3(0, 10, 0),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(world.floor, between.body);
@@ -1989,10 +1988,12 @@ test "a static compound collides at each of its children and nowhere between" {
         zjolt.rvec3(-2, 10, 0),
         zjolt.vec3(0, -20, 0),
         null,
+        null,
     )).?;
     const right = (try queries.castRayClosest(
         zjolt.rvec3(2, 10, 0),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
     )).?;
     try std.testing.expect(left.sub_shape_id != right.sub_shape_id);
@@ -2177,12 +2178,14 @@ test "a mesh reports the material of the triangle that was hit" {
         zjolt.rvec3(0.5, 10, 1.5),
         zjolt.vec3(0, -20, 0),
         null,
+        null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ground, gravel_hit.body);
 
     const metal_hit = (try queries.castRayClosest(
         zjolt.rvec3(1.5, 10, 0.5),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ground, metal_hit.body);
@@ -2265,6 +2268,7 @@ test "a height field reports the material of the quad that was hit" {
         zjolt.rvec3(2.5, 10, 2.5),
         zjolt.vec3(0, -20, 0),
         null,
+        null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expect(
         (field.material(on_rock.sub_shape_id) orelse
@@ -2274,6 +2278,7 @@ test "a height field reports the material of the quad that was hit" {
     const on_grass = (try queries.castRayClosest(
         zjolt.rvec3(1.5, 10, 1.5),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expect(

@@ -982,9 +982,9 @@ int main(void) {
 
   ZJoltRayCastHit gravel_hit, metal_hit;
   bool got_gravel = false, got_metal = false;
-  CHECK_OK(zjoltCastRayClosest(system, &over_gravel, &straight_down, NULL,
+  CHECK_OK(zjoltCastRayClosest(system, &over_gravel, &straight_down, NULL, NULL,
                                &gravel_hit, &got_gravel));
-  CHECK_OK(zjoltCastRayClosest(system, &over_metal, &straight_down, NULL,
+  CHECK_OK(zjoltCastRayClosest(system, &over_metal, &straight_down, NULL, NULL,
                                &metal_hit, &got_metal));
   CHECK(got_gravel && got_metal, "both halves of the quad were hit");
   CHECK(gravel_hit.body == quad_id && metal_hit.body == quad_id,
