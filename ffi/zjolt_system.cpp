@@ -540,8 +540,10 @@ void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
   // is about to be freed.
   system->system.SetContactListener(nullptr);
   system->system.SetBodyActivationListener(nullptr);
+  system->system.SetSoftBodyContactListener(nullptr);
   zjolt::Delete(system->contact_listener);
   zjolt::Delete(system->activation_listener);
+  zjolt::Delete(system->soft_body_contact_listener);
 
   for (ZJoltStepListener *listener : system->step_listeners) {
     system->system.RemoveStepListener(listener);

@@ -16,10 +16,12 @@ pub const Activation = core.Activation;
 pub const BodyId = core.BodyId;
 pub const Mat44 = core.Mat44;
 pub const ObjectLayer = core.ObjectLayer;
+pub const PhysicsMaterial = core.PhysicsMaterial;
 pub const PhysicsSystem = core.PhysicsSystem;
 pub const Quat = core.Quat;
 pub const RVec3 = core.RVec3;
 pub const Result = core.Result;
+pub const SubShapeId = core.SubShapeId;
 pub const Vec3 = core.Vec3;
 pub const max_physics_jobs = core.max_physics_jobs;
 pub const CollisionGroup = group.CollisionGroup;
@@ -193,3 +195,81 @@ pub extern fn zjoltSoftBodySetEnableSkinConstraints(system: *PhysicsSystem, body
 pub extern fn zjoltSoftBodyGetSkinnedMaxDistanceMultiplier(system: *const PhysicsSystem, body: BodyId, out: *f32) Result;
 
 pub extern fn zjoltSoftBodySetSkinnedMaxDistanceMultiplier(system: *PhysicsSystem, body: BodyId, multiplier: f32) Result;
+
+pub const SoftBodyRodStretchShear = extern struct {
+    vertex: [2]u32,
+    compliance: f32,
+};
+
+pub const SoftBodyRodBendTwist = extern struct {
+    rod: [2]u32,
+    compliance: f32,
+};
+
+pub const SoftBodyRodState = extern struct {
+    vertex: [2]u32,
+    rotation: Quat,
+    angular_velocity: Vec3,
+};
+
+pub const SoftBodyValidateResult = enum(c_int) {
+    accept_contact = 0,
+    reject_contact = 1,
+};
+
+pub const SoftBodyContactSettings = extern struct {
+    inv_mass_scale1: f32,
+    inv_mass_scale2: f32,
+    inv_inertia_scale2: f32,
+    is_sensor: bool,
+};
+
+pub const SoftBodyManifold = opaque {};
+
+pub const SoftBodyVertexContact = extern struct {
+    vertex: u32,
+    body: BodyId,
+    local_contact_point: Vec3,
+    normal: Vec3,
+};
+
+pub const SoftBodyContactListener = extern struct {
+    on_contact_validate: ?*const fn (
+        user: ?*anyopaque,
+        soft_body: BodyId,
+        other_body: BodyId,
+        io_settings: *SoftBodyContactSettings,
+    ) callconv(.c) SoftBodyValidateResult = null,
+    on_contact_added: ?*const fn (
+        user: ?*anyopaque,
+        soft_body: BodyId,
+        manifold: *const SoftBodyManifold,
+    ) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
+pub extern fn zjoltSoftBodySharedSettingsClone(settings: *const SoftBodySharedSettings, out: **SoftBodySharedSettings) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsSetMaterials(settings: *SoftBodySharedSettings, materials: ?[*]const *const PhysicsMaterial, count: u32) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsGetMaterials(settings: *const SoftBodySharedSettings, out_materials: ?[*]*const PhysicsMaterial, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsAddRodStretchShearConstraints(settings: *SoftBodySharedSettings, rods: ?[*]const SoftBodyRodStretchShear, count: u32) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsAddRodBendTwistConstraints(settings: *SoftBodySharedSettings, constraints: ?[*]const SoftBodyRodBendTwist, count: u32) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsCalculateVolumeConstraintVolumes(settings: *SoftBodySharedSettings) void;
+
+pub extern fn zjoltSoftBodySharedSettingsCalculateRodProperties(settings: *SoftBodySharedSettings) Result;
+
+pub extern fn zjoltSoftBodyGetRodStates(system: *const PhysicsSystem, body: BodyId, out_states: ?[*]SoftBodyRodState, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltSoftBodyGetFaceIndex(system: *const PhysicsSystem, body: BodyId, sub_shape_id: SubShapeId, out: *u32) Result;
+
+pub extern fn zjoltSoftBodyCustomUpdate(system: *PhysicsSystem, body: BodyId, delta_time: f32) Result;
+
+pub extern fn zjoltSoftBodyManifoldGetVertexContacts(manifold: *const SoftBodyManifold, out_contacts: ?[*]SoftBodyVertexContact, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltSoftBodyManifoldGetSensorContacts(manifold: *const SoftBodyManifold, out_bodies: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltSoftBodySetContactListener(system: *PhysicsSystem, listener: ?*const SoftBodyContactListener) Result;
