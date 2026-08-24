@@ -37,6 +37,7 @@ pub const BodyId = u32;
 pub const SubShapeId = u32;
 
 pub const body_id_invalid: BodyId = 0xffff_ffff;
+pub const sub_shape_id_empty: SubShapeId = 0xffff_ffff;
 
 pub const version_major: u32 = 0;
 pub const version_minor: u32 = 0;

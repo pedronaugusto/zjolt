@@ -319,6 +319,19 @@ typedef uint32_t ZJoltBodyId;
 /// Identifies one leaf of a compound or mesh shape within a hit.
 typedef uint32_t ZJoltSubShapeId;
 
+/// The sub-shape id that means "the shape itself, no leaf".
+///
+/// Pass this to any entry point that takes a sub-shape id when the shape is
+/// not compound — several of Jolt's accessors assert on it rather than
+/// tolerating an arbitrary value, so it is a required argument, not a
+/// convenience.
+///
+/// Written out rather than reported by the library the way
+/// `zjoltAbiLayout` reports widths, because `JPH::SubShapeID::cEmpty` is
+/// private and zjolt does not pass `-fno-access-control`. A behavioural test
+/// pins it to what Jolt actually treats as empty.
+#define ZJOLT_SUB_SHAPE_ID_EMPTY ((ZJoltSubShapeId)0xffffffffu)
+
 #if ZJOLT_OBJECT_LAYER_BITS == 32
 typedef uint32_t ZJoltObjectLayer;
 #else

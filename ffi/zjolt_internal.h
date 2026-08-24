@@ -22,6 +22,7 @@
 #include <Jolt/Physics/Collision/ContactListener.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
+#include <Jolt/Physics/Collision/Shape/SubShapeID.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <cmath>
@@ -271,6 +272,21 @@ inline JPH::BodyID ToJolt(ZJoltBodyId id) { return JPH::BodyID(id); }
 
 inline ZJoltBodyId ToC(const JPH::BodyID &id) {
   return static_cast<ZJoltBodyId>(id.GetIndexAndSequenceNumber());
+}
+
+/// A sub-shape id, built through SetValue rather than the value constructor.
+///
+/// `JPH::SubShapeID`'s value constructor is private and so is `cEmpty`, and
+/// zjolt deliberately does not pass `-fno-access-control`. `SetValue` is the
+/// public way in, and it is the only way in from here.
+inline JPH::SubShapeID ToJoltSubShapeId(ZJoltSubShapeId id) {
+  JPH::SubShapeID result;
+  result.SetValue(static_cast<JPH::SubShapeID::Type>(id));
+  return result;
+}
+
+inline ZJoltSubShapeId ToC(const JPH::SubShapeID &id) {
+  return static_cast<ZJoltSubShapeId>(id.GetValue());
 }
 
 inline void WriteVec3(ZJoltVec3 *out, JPH::Vec3Arg v) {

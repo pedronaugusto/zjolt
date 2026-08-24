@@ -17,10 +17,6 @@ constexpr uint32_t kMaxContactPoints = 64;
 static_assert(JPH::ContactPoints::Capacity >= kMaxContactPoints,
               "Jolt's contact point capacity shrank below what zjolt copies");
 
-uint32_t ToCSubShapeId(const JPH::SubShapeID &id) {
-  return static_cast<uint32_t>(id.GetValue());
-}
-
 /// Copies Jolt's SIMD contact points into caller-visible 12-byte vectors.
 ///
 /// The copy is unavoidable: Jolt's ContactPoints holds 16-byte Vec3s with a
@@ -49,8 +45,8 @@ void FillContactInfo(ZJoltContactInfo *info, const JPH::Body &body1,
   out.base_offset = zjolt::ToCR(manifold.mBaseOffset);
   out.world_space_normal = zjolt::ToC(manifold.mWorldSpaceNormal);
   out.penetration_depth = manifold.mPenetrationDepth;
-  out.sub_shape_id1 = ToCSubShapeId(manifold.mSubShapeID1);
-  out.sub_shape_id2 = ToCSubShapeId(manifold.mSubShapeID2);
+  out.sub_shape_id1 = zjolt::ToC(manifold.mSubShapeID1);
+  out.sub_shape_id2 = zjolt::ToC(manifold.mSubShapeID2);
   out.num_points = CopyContactPoints(manifold.mRelativeContactPointsOn1, points1);
   CopyContactPoints(manifold.mRelativeContactPointsOn2, points2);
   out.points_on_1 = points1;
@@ -125,8 +121,8 @@ JPH::ValidateResult ZJoltContactListenerAdapter::OnContactValidate(
   info.contact_point_on_2 = zjolt::ToC(inCollisionResult.mContactPointOn2);
   info.penetration_axis = zjolt::ToC(inCollisionResult.mPenetrationAxis);
   info.penetration_depth = inCollisionResult.mPenetrationDepth;
-  info.sub_shape_id1 = ToCSubShapeId(inCollisionResult.mSubShapeID1);
-  info.sub_shape_id2 = ToCSubShapeId(inCollisionResult.mSubShapeID2);
+  info.sub_shape_id1 = zjolt::ToC(inCollisionResult.mSubShapeID1);
+  info.sub_shape_id2 = zjolt::ToC(inCollisionResult.mSubShapeID2);
 
   switch (listener_.on_contact_validate(listener_.user, &info)) {
     case ZJOLT_VALIDATE_RESULT_ACCEPT_CONTACT:
@@ -178,9 +174,9 @@ void ZJoltContactListenerAdapter::OnContactRemoved(
   if (listener_.on_contact_removed == nullptr) return;
   const ZJoltSubShapeIdPair pair = {
       zjolt::ToC(inSubShapePair.GetBody1ID()),
-      ToCSubShapeId(inSubShapePair.GetSubShapeID1()),
+      zjolt::ToC(inSubShapePair.GetSubShapeID1()),
       zjolt::ToC(inSubShapePair.GetBody2ID()),
-      ToCSubShapeId(inSubShapePair.GetSubShapeID2()),
+      zjolt::ToC(inSubShapePair.GetSubShapeID2()),
   };
   listener_.on_contact_removed(listener_.user, &pair);
 }
