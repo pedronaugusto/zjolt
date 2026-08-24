@@ -159,6 +159,11 @@ pub const MotionQuality = enum(c_int) {
     linear_cast = 1,
 };
 
+pub const BodyType = enum(c_int) {
+    rigid_body = 0,
+    soft_body = 1,
+};
+
 pub const Activation = enum(c_int) {
     activate = 0,
     dont_activate = 1,
@@ -481,6 +486,18 @@ pub const StepListenerContext = extern struct {
 
 pub const StepListenerFn = *const fn (user: ?*anyopaque, context: *const StepListenerContext) callconv(.c) void;
 
+pub const BodyStats = extern struct {
+    num_bodies: u32,
+    max_bodies: u32,
+    num_bodies_static: u32,
+    num_bodies_dynamic: u32,
+    num_active_bodies_dynamic: u32,
+    num_bodies_kinematic: u32,
+    num_active_bodies_kinematic: u32,
+    num_soft_bodies: u32,
+    num_active_soft_bodies: u32,
+};
+
 //=============================================================================
 // Broad-phase queries
 //=============================================================================
@@ -779,22 +796,34 @@ pub extern fn zjoltBodyIsAdded(system: *const PhysicsSystem, body: BodyId) bool;
 pub extern fn zjoltBodyIsActive(system: *const PhysicsSystem, body: BodyId) bool;
 pub extern fn zjoltBodyActivate(system: *PhysicsSystem, body: BodyId) void;
 pub extern fn zjoltBodyDeactivate(system: *PhysicsSystem, body: BodyId) void;
+pub extern fn zjoltBodyResetSleepTimer(system: *PhysicsSystem, body: BodyId) void;
+pub extern fn zjoltBodyGetBodyType(system: *const PhysicsSystem, body: BodyId) BodyType;
 pub extern fn zjoltBodySetMotionType(system: *PhysicsSystem, body: BodyId, motion_type: MotionType, activation: Activation) void;
 pub extern fn zjoltBodyGetMotionType(system: *const PhysicsSystem, body: BodyId) MotionType;
+pub extern fn zjoltBodySetMotionQuality(system: *PhysicsSystem, body: BodyId, quality: MotionQuality) void;
+pub extern fn zjoltBodyGetMotionQuality(system: *const PhysicsSystem, body: BodyId) MotionQuality;
 pub extern fn zjoltBodySetPositionAndRotation(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 pub extern fn zjoltBodyGetPositionAndRotation(system: *const PhysicsSystem, body: BodyId, out_position: ?*RVec3, out_rotation: ?*Quat) void;
 pub extern fn zjoltBodyGetCenterOfMassPosition(system: *const PhysicsSystem, body: BodyId, out: *RVec3) void;
+pub extern fn zjoltBodySetPositionAndRotationWhenChanged(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 pub extern fn zjoltBodyMoveKinematic(system: *PhysicsSystem, body: BodyId, target_position: *const RVec3, target_rotation: ?*const Quat, delta_time: f32) void;
+pub extern fn zjoltBodySetPositionRotationAndVelocity(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, linear_velocity: *const Vec3, angular_velocity: *const Vec3) void;
 pub extern fn zjoltBodySetLinearVelocity(system: *PhysicsSystem, body: BodyId, velocity: *const Vec3) void;
 pub extern fn zjoltBodyGetLinearVelocity(system: *const PhysicsSystem, body: BodyId, out: *Vec3) void;
 pub extern fn zjoltBodySetAngularVelocity(system: *PhysicsSystem, body: BodyId, velocity: *const Vec3) void;
 pub extern fn zjoltBodyGetAngularVelocity(system: *const PhysicsSystem, body: BodyId, out: *Vec3) void;
+pub extern fn zjoltBodySetLinearAndAngularVelocity(system: *PhysicsSystem, body: BodyId, linear_velocity: *const Vec3, angular_velocity: *const Vec3) void;
+pub extern fn zjoltBodyGetLinearAndAngularVelocity(system: *const PhysicsSystem, body: BodyId, out_linear_velocity: ?*Vec3, out_angular_velocity: ?*Vec3) void;
+pub extern fn zjoltBodyAddLinearVelocity(system: *PhysicsSystem, body: BodyId, linear_velocity: *const Vec3) void;
+pub extern fn zjoltBodyAddLinearAndAngularVelocity(system: *PhysicsSystem, body: BodyId, linear_velocity: *const Vec3, angular_velocity: *const Vec3) void;
+pub extern fn zjoltBodyGetPointVelocity(system: *const PhysicsSystem, body: BodyId, point: *const RVec3, out: *Vec3) void;
 pub extern fn zjoltBodyAddForce(system: *PhysicsSystem, body: BodyId, force: *const Vec3) void;
 pub extern fn zjoltBodyAddForceAtPoint(system: *PhysicsSystem, body: BodyId, force: *const Vec3, point: *const RVec3) void;
 pub extern fn zjoltBodyAddTorque(system: *PhysicsSystem, body: BodyId, torque: *const Vec3) void;
 pub extern fn zjoltBodyAddImpulse(system: *PhysicsSystem, body: BodyId, impulse: *const Vec3) void;
 pub extern fn zjoltBodyAddImpulseAtPoint(system: *PhysicsSystem, body: BodyId, impulse: *const Vec3, point: *const RVec3) void;
 pub extern fn zjoltBodyAddAngularImpulse(system: *PhysicsSystem, body: BodyId, angular_impulse: *const Vec3) void;
+pub extern fn zjoltBodyApplyBuoyancyImpulse(system: *PhysicsSystem, body: BodyId, surface_position: *const RVec3, surface_normal: *const Vec3, buoyancy: f32, linear_drag: f32, angular_drag: f32, fluid_velocity: *const Vec3, gravity: *const Vec3, delta_time: f32) bool;
 pub extern fn zjoltBodySetShape(system: *PhysicsSystem, body: BodyId, shape: *const Shape, update_mass_properties: bool, activation: Activation) void;
 pub extern fn zjoltBodySetObjectLayer(system: *PhysicsSystem, body: BodyId, layer: ObjectLayer) void;
 pub extern fn zjoltBodyGetObjectLayer(system: *const PhysicsSystem, body: BodyId) ObjectLayer;
@@ -806,6 +835,14 @@ pub extern fn zjoltBodySetRestitution(system: *PhysicsSystem, body: BodyId, rest
 pub extern fn zjoltBodyGetRestitution(system: *const PhysicsSystem, body: BodyId) f32;
 pub extern fn zjoltBodySetGravityFactor(system: *PhysicsSystem, body: BodyId, factor: f32) void;
 pub extern fn zjoltBodyGetGravityFactor(system: *const PhysicsSystem, body: BodyId) f32;
+pub extern fn zjoltBodySetMaxLinearVelocity(system: *PhysicsSystem, body: BodyId, velocity: f32) void;
+pub extern fn zjoltBodyGetMaxLinearVelocity(system: *const PhysicsSystem, body: BodyId) f32;
+pub extern fn zjoltBodySetMaxAngularVelocity(system: *PhysicsSystem, body: BodyId, velocity: f32) void;
+pub extern fn zjoltBodyGetMaxAngularVelocity(system: *const PhysicsSystem, body: BodyId) f32;
+pub extern fn zjoltBodySetUseManifoldReduction(system: *PhysicsSystem, body: BodyId, use_reduction: bool) void;
+pub extern fn zjoltBodyGetUseManifoldReduction(system: *const PhysicsSystem, body: BodyId) bool;
+pub extern fn zjoltBodySetIsSensor(system: *PhysicsSystem, body: BodyId, is_sensor: bool) void;
+pub extern fn zjoltBodyIsSensor(system: *const PhysicsSystem, body: BodyId) bool;
 pub extern fn zjoltBodyGetMaterial(system: *const PhysicsSystem, body: BodyId, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
 pub extern fn zjoltBodyNotifyShapeChanged(system: *PhysicsSystem, body: BodyId, previous_center_of_mass: *const Vec3, update_mass_properties: bool, activation: Activation) void;
 
@@ -873,6 +910,7 @@ pub extern fn zjoltCharacterGetShape(character: *const Character) ?*const Shape;
 pub extern fn zjoltCharacterGetInnerBodyId(character: *const Character) BodyId;
 
 pub extern fn zjoltPhysicsSystemGetMaxBodies(system: *const PhysicsSystem) u32;
+pub extern fn zjoltPhysicsSystemGetBodyStats(system: *const PhysicsSystem, out: *BodyStats) void;
 pub extern fn zjoltPhysicsSystemWereBodiesInContact(system: *const PhysicsSystem, body1: BodyId, body2: BodyId) bool;
 pub extern fn zjoltPhysicsSettingsInit(settings: *PhysicsSettings) void;
 pub extern fn zjoltPhysicsSystemGetSettings(system: *const PhysicsSystem, out: *PhysicsSettings) void;

@@ -241,6 +241,27 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
 ZJOLT_API uint32_t zjoltPhysicsSystemGetMaxBodies(
     const ZJoltPhysicsSystem *system);
 
+/// A census of the bodies in a system, broken down by motion type.
+typedef struct ZJoltBodyStats {
+  uint32_t num_bodies;
+  /// The ceiling this system was created with; same as
+  /// zjoltPhysicsSystemGetMaxBodies.
+  uint32_t max_bodies;
+  uint32_t num_bodies_static;
+  uint32_t num_bodies_dynamic;
+  uint32_t num_active_bodies_dynamic;
+  uint32_t num_bodies_kinematic;
+  uint32_t num_active_bodies_kinematic;
+  /// Always 0 through this ABI — there is no constructor for a soft body yet.
+  uint32_t num_soft_bodies;
+  uint32_t num_active_soft_bodies;
+} ZJoltBodyStats;
+
+/// Slow: iterates every body in the system. Meant for an occasional debug
+/// overlay, not a per-frame call. All-zero if `system` is NULL.
+ZJOLT_API void zjoltPhysicsSystemGetBodyStats(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyStats *out);
+
 /// True if the two bodies were touching during the LAST step.
 ///
 /// This reads the contact cache, so it answers a question about the step that

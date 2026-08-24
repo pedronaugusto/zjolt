@@ -22,6 +22,7 @@ pub const invalid_body_id = c.body_id_invalid;
 
 pub const MotionType = c.MotionType;
 pub const MotionQuality = c.MotionQuality;
+pub const BodyType = c.BodyType;
 pub const Activation = c.Activation;
 pub const AllowedDofs = c.AllowedDofs;
 pub const OverrideMassProperties = c.OverrideMassProperties;
@@ -168,6 +169,18 @@ pub const BodyInterface = struct {
         c.zjoltBodyDeactivate(self.handle, body);
     }
 
+    /// Restarts the clock `time_before_sleep` counts down before an active
+    /// body is allowed to sleep.
+    pub fn resetSleepTimer(self: BodyInterface, body: BodyId) void {
+        c.zjoltBodyResetSleepTimer(self.handle, body);
+    }
+
+    /// There is no constructor for a soft body yet, so this only ever reads
+    /// `.rigid_body` through this wrapper.
+    pub fn getBodyType(self: BodyInterface, body: BodyId) BodyType {
+        return c.zjoltBodyGetBodyType(self.handle, body);
+    }
+
     //-------------------------------------------------------------------------
     // Transform
     //-------------------------------------------------------------------------
@@ -214,6 +227,24 @@ pub const BodyInterface = struct {
         return out;
     }
 
+    /// As `setPositionAndRotation`, but skips the broad-phase update and the
+    /// activation check when the new pose is close enough to the old one —
+    /// worth using for a snapshot applied every tick, where "did this
+    /// actually move" is not already known at the call site.
+    pub fn setPositionAndRotationWhenChanged(
+        self: BodyInterface,
+        body: BodyId,
+        position: math.RVec3,
+        rotation: ?math.Quat,
+        activation: Activation,
+    ) void {
+        if (rotation) |r| {
+            c.zjoltBodySetPositionAndRotationWhenChanged(self.handle, body, &position, &r, activation);
+        } else {
+            c.zjoltBodySetPositionAndRotationWhenChanged(self.handle, body, &position, null, activation);
+        }
+    }
+
     /// Drives a kinematic body toward a target over `delta_time`, so it pushes
     /// dynamic bodies out of the way instead of teleporting through them.
     /// This is how a moving platform or an animated character should move.
@@ -228,6 +259,23 @@ pub const BodyInterface = struct {
             c.zjoltBodyMoveKinematic(self.handle, body, &target_position, &r, delta_time);
         } else {
             c.zjoltBodyMoveKinematic(self.handle, body, &target_position, null, delta_time);
+        }
+    }
+
+    /// Sets position, rotation and both velocities in one lock — cheaper than
+    /// the equivalent separate calls when restoring a full motion state.
+    pub fn setPositionRotationAndVelocity(
+        self: BodyInterface,
+        body: BodyId,
+        position: math.RVec3,
+        rotation: ?math.Quat,
+        linear_velocity: math.Vec3,
+        angular_velocity: math.Vec3,
+    ) void {
+        if (rotation) |r| {
+            c.zjoltBodySetPositionRotationAndVelocity(self.handle, body, &position, &r, &linear_velocity, &angular_velocity);
+        } else {
+            c.zjoltBodySetPositionRotationAndVelocity(self.handle, body, &position, null, &linear_velocity, &angular_velocity);
         }
     }
 
@@ -252,6 +300,54 @@ pub const BodyInterface = struct {
     pub fn getAngularVelocity(self: BodyInterface, body: BodyId) math.Vec3 {
         var out: math.Vec3 = math.vec3_zero;
         c.zjoltBodyGetAngularVelocity(self.handle, body, &out);
+        return out;
+    }
+
+    /// Sets both in one lock rather than two.
+    pub fn setLinearAndAngularVelocity(
+        self: BodyInterface,
+        body: BodyId,
+        linear_velocity: math.Vec3,
+        angular_velocity: math.Vec3,
+    ) void {
+        c.zjoltBodySetLinearAndAngularVelocity(self.handle, body, &linear_velocity, &angular_velocity);
+    }
+
+    pub const Velocity = struct {
+        linear: math.Vec3,
+        angular: math.Vec3,
+    };
+
+    /// Reads both in one lock rather than two.
+    pub fn getLinearAndAngularVelocity(self: BodyInterface, body: BodyId) Velocity {
+        var linear: math.Vec3 = math.vec3_zero;
+        var angular: math.Vec3 = math.vec3_zero;
+        c.zjoltBodyGetLinearAndAngularVelocity(self.handle, body, &linear, &angular);
+        return .{ .linear = linear, .angular = angular };
+    }
+
+    /// Adds to the current linear velocity, clamped the same way
+    /// `setLinearVelocity` is.
+    pub fn addLinearVelocity(self: BodyInterface, body: BodyId, linear_velocity: math.Vec3) void {
+        c.zjoltBodyAddLinearVelocity(self.handle, body, &linear_velocity);
+    }
+
+    pub fn addLinearAndAngularVelocity(
+        self: BodyInterface,
+        body: BodyId,
+        linear_velocity: math.Vec3,
+        angular_velocity: math.Vec3,
+    ) void {
+        c.zjoltBodyAddLinearAndAngularVelocity(self.handle, body, &linear_velocity, &angular_velocity);
+    }
+
+    /// Velocity of the point on this body currently at `point` (world space),
+    /// including the contribution from spin. Zero for a static body and zero
+    /// when the body lock fails — the same answer, so `isAdded` is the way to
+    /// tell them apart if that matters.
+    pub fn getPointVelocity(self: BodyInterface, body: BodyId, point: math.RVec3) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltBodyGetPointVelocity(self.handle, body, &point, &out);
         return out;
     }
 
@@ -291,6 +387,38 @@ pub const BodyInterface = struct {
         c.zjoltBodyAddAngularImpulse(self.handle, body, &impulse);
     }
 
+    /// Applies drag and buoyancy for a body partly submerged at
+    /// `surface_position`/`surface_normal` (surface plane in world space,
+    /// normal pointing out of the fluid), activating it on success.
+    ///
+    /// False, and does nothing, for a body that is not dynamic or whose lock
+    /// fails — the same false Jolt returns.
+    pub fn applyBuoyancyImpulse(
+        self: BodyInterface,
+        body: BodyId,
+        surface_position: math.RVec3,
+        surface_normal: math.Vec3,
+        buoyancy: f32,
+        linear_drag: f32,
+        angular_drag: f32,
+        fluid_velocity: math.Vec3,
+        gravity: math.Vec3,
+        delta_time: f32,
+    ) bool {
+        return c.zjoltBodyApplyBuoyancyImpulse(
+            self.handle,
+            body,
+            &surface_position,
+            &surface_normal,
+            buoyancy,
+            linear_drag,
+            angular_drag,
+            &fluid_velocity,
+            &gravity,
+            delta_time,
+        );
+    }
+
     //-------------------------------------------------------------------------
     // Properties
     //-------------------------------------------------------------------------
@@ -306,6 +434,15 @@ pub const BodyInterface = struct {
 
     pub fn getMotionType(self: BodyInterface, body: BodyId) MotionType {
         return c.zjoltBodyGetMotionType(self.handle, body);
+    }
+
+    /// How well this body detects collisions when it moves fast.
+    pub fn setMotionQuality(self: BodyInterface, body: BodyId, quality: MotionQuality) void {
+        c.zjoltBodySetMotionQuality(self.handle, body, quality);
+    }
+
+    pub fn getMotionQuality(self: BodyInterface, body: BodyId) MotionQuality {
+        return c.zjoltBodyGetMotionQuality(self.handle, body);
     }
 
     /// Replaces the shape. With `update_mass_properties` the body's mass and
@@ -358,6 +495,48 @@ pub const BodyInterface = struct {
 
     pub fn getGravityFactor(self: BodyInterface, body: BodyId) f32 {
         return c.zjoltBodyGetGravityFactor(self.handle, body);
+    }
+
+    /// `velocity` must not be negative — Jolt asserts that in a build with
+    /// asserts enabled and reads it as-is otherwise. A static or kinematic
+    /// body has no motion properties to hold this, so it is a no-op on one.
+    pub fn setMaxLinearVelocity(self: BodyInterface, body: BodyId, velocity: f32) void {
+        c.zjoltBodySetMaxLinearVelocity(self.handle, body, velocity);
+    }
+
+    /// Jolt's own construction-time default (500) when the body lock fails.
+    pub fn getMaxLinearVelocity(self: BodyInterface, body: BodyId) f32 {
+        return c.zjoltBodyGetMaxLinearVelocity(self.handle, body);
+    }
+
+    pub fn setMaxAngularVelocity(self: BodyInterface, body: BodyId, velocity: f32) void {
+        c.zjoltBodySetMaxAngularVelocity(self.handle, body, velocity);
+    }
+
+    /// Jolt's own construction-time default (15*pi) when the body lock fails.
+    pub fn getMaxAngularVelocity(self: BodyInterface, body: BodyId) f32 {
+        return c.zjoltBodyGetMaxAngularVelocity(self.handle, body);
+    }
+
+    /// Merging nearby contact manifolds into one, on by default. Turning it
+    /// off invalidates this body's contact cache, so a pair already resting
+    /// picks up the change on the next step.
+    pub fn setUseManifoldReduction(self: BodyInterface, body: BodyId, use_reduction: bool) void {
+        c.zjoltBodySetUseManifoldReduction(self.handle, body, use_reduction);
+    }
+
+    pub fn getUseManifoldReduction(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyGetUseManifoldReduction(self.handle, body);
+    }
+
+    /// Whether this body reports contacts without responding to them — a
+    /// trigger volume. Unlocked counterpart of `Body.isSensor`.
+    pub fn setIsSensor(self: BodyInterface, body: BodyId, is_sensor: bool) void {
+        c.zjoltBodySetIsSensor(self.handle, body, is_sensor);
+    }
+
+    pub fn isSensor(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyIsSensor(self.handle, body);
     }
 
     /// The material of one leaf of the body's shape. @see `Shape.material`

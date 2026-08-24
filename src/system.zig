@@ -548,6 +548,17 @@ pub const PhysicsSystem = struct {
         return c.zjoltPhysicsSystemGetMaxBodies(self.handle);
     }
 
+    pub const BodyStats = c.BodyStats;
+
+    /// A census of the bodies in this system, broken down by motion type.
+    /// Slow — it iterates every body — so this is for an occasional debug
+    /// overlay, not a per-frame call.
+    pub fn getBodyStats(self: PhysicsSystem) BodyStats {
+        var out: BodyStats = undefined;
+        c.zjoltPhysicsSystemGetBodyStats(self.handle, &out);
+        return out;
+    }
+
     /// True if the two bodies were touching during the LAST step.
     ///
     /// This reads the contact cache, so it answers a question about the step
