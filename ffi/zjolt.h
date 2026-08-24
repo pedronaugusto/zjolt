@@ -26,6 +26,7 @@
 #include "zjolt_material.h"
 #include "zjolt_query.h"
 #include "zjolt_ragdoll.h"
+#include "zjolt_scene.h"
 #include "zjolt_shape.h"
 #include "zjolt_softbody.h"
 #include "zjolt_state.h"
