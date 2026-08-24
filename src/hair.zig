@@ -534,6 +534,17 @@ pub const Hair = struct {
         try err.check(c.zjoltHairSetTransform(self.handle, &position, &rotation));
     }
 
+    /// Where the hair is, as last set. This is the transform that takes the
+    /// LOCAL-space vertices `getVertices` reports into world space — without
+    /// it those vertices cannot be drawn, because Jolt's own `Hair` takes a
+    /// transform and never gives it back.
+    pub fn getTransform(self: Hair) err.Error!struct { position: math.RVec3, rotation: math.Quat } {
+        var position: math.RVec3 = undefined;
+        var rotation: math.Quat = undefined;
+        try err.check(c.zjoltHairGetTransform(self.handle, &position, &rotation));
+        return .{ .position = position, .rotation = rotation };
+    }
+
     /// Takes the transform from a body, which is the usual way to hang hair on
     /// a head. `error.BodyNotFound` if the id names no body, rather than
     /// silently placing the hair at the origin.

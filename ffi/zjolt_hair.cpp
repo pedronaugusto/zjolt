@@ -411,6 +411,14 @@ struct ZJoltHair {
   /// the groom has no scalp, which is what tells Update to skip skinning.
   JPH::Mat44 joint_to_hair = JPH::Mat44::sIdentity();
   JPH::Array<JPH::Mat44> joint_matrices;
+
+  /// The transform last handed to JPH::Hair. Kept here because Jolt's Hair
+  /// takes one and never gives it back — it has SetPosition/SetRotation and
+  /// no getters — and a caller needs it: every vertex zjoltHairGetVertices
+  /// reports is in the hair's LOCAL space, so this is the matrix that puts
+  /// them where they are drawn.
+  JPH::RVec3 position = JPH::RVec3::sZero();
+  JPH::Quat rotation = JPH::Quat::sIdentity();
 };
 
 namespace {
@@ -945,10 +953,23 @@ ZJoltResult zjoltHairSetTransform(ZJoltHair *hair, const ZJoltRVec3 *position,
                                   const ZJoltQuat *rotation) {
   ZJOLT_ENTER();
   if (!zjolt::Present(hair)) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  if (position != nullptr) hair->hair->SetPosition(zjolt::ToJoltR(*position));
-  if (rotation != nullptr) {
-    hair->hair->SetRotation(zjolt::ToJoltRotation(*rotation));
+  if (position != nullptr) {
+    hair->position = zjolt::ToJoltR(*position);
+    hair->hair->SetPosition(hair->position);
   }
+  if (rotation != nullptr) {
+    hair->rotation = zjolt::ToJoltRotation(*rotation);
+    hair->hair->SetRotation(hair->rotation);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairGetTransform(const ZJoltHair *hair, ZJoltRVec3 *out_position,
+                                  ZJoltQuat *out_rotation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(hair)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (out_position != nullptr) zjolt::WriteRVec3(out_position, hair->position);
+  if (out_rotation != nullptr) zjolt::WriteQuat(out_rotation, hair->rotation);
   return ZJOLT_RESULT_OK;
 }
 
@@ -965,8 +986,10 @@ ZJoltResult zjoltHairFollowBody(ZJoltHair *hair,
                            "the body id does not name a body in this system");
   }
   const JPH::Body &jolt_body = lock.GetBody();
-  hair->hair->SetPosition(jolt_body.GetPosition());
-  hair->hair->SetRotation(jolt_body.GetRotation());
+  hair->position = jolt_body.GetPosition();
+  hair->rotation = jolt_body.GetRotation();
+  hair->hair->SetPosition(hair->position);
+  hair->hair->SetRotation(hair->rotation);
   return ZJOLT_RESULT_OK;
 }
 

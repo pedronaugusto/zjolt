@@ -616,6 +616,23 @@ void zjoltRagdollRemoveFromPhysicsSystem(ZJoltRagdoll *ragdoll,
   zjolt::ToJolt(ragdoll)->RemoveFromPhysicsSystem(lock_bodies);
 }
 
+ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
+                                   ZJoltBodyId *out_ids, uint32_t capacity,
+                                   uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(ragdoll, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Ragdoll *impl = zjolt::ToJolt(ragdoll);
+  const JPH::Array<JPH::BodyID> &ids = impl->GetBodyIDs();
+  const uint32_t count = static_cast<uint32_t>(ids.size());
+  *out_count = count;
+  if (out_ids == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  for (uint32_t i = 0; i < count; ++i) out_ids[i] = zjolt::ToC(ids[i]);
+  return ZJOLT_RESULT_OK;
+}
+
 void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies) {
   if (ragdoll == nullptr) return;
   zjolt::ToJolt(ragdoll)->Activate(lock_bodies);
