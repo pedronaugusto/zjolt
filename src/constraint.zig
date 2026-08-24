@@ -1119,9 +1119,14 @@ pub const Constraint = struct {
 
     /// BORROWED — valid only while the constraint holds it. Call `addRef` on
     /// the result to keep it.
-    pub fn pathPath(self: Constraint) ?Path {
-        const raw = c.zjoltPathConstraintGetPath(self.handle) orelse return null;
-        return Path{ .handle = @constCast(raw) };
+    ///
+    /// Null means the constraint has no path set, which is a normal state.
+    /// A constraint that is not a path constraint is `error.InvalidArgument`
+    /// instead — the two would otherwise be the same answer.
+    pub fn pathPath(self: Constraint) err.Error!?Path {
+        var raw: ?*const c.PathConstraintPath = null;
+        try err.check(c.zjoltPathConstraintGetPath(self.handle, &raw));
+        return if (raw) |p| Path{ .handle = @constCast(p) } else null;
     }
 
     pub fn pathFraction(self: Constraint) err.Error!f32 {

@@ -150,15 +150,16 @@ ZJoltResult zjoltDebugRendererCreate(ZJoltDebugRenderer **out) {
 #endif
 }
 
-ZJoltResult zjoltDebugRendererDestroy(ZJoltDebugRenderer *renderer) {
-  ZJOLT_ENTER();
-  if (!zjolt::Present(renderer)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+void zjoltDebugRendererDestroy(ZJoltDebugRenderer *renderer) {
+  if (renderer == nullptr) return;
 #ifdef JPH_DEBUG_RENDERER
   zjolt::Delete(ToImpl(renderer));
   zjolt::HandleDestroyed();
-  return ZJOLT_RESULT_OK;
 #else
-  return ZJOLT_RESULT_UNSUPPORTED;
+  // Unreachable: zjoltDebugRendererCreate reports ZJOLT_RESULT_UNSUPPORTED in
+  // this build and writes no handle, so there is nothing here to have been
+  // handed one.
+  (void)renderer;
 #endif
 }
 

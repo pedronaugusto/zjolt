@@ -1121,7 +1121,7 @@ pub const CharacterContactListenerCallbacks = extern struct {
 
 pub extern fn zjoltCharacterContactListenerCreate(callbacks: *const CharacterContactListenerCallbacks, out: **CharacterContactListener) Result;
 pub extern fn zjoltCharacterContactListenerDestroy(listener: ?*CharacterContactListener) void;
-pub extern fn zjoltCharacterSetListener(character: *Character, listener: ?*CharacterContactListener) void;
+pub extern fn zjoltCharacterSetListener(character: *Character, listener: ?*CharacterContactListener) Result;
 
 //=============================================================================
 // Character-vs-character collision
@@ -1634,7 +1634,7 @@ pub const DebugDrawBodiesSettings = extern struct {
 };
 
 pub extern fn zjoltDebugRendererCreate(out: **DebugRenderer) Result;
-pub extern fn zjoltDebugRendererDestroy(renderer: ?*DebugRenderer) Result;
+pub extern fn zjoltDebugRendererDestroy(renderer: ?*DebugRenderer) void;
 pub extern fn zjoltDebugRendererClear(renderer: *DebugRenderer) Result;
 pub extern fn zjoltDebugRendererSetCameraPosition(renderer: *DebugRenderer, position: *const RVec3) Result;
 pub extern fn zjoltDebugRendererGetLines(renderer: *const DebugRenderer, lines: ?[*]DebugLine, capacity: u32, out_count: *u32) Result;
@@ -2257,7 +2257,7 @@ pub extern fn zjoltPulleyConstraintGetCurrentLength(constraint: *const Constrain
 pub extern fn zjoltPulleyConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *f32) Result;
 
 pub extern fn zjoltPathConstraintSetPath(constraint: *Constraint, path: ?*const PathConstraintPath, fraction: f32) Result;
-pub extern fn zjoltPathConstraintGetPath(constraint: *const Constraint) ?*const PathConstraintPath;
+pub extern fn zjoltPathConstraintGetPath(constraint: *const Constraint, out: *?*const PathConstraintPath) Result;
 pub extern fn zjoltPathConstraintGetPathFraction(constraint: *const Constraint, out: *f32) Result;
 pub extern fn zjoltPathConstraintSetMotorSettings(constraint: *Constraint, motor: *const MotorSettings) Result;
 pub extern fn zjoltPathConstraintGetMotorSettings(constraint: *const Constraint, out: *MotorSettings) Result;

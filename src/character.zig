@@ -479,8 +479,8 @@ pub const Character = struct {
     /// Attaches a contact listener built by `ContactListener(T).init` — pass
     /// its `.handle`. Pass `null` to detach whatever listener is currently
     /// attached.
-    pub fn setListener(self: Character, listener: ?*c.CharacterContactListener) void {
-        c.zjoltCharacterSetListener(self.handle, listener);
+    pub fn setListener(self: Character, listener: ?*c.CharacterContactListener) err.Error!void {
+        try err.check(c.zjoltCharacterSetListener(self.handle, listener));
     }
 
     /// Attaches a character-vs-character collision checker. `null` detaches:

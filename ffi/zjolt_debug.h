@@ -87,8 +87,9 @@ typedef struct ZJoltDebugText {
 /// alive — see the note at the top of this file. Destroy it first.
 ZJOLT_API ZJoltResult zjoltDebugRendererCreate(ZJoltDebugRenderer **out);
 
-/// Frees a renderer and everything buffered in it.
-ZJOLT_API ZJoltResult zjoltDebugRendererDestroy(ZJoltDebugRenderer *renderer);
+/// Frees a renderer and everything buffered in it. NULL is a no-op, as for
+/// every other zjolt*Destroy.
+ZJOLT_API void zjoltDebugRendererDestroy(ZJoltDebugRenderer *renderer);
 
 /// Empties the buffered lines, triangles and text. Call once per frame before
 /// drawing into a renderer again — the buffers only grow otherwise, since

@@ -891,11 +891,13 @@ void zjoltCharacterContactListenerDestroy(ZJoltCharacterContactListener *listene
   zjolt::HandleDestroyed();
 }
 
-void zjoltCharacterSetListener(ZJoltCharacter *character,
-                               ZJoltCharacterContactListener *listener) {
+ZJoltResult zjoltCharacterSetListener(ZJoltCharacter *character,
+                                      ZJoltCharacterContactListener *listener) {
+  ZJOLT_ENTER();
   JPH::CharacterVirtual *impl = Impl(character);
-  if (impl == nullptr) return;
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   impl->SetListener(listener);
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//

@@ -85,7 +85,7 @@ pub const Renderer = struct {
     /// this discards the result rather than asking the caller to handle it —
     /// matching every other `deinit` in this package.
     pub fn deinit(self: Renderer) void {
-        _ = c.zjoltDebugRendererDestroy(self.handle);
+        c.zjoltDebugRendererDestroy(self.handle);
     }
 
     /// Empties the buffered lines, triangles and text. Call once per frame

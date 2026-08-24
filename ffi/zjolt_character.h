@@ -429,8 +429,13 @@ ZJOLT_API void zjoltCharacterContactListenerDestroy(
     ZJoltCharacterContactListener *listener);
 
 /// NULL detaches whatever listener is currently attached.
-ZJOLT_API void zjoltCharacterSetListener(ZJoltCharacter *character,
-                                         ZJoltCharacterContactListener *listener);
+///
+/// Returns a result rather than nothing for the same reason
+/// zjoltPhysicsSystemSetContactListener does: a listener that failed to
+/// install is a character that silently stops reporting its contacts, and
+/// nothing later says so.
+ZJOLT_API ZJoltResult zjoltCharacterSetListener(
+    ZJoltCharacter *character, ZJoltCharacterContactListener *listener);
 
 //===----------------------------------------------------------------------===//
 // Character-vs-character collision

@@ -1116,10 +1116,16 @@ ZJOLT_API ZJoltResult zjoltPathConstraintSetPath(
     float fraction);
 
 /// The path this constraint follows, BORROWED — it is valid only while the
-/// constraint holds it. Call zjoltPathConstraintPathAddRef to keep it. NULL
-/// when there is none, or when the handle is not a path constraint.
-ZJOLT_API const ZJoltPathConstraintPath *zjoltPathConstraintGetPath(
-    const ZJoltConstraint *constraint);
+/// constraint holds it. Call zjoltPathConstraintPathAddRef to keep it.
+///
+/// A result rather than a plain returned pointer, because NULL would
+/// otherwise mean two unrelated things: a constraint with no path set, which
+/// is a normal state a caller may want to act on, and a handle that is not a
+/// path constraint at all, which is a programming error. `*out` NULL is the
+/// first; ZJOLT_RESULT_INVALID_ARGUMENT is the second, as for every other
+/// zjoltPathConstraint* accessor.
+ZJOLT_API ZJoltResult zjoltPathConstraintGetPath(
+    const ZJoltConstraint *constraint, const ZJoltPathConstraintPath **out);
 
 ZJOLT_API ZJoltResult zjoltPathConstraintGetPathFraction(
     const ZJoltConstraint *constraint, float *out);
