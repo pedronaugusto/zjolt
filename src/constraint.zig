@@ -33,7 +33,7 @@
 //! nothing detects it. Remove and release a body's constraints first.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/constraint.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");

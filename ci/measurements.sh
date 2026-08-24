@@ -29,8 +29,8 @@ printf 'entry points (ZJOLT_API in ffi/*.h)   %s\n' "$entry_points"
 
 # The Zig mirror of the same set. abi_check.zig fails the build if these ever
 # disagree, so a difference here means this script is counting wrong.
-externs=$(grep -c '^pub extern fn zjolt' src/c.zig)
-printf 'externs (pub extern fn in src/c.zig)  %s\n' "$externs"
+externs=$(cat src/c/*.zig | grep -c '^pub extern fn zjolt')
+printf 'externs (pub extern fn in src/c/)     %s\n' "$externs"
 if [ "$entry_points" != "$externs" ]; then
   printf '  ^ these must match; src/abi_check.zig pairs them at build time\n'
 fi
@@ -60,7 +60,9 @@ printf 'Jolt translation units                %s\n' "$jolt_tu"
 printf 'zjolt translation units               %s\n' "$own_tu"
 printf 'total per configuration               %s\n' "$((jolt_tu + own_tu))"
 printf 'zig source lines (src/)               %s\n' \
-  "$(cat src/*.zig | wc -l | tr -d ' ')"
+  "$(cat src/*.zig src/c/*.zig | wc -l | tr -d ' ')"
+printf 'C declaration modules (src/c/)        %s\n' \
+  "$(ls src/c/*.zig | wc -l | tr -d ' ')"
 printf 'C++ source lines (ffi/)               %s\n' \
   "$(cat ffi/*.cpp ffi/*.h | wc -l | tr -d ' ')"
 

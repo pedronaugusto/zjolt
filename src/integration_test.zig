@@ -59,7 +59,7 @@ pub const World = struct {
     floor: zjolt.BodyId,
 
     pub fn init() !World {
-        const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.max_physics_jobs);
+        const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
         errdefer jobs.deinit();
 
         const system = try zjolt.PhysicsSystem.init(.{
@@ -230,7 +230,7 @@ test "deinit refuses while a handle is still alive, and says so" {
 
     try std.testing.expectEqual(@as(u32, 0), zjolt.liveHandleCount());
 
-    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.max_physics_jobs);
+    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
     try std.testing.expectEqual(@as(u32, 1), zjolt.liveHandleCount());
 
     const system = try zjolt.PhysicsSystem.init(.{
@@ -458,7 +458,7 @@ test "a truncated payload inside a well-formed container is still refused" {
     // Rebuilding the header around each truncated payload is the only way to
     // reach Jolt's own parser reading a stream that runs out, and confirm it
     // reports the shortfall rather than improvising a shape from zeros.
-    const header = zjolt.c.shape_header_size;
+    const header = zjolt.c.shape.shape_header_size;
     const payload = saved[header..];
 
     var length: usize = 0;
@@ -992,7 +992,7 @@ test "a step reports which limit it ran out of" {
     });
     defer zjolt.deinit();
 
-    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.max_physics_jobs);
+    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
     defer jobs.deinit();
 
     // Deliberately far too few contact constraints for what is about to
@@ -2683,6 +2683,6 @@ test "a compound reports which child was hit" {
     // Both rays hit the same body, and the sub-shape id is what tells them
     // apart. If either were empty, the child would be unidentifiable.
     try std.testing.expectEqual(hit_left.body, hit_right.body);
-    try std.testing.expect(hit_left.sub_shape_id != zjolt.c.sub_shape_id_empty);
+    try std.testing.expect(hit_left.sub_shape_id != zjolt.c.core.sub_shape_id_empty);
     try std.testing.expect(hit_left.sub_shape_id != hit_right.sub_shape_id);
 }

@@ -4,7 +4,7 @@
 //! a conversion per body per frame for no benefit.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 
 /// A direction, velocity or extent. Three floats even in a double-precision
 /// build — only positions get the extra range, which is the same split Jolt

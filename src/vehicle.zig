@@ -12,7 +12,7 @@
 //! and friends, then override the fields that matter.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/vehicle.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");

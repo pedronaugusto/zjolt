@@ -23,7 +23,7 @@
 //! since zjolt compiles `-fno-rtti`.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/material.zig");
 const err = @import("error.zig");
 
 /// An 8-bit-per-channel colour. Debug drawing only; nothing in the simulation

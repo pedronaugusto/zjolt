@@ -11,7 +11,7 @@
 //! frame — see `PhysicsSystem.getTransforms` for that.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/body.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const shape_mod = @import("shape.zig");

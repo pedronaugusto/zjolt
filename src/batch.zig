@@ -15,7 +15,7 @@
 //! Reached from `PhysicsSystem.batch()`.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/batch.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");

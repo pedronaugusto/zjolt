@@ -12,7 +12,7 @@
 //! every body in it.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/group.zig");
 const err = @import("error.zig");
 
 /// The group and sub-group id that mean "no group": a body carrying it

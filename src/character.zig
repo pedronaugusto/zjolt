@@ -7,7 +7,7 @@
 //! other bodies.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/character.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");

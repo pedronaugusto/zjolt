@@ -33,7 +33,7 @@
 //! per-system allocator parameter that could not be honoured.
 
 const std = @import("std");
-const c = @import("c.zig");
+const c = @import("c/core.zig");
 
 /// Recorded ahead of every block so a free can reconstruct the slice Zig's
 /// allocator needs.
