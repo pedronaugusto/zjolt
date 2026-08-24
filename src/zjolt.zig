@@ -95,6 +95,7 @@ pub const BodyLock = body_mod.Lock;
 pub const Transform = body_mod.Transform;
 pub const MotionType = body_mod.MotionType;
 pub const MotionQuality = body_mod.MotionQuality;
+pub const BodyType = body_mod.BodyType;
 pub const Activation = body_mod.Activation;
 pub const AllowedDofs = body_mod.AllowedDofs;
 pub const OverrideMassProperties = body_mod.OverrideMassProperties;
@@ -119,6 +120,7 @@ pub const contactPointsOn2 = system_mod.contactPointsOn2;
 
 pub const PhysicsSettings = system_mod.PhysicsSettings;
 pub const defaultPhysicsSettings = system_mod.defaultPhysicsSettings;
+pub const BodyStats = system_mod.PhysicsSystem.BodyStats;
 pub const StepListener = system_mod.StepListener;
 pub const StepListenerContext = system_mod.StepListenerContext;
 pub const CombineCallback = system_mod.CombineCallback;

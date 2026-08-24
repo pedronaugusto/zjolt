@@ -5,6 +5,7 @@
 #include "zjolt_internal.h"
 
 #include <Jolt/Core/Mutex.h>
+#include <Jolt/Physics/Body/BodyManager.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
@@ -703,6 +704,25 @@ ZJoltResult zjoltPhysicsSystemGetBodies(const ZJoltPhysicsSystem *system,
   JPH::BodyIDVector ids;
   system->system.GetBodies(ids);
   return CopyBodyIds(ids, out_ids, capacity, out_count);
+}
+
+void zjoltPhysicsSystemGetBodyStats(const ZJoltPhysicsSystem *system,
+                                    ZJoltBodyStats *out) {
+  if (out == nullptr) return;
+  if (system == nullptr) {
+    *out = ZJoltBodyStats{};
+    return;
+  }
+  const JPH::BodyManager::BodyStats stats = system->system.GetBodyStats();
+  out->num_bodies = stats.mNumBodies;
+  out->max_bodies = stats.mMaxBodies;
+  out->num_bodies_static = stats.mNumBodiesStatic;
+  out->num_bodies_dynamic = stats.mNumBodiesDynamic;
+  out->num_active_bodies_dynamic = stats.mNumActiveBodiesDynamic;
+  out->num_bodies_kinematic = stats.mNumBodiesKinematic;
+  out->num_active_bodies_kinematic = stats.mNumActiveBodiesKinematic;
+  out->num_soft_bodies = stats.mNumSoftBodies;
+  out->num_active_soft_bodies = stats.mNumActiveSoftBodies;
 }
 
 //===----------------------------------------------------------------------===//
