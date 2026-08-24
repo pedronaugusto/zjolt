@@ -83,6 +83,13 @@ typedef struct ZJoltRayCastHit {
   /// so a kept copy points at freed memory. Handing it across the ABI would
   /// export that trap. Resolving it here does not.
   ZJoltVec3 normal;
+  /// The material of the surface at `sub_shape_id`, resolved the same way
+  /// `normal` is. Borrowed from the shape the hit body owns; it outlives this
+  /// hit but not necessarily the body — take a reference with
+  /// zjoltPhysicsMaterialAddRef to keep it past a body lock. Never NULL for a
+  /// real hit; NULL only if the shape was released between the hit and the
+  /// read, which a caller holding a body lock cannot cause.
+  const ZJoltPhysicsMaterial *material;
 } ZJoltRayCastHit;
 
 /// Contact points in a shape query are RELATIVE TO the `position` the query
@@ -106,6 +113,9 @@ typedef struct ZJoltShapeCastHit {
   ZJoltVec3 penetration_axis;
   float penetration_depth;
   bool is_back_face_hit;
+  /// The material at `sub_shape_id` on the shape that was hit (not the shape
+  /// that was cast). @see ZJoltRayCastHit::material for the borrowing rule.
+  const ZJoltPhysicsMaterial *material;
 } ZJoltShapeCastHit;
 
 typedef struct ZJoltCollideShapeHit {
@@ -117,6 +127,9 @@ typedef struct ZJoltCollideShapeHit {
   /// @see ZJoltShapeCastHit::penetration_axis
   ZJoltVec3 penetration_axis;
   float penetration_depth;
+  /// The material at `sub_shape_id` on the shape already in the system (not
+  /// the shape the query passed in). @see ZJoltRayCastHit::material.
+  const ZJoltPhysicsMaterial *material;
 } ZJoltCollideShapeHit;
 
 /// A shape a point was found inside. There is no contact geometry to report:
@@ -124,20 +137,39 @@ typedef struct ZJoltCollideShapeHit {
 typedef struct ZJoltCollidePointHit {
   ZJoltBodyId body;
   ZJoltSubShapeId sub_shape_id;
+  /// The material at `sub_shape_id`. @see ZJoltRayCastHit::material.
+  const ZJoltPhysicsMaterial *material;
 } ZJoltCollidePointHit;
 
 //===----------------------------------------------------------------------===//
-// The three forms, and the one traversal underneath them
+// The forms, and the one traversal underneath them
 //
 // Jolt finds hits with a collector — an object it calls once per hit, as it
-// finds them. All three shapes a caller wants out of that are built on one
+// finds them. The shapes a caller wants out of that are built on one
 // streaming collector here, so there is a single traversal path rather than
-// three that can drift apart:
+// several that can drift apart:
 //
 //   *Closest  the best hit, and whether there was one
 //   *All      every hit, into the caller's buffer, with the true count
 //             reported even when the buffer was too small
 //   *Each     every hit, handed to a callback as it is found
+//
+// Not every query family has all three. A ray cast and a shape cast both have
+// a real distance to travel, so "closest" is unambiguous: the smallest
+// fraction, which is also what ZJOLT_HIT_ACTION_NARROW already prunes by. An
+// overlap test (zjoltCollideShape*) has no travel distance, but it does have
+// a comparable depth — Jolt's own CollideShapeResult::GetEarlyOutFraction is
+// `-penetration_depth` — so "closest" there means DEEPEST, and
+// zjoltCollideShapeClosest is exactly as well-defined as the other two.
+//
+// A point test (zjoltCollidePoint*) has neither. CollidePointResult::
+// GetEarlyOutFraction is a constant 0.0f for every hit: a point is either
+// inside a shape or it is not, with no scalar that makes one "closer" than
+// another. A zjoltCollidePointClosest built on this collector would silently
+// return whichever hit the traversal happened to visit first — an accident
+// of internal order dressed up as an answer — so it is deliberately not
+// offered. Use zjoltCollidePointEach with ZJOLT_HIT_ACTION_STOP if "is this
+// point inside anything at all" is the actual question.
 //
 // The streaming form is the one that materialises nothing. It matters most for
 // overlap queries: Jolt's own AllHitCollisionCollector accumulates into an
@@ -158,11 +190,9 @@ typedef struct ZJoltCollidePointHit {
 //
 //   * The TransformedShape Jolt is holding. It is live for exactly one call
 //     and Jolt does not clear it afterwards, so it cannot be handed out
-//     safely. What a caller wants from it — the surface normal — is resolved
-//     into the hit instead. The other thing it carries is the surface's
-//     physics material, which is not resolved because no entry point in this
-//     ABI attaches a material to a shape yet: every hit would report Jolt's
-//     default one. It goes in when materials do.
+//     safely. The two things a caller actually wants from it — the surface
+//     normal and the surface material — are resolved into the hit instead,
+//     the same way and for the same reason.
 //   * A per-body bracket. Jolt calls OnBody / OnBodyEnd around the hits
 //     belonging to one body, and that is the only point in a query where a
 //     JPH::Body is readable. Its base-class versions do nothing, so leaving
@@ -314,6 +344,16 @@ ZJOLT_API ZJoltResult zjoltCastShapeEach(
 // A `max_separation_distance` above zero reports near misses too, with a
 // negative penetration depth — "is there anything within a metre of here".
 //===----------------------------------------------------------------------===//
+
+/// The single deepest overlap of `shape` placed at `position`/`rotation` —
+/// the hit with the largest `penetration_depth`. @see the note above on why
+/// this exists for an overlap test and not for a point test.
+ZJOLT_API ZJoltResult zjoltCollideShapeClosest(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, float max_separation_distance,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hit,
+    bool *out_hit_any);
 
 /// Everything overlapping `shape` placed at `position`/`rotation`.
 /// @see zjoltCastRayAll for the protocol.
