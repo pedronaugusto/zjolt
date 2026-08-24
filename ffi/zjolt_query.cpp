@@ -64,16 +64,6 @@ ZJoltResult CopyHits(const JPH::Array<JoltHit> &hits, Hit *out_hits,
   return ZJOLT_RESULT_OK;
 }
 
-/// The shared preamble of every cast: the system exists, the library is up,
-/// and the count out-parameter is initialised before anything can fail.
-ZJoltResult BeginQuery(const ZJoltPhysicsSystem *system, uint32_t *out_count) {
-  zjolt::ClearError();
-  if (out_count != nullptr) *out_count = 0;
-  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
-  return ZJOLT_RESULT_OK;
-}
-
 /// Builds the shape cast Jolt wants from the world transform the ABI takes.
 ///
 /// The distinction matters: Jolt casts the shape's CENTRE OF MASS, while a
@@ -105,13 +95,9 @@ ZJoltResult zjoltCastRayClosest(const ZJoltPhysicsSystem *system,
                                 const ZJoltVec3 *direction,
                                 const ZJoltQueryFilters *filters,
                                 ZJoltRayCastHit *out_hit, bool *out_hit_any) {
-  const ZJoltResult ready = BeginQuery(system, nullptr);
-  if (out_hit_any != nullptr) *out_hit_any = false;
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (origin == nullptr || direction == nullptr || out_hit == nullptr ||
-      out_hit_any == nullptr) {
+  ZJOLT_ENTER(out_hit_any);
+  if (!zjolt::Present(system, origin, direction, out_hit, out_hit_any))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
-  }
 
   zjolt::QueryFilters adapters(filters);
   const JPH::RRayCast ray(zjolt::ToJoltR(*origin), zjolt::ToJolt(*direction));
@@ -131,9 +117,8 @@ ZJoltResult zjoltCastRayAll(const ZJoltPhysicsSystem *system,
                             const ZJoltQueryFilters *filters,
                             ZJoltRayCastHit *out_hits, uint32_t capacity,
                             uint32_t *out_count) {
-  const ZJoltResult ready = BeginQuery(system, out_count);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (origin == nullptr || direction == nullptr || out_count == nullptr)
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, origin, direction, out_count))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   zjolt::QueryFilters adapters(filters);
@@ -161,11 +146,9 @@ ZJoltResult zjoltCastShapeClosest(const ZJoltPhysicsSystem *system,
                                   const ZJoltQueryFilters *filters,
                                   ZJoltShapeCastHit *out_hit,
                                   bool *out_hit_any) {
-  const ZJoltResult ready = BeginQuery(system, nullptr);
-  if (out_hit_any != nullptr) *out_hit_any = false;
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (shape == nullptr || position == nullptr || rotation == nullptr ||
-      direction == nullptr || out_hit == nullptr || out_hit_any == nullptr) {
+  ZJOLT_ENTER(out_hit_any);
+  if (!zjolt::Present(system, shape, position, rotation, direction, out_hit,
+                      out_hit_any)) {
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
 
@@ -197,12 +180,9 @@ ZJoltResult zjoltCastShapeAll(const ZJoltPhysicsSystem *system,
                               const ZJoltQueryFilters *filters,
                               ZJoltShapeCastHit *out_hits, uint32_t capacity,
                               uint32_t *out_count) {
-  const ZJoltResult ready = BeginQuery(system, out_count);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (shape == nullptr || position == nullptr || rotation == nullptr ||
-      direction == nullptr || out_count == nullptr) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, shape, position, rotation, direction, out_count))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
-  }
 
   zjolt::QueryFilters adapters(filters);
   const JPH::RShapeCast cast = MakeShapeCast(zjolt::ToJolt(shape), scale,
@@ -230,12 +210,9 @@ ZJoltResult zjoltCollideShape(const ZJoltPhysicsSystem *system,
                               const ZJoltQueryFilters *filters,
                               ZJoltCollideShapeHit *out_hits,
                               uint32_t capacity, uint32_t *out_count) {
-  const ZJoltResult ready = BeginQuery(system, out_count);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (shape == nullptr || position == nullptr || rotation == nullptr ||
-      out_count == nullptr) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, shape, position, rotation, out_count))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
-  }
 
   const JPH::Shape *impl = zjolt::ToJolt(shape);
   const JPH::Vec3 shape_scale =

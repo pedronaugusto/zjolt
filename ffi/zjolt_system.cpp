@@ -203,11 +203,8 @@ void zjoltPhysicsSystemDescInit(ZJoltPhysicsSystemDesc *desc) {
 
 ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
                                      ZJoltPhysicsSystem **out) {
-  zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
-  if (desc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   if (desc->max_bodies == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -325,8 +322,8 @@ uint32_t zjoltPhysicsSystemGetNumActiveBodies(
 
 ZJoltResult zjoltPhysicsSystemSetContactListener(
     ZJoltPhysicsSystem *system, const ZJoltContactListener *listener) {
-  zjolt::ClearError();
-  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   if (listener == nullptr) {
     system->system.SetContactListener(nullptr);
@@ -352,8 +349,8 @@ ZJoltResult zjoltPhysicsSystemSetContactListener(
 
 ZJoltResult zjoltPhysicsSystemSetBodyActivationListener(
     ZJoltPhysicsSystem *system, const ZJoltBodyActivationListener *listener) {
-  zjolt::ClearError();
-  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   if (listener == nullptr) {
     system->system.SetBodyActivationListener(nullptr);
@@ -380,10 +377,9 @@ ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
                                    float delta_time, int32_t collision_steps,
                                    ZJoltJobSystem *job_system,
                                    uint32_t *out_error) {
-  zjolt::ClearError();
-  if (out_error != nullptr) *out_error = ZJOLT_UPDATE_ERROR_NONE;
-  if (system == nullptr || job_system == nullptr)
-    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out_error,
+                                 (uint32_t)ZJOLT_UPDATE_ERROR_NONE));
+  if (!zjolt::Present(system, job_system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (collision_steps < 1) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "collision_steps must be at least 1");
@@ -407,9 +403,8 @@ ZJoltResult zjoltPhysicsSystemGetActiveBodies(const ZJoltPhysicsSystem *system,
                                               ZJoltBodyId *out_ids,
                                               uint32_t capacity,
                                               uint32_t *out_count) {
-  zjolt::ClearError();
-  if (system == nullptr || out_count == nullptr)
-    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyIDVector ids;
   system->system.GetActiveBodies(JPH::EBodyType::RigidBody, ids);
@@ -419,9 +414,8 @@ ZJoltResult zjoltPhysicsSystemGetActiveBodies(const ZJoltPhysicsSystem *system,
 ZJoltResult zjoltPhysicsSystemGetBodies(const ZJoltPhysicsSystem *system,
                                         ZJoltBodyId *out_ids, uint32_t capacity,
                                         uint32_t *out_count) {
-  zjolt::ClearError();
-  if (system == nullptr || out_count == nullptr)
-    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyIDVector ids;
   system->system.GetBodies(ids);

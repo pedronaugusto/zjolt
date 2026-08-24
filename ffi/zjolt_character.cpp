@@ -98,11 +98,8 @@ void zjoltCharacterUpdateSettingsInit(ZJoltCharacterUpdateSettings *settings) {
 ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
                                  const ZJoltCharacterDesc *desc,
                                  ZJoltCharacter **out) {
-  zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
-  if (system == nullptr || desc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (desc->shape == nullptr) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a character needs a shape");
@@ -178,9 +175,9 @@ ZJoltResult zjoltCharacterUpdate(ZJoltCharacter *character, float delta_time,
                                  const ZJoltVec3 *gravity,
                                  const ZJoltCharacterUpdateSettings *settings,
                                  const ZJoltQueryFilters *filters) {
-  zjolt::ClearError();
+  ZJOLT_ENTER();
   JPH::CharacterVirtual *impl = Impl(character);
-  if (impl == nullptr || gravity == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::Present(impl, gravity)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (!(delta_time > 0.0f)) return ZJOLT_RESULT_OK;
 
   zjolt::QueryFilters adapters(filters);
@@ -312,10 +309,9 @@ ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
                                    float max_penetration_depth,
                                    const ZJoltQueryFilters *filters,
                                    bool *out_changed) {
-  zjolt::ClearError();
-  if (out_changed != nullptr) *out_changed = false;
+  ZJOLT_ENTER(out_changed);
   JPH::CharacterVirtual *impl = Impl(character);
-  if (impl == nullptr || shape == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::Present(impl, shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   zjolt::QueryFilters adapters(filters);
   const JPH::ShapeFilter shape_filter;

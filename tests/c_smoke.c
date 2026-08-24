@@ -290,6 +290,21 @@ int main(void) {
   };
   ZJoltInitDesc init = {&allocator, onTrace, NULL, NULL};
 
+  /* Before init, and this is the guard convention rather than an incidental:
+     a call that cannot proceed says so, and it clears its out-parameter
+     BEFORE the check that fails, so a caller who ignores the result never
+     reads uninitialised storage. Both are properties a mechanical sweep of
+     the entry points could quietly drop. */
+  CHECK(!zjoltIsInitialized(), "should not be initialized yet");
+  ZJoltShape *before_init = (ZJoltShape *)&init; /* deliberate garbage */
+  CHECK(zjoltShapeCreateSphere(1.0f, 0.0f, &before_init) ==
+            ZJOLT_RESULT_NOT_INITIALIZED,
+        "a call before init is refused");
+  CHECK(before_init == NULL, "a refused call still clears its out-parameter");
+  CHECK(zjoltShapeCreateSphere(1.0f, 0.0f, NULL) ==
+            ZJOLT_RESULT_NOT_INITIALIZED,
+        "not being up outranks a bad argument");
+
   CHECK_OK(zjoltInit(&init));
   CHECK(zjoltIsInitialized(), "should be initialized");
   CHECK(zjoltVersion() == (((uint32_t)ZJOLT_VERSION_MAJOR << 16) |

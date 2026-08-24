@@ -345,10 +345,8 @@ ZJoltResult zjoltJobSystemCreateThreadPool(uint32_t max_jobs,
                                            uint32_t max_barriers,
                                            int32_t num_threads,
                                            ZJoltJobSystem **out) {
-  zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (max_jobs == 0 || max_barriers == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "max_jobs and max_barriers must be positive");
@@ -374,10 +372,8 @@ ZJoltResult zjoltJobSystemCreateThreadPool(uint32_t max_jobs,
 
 ZJoltResult zjoltJobSystemCreateSingleThreaded(uint32_t max_jobs,
                                                ZJoltJobSystem **out) {
-  zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (max_jobs == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "max_jobs must be positive");
