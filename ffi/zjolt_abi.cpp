@@ -21,6 +21,8 @@
 
 #include "zjolt_internal.h"
 
+#include <Jolt/Physics/Collision/ActiveEdgeMode.h>
+#include <Jolt/Physics/Collision/CollectFacesMode.h>
 #include <Jolt/Physics/EPhysicsUpdateError.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 
@@ -103,6 +105,34 @@ static_assert(
     static_cast<int>(JPH::ValidateResult::RejectAllContactsForThisBodyPair) ==
         ZJOLT_VALIDATE_RESULT_REJECT_ALL_CONTACTS_FOR_THIS_BODY_PAIR,
     "ValidateResult renumbered upstream");
+
+// The three modes a shape query is configured with. Their conversions are
+// switches over Jolt's names, so a renumbering upstream would compile and mean
+// something else — a query that ignored back faces would start colliding with
+// them, silently.
+static_assert(static_cast<int>(JPH::EBackFaceMode::IgnoreBackFaces) ==
+                  ZJOLT_BACK_FACE_MODE_IGNORE,
+              "EBackFaceMode renumbered upstream");
+static_assert(static_cast<int>(JPH::EBackFaceMode::CollideWithBackFaces) ==
+                  ZJOLT_BACK_FACE_MODE_COLLIDE,
+              "EBackFaceMode renumbered upstream");
+
+static_assert(static_cast<int>(JPH::EActiveEdgeMode::CollideOnlyWithActive) ==
+                  ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_ONLY_WITH_ACTIVE,
+              "EActiveEdgeMode renumbered upstream");
+static_assert(static_cast<int>(JPH::EActiveEdgeMode::CollideWithAll) ==
+                  ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_WITH_ALL,
+              "EActiveEdgeMode renumbered upstream");
+
+// Note which way round this one is: CollectFaces is 0 and NoFaces is 1, so a
+// zeroed settings struct asks for faces. That is upstream's numbering and the
+// ABI mirrors it rather than tidying it.
+static_assert(static_cast<int>(JPH::ECollectFacesMode::CollectFaces) ==
+                  ZJOLT_COLLECT_FACES_MODE_COLLECT_FACES,
+              "ECollectFacesMode renumbered upstream");
+static_assert(static_cast<int>(JPH::ECollectFacesMode::NoFaces) ==
+                  ZJOLT_COLLECT_FACES_MODE_NO_FACES,
+              "ECollectFacesMode renumbered upstream");
 
 // The update error is forwarded as a raw bit mask rather than translated, so
 // its bits are part of this ABI.
