@@ -108,6 +108,13 @@ pub const BodyDesc = struct {
     }
 };
 
+/// Used by `scene.zig`, which builds the same descriptor into a scene rather
+/// than straight into a system; here rather than there because the conversion
+/// belongs with the type it converts.
+pub fn descToC(desc: BodyDesc) c.BodyDesc {
+    return desc.toC();
+}
+
 /// The transform half of what a body is, for the common "put it here" call.
 pub const Transform = struct {
     position: math.RVec3,
