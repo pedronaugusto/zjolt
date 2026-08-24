@@ -646,6 +646,7 @@ pub const RayCastHit = extern struct {
     sub_shape_id: SubShapeId,
     fraction: f32,
     normal: Vec3,
+    material: ?*const PhysicsMaterial,
 };
 
 pub const ShapeCastHit = extern struct {
@@ -657,6 +658,7 @@ pub const ShapeCastHit = extern struct {
     penetration_axis: Vec3,
     penetration_depth: f32,
     is_back_face_hit: bool,
+    material: ?*const PhysicsMaterial,
 };
 
 pub const CollideShapeHit = extern struct {
@@ -666,11 +668,13 @@ pub const CollideShapeHit = extern struct {
     contact_point_on_2: Vec3,
     penetration_axis: Vec3,
     penetration_depth: f32,
+    material: ?*const PhysicsMaterial,
 };
 
 pub const CollidePointHit = extern struct {
     body: BodyId,
     sub_shape_id: SubShapeId,
+    material: ?*const PhysicsMaterial,
 };
 
 pub const RayCastHitFn = *const fn (user: ?*anyopaque, hit: *const RayCastHit) callconv(.c) HitAction;
@@ -789,6 +793,88 @@ pub extern fn zjoltShapeMutableCompoundRemoveChild(shape: *Shape, index: u32) Re
 pub extern fn zjoltShapeMutableCompoundMoveChild(shape: *Shape, index: u32, position: *const Vec3, rotation: ?*const Quat) Result;
 pub extern fn zjoltShapeMutableCompoundAdjustCenterOfMass(shape: *Shape) Result;
 pub extern fn zjoltShapeGetMaterial(shape: *const Shape, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
+
+//=============================================================================
+// Shape introspection, triangle read-back, mesh and height-field specifics
+//=============================================================================
+
+/// Vertices `zjoltShapeGetSupportingFace` can report in one call.
+pub const shape_max_supporting_face_vertices: u32 = 32;
+
+/// Fewest triangles `zjoltShapeGetTrianglesNext` accepts a request for.
+pub const shape_min_triangles_requested: u32 = 32;
+
+/// Opaque scratch space for one Shape-level triangle walk. Matches
+/// `Shape::GetTrianglesContext` byte for byte; never read from Zig.
+pub const ShapeTrianglesContext = extern struct {
+    data: [4288]u8 align(16) = undefined,
+};
+
+/// The same scratch space, for a walk over a `TransformedShape` instead. A
+/// second type rather than the one above reused, matching the C header: the
+/// two query surfaces are independent, so nothing here assumes they share a
+/// layout even though they happen to today.
+pub const TransformedShapeTrianglesContext = extern struct {
+    data: [4288]u8 align(16) = undefined,
+};
+
+pub extern fn zjoltShapeGetSubShapeIDBits(shape: *const Shape) u32;
+pub extern fn zjoltShapeGetSurfaceNormal(shape: *const Shape, sub_shape_id: SubShapeId, local_surface_position: *const Vec3, out_normal: *Vec3) void;
+pub extern fn zjoltShapeGetSupportingFace(shape: *const Shape, sub_shape_id: SubShapeId, direction: *const Vec3, scale: ?*const Vec3, position: *const Vec3, rotation: *const Quat, out_vertices: [*]Vec3, out_count: *u32) Result;
+pub extern fn zjoltShapeGetSubShapeTransformedShape(shape: *const Shape, sub_shape_id: SubShapeId, position: ?*const Vec3, rotation: ?*const Quat, scale: ?*const Vec3, out: **TransformedShape, out_remainder: ?*SubShapeId) Result;
+pub extern fn zjoltShapeScaleShape(shape: *const Shape, scale: *const Vec3, out: **Shape) Result;
+pub extern fn zjoltShapeIsValidScale(shape: *const Shape, scale: *const Vec3) bool;
+pub extern fn zjoltShapeMakeScaleValid(shape: *const Shape, scale: *const Vec3, out_scale: *Vec3) void;
+
+pub extern fn zjoltShapeGetTrianglesStart(shape: *const Shape, context: *ShapeTrianglesContext, box: *const AABox, position: ?*const Vec3, rotation: ?*const Quat, scale: ?*const Vec3) Result;
+pub extern fn zjoltShapeGetTrianglesNext(shape: *const Shape, context: *ShapeTrianglesContext, max_triangles: u32, out_vertices: [*]Vec3, out_materials: ?[*]?*const PhysicsMaterial, out_count: *u32) Result;
+pub extern fn zjoltShapeGetMaterialList(shape: *const Shape, out_materials: ?[*]?*const PhysicsMaterial, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltShapeMeshGetMaterialIndex(shape: *const Shape, sub_shape_id: SubShapeId) u32;
+pub extern fn zjoltShapeMeshGetTriangleUserData(shape: *const Shape, sub_shape_id: SubShapeId) u32;
+
+pub extern fn zjoltShapeHeightFieldGetSampleCount(shape: *const Shape) u32;
+pub extern fn zjoltShapeHeightFieldGetBlockSize(shape: *const Shape) u32;
+pub extern fn zjoltShapeHeightFieldGetMinHeightValue(shape: *const Shape) f32;
+pub extern fn zjoltShapeHeightFieldGetMaxHeightValue(shape: *const Shape) f32;
+pub extern fn zjoltShapeHeightFieldGetPosition(shape: *const Shape, x: u32, y: u32, out_position: *Vec3) void;
+pub extern fn zjoltShapeHeightFieldIsNoCollision(shape: *const Shape, x: u32, y: u32) bool;
+pub extern fn zjoltShapeHeightFieldProjectOntoSurface(shape: *const Shape, local_position: *const Vec3, out_surface_position: *Vec3, out_sub_shape_id: *SubShapeId, out_found: *bool) Result;
+pub extern fn zjoltShapeHeightFieldGetSubShapeCoordinates(shape: *const Shape, sub_shape_id: SubShapeId, out_x: *u32, out_y: *u32, out_triangle_index: *u32) Result;
+pub extern fn zjoltShapeHeightFieldGetHeights(shape: *const Shape, x: u32, y: u32, size_x: u32, size_y: u32, out_heights: [*]f32, stride: u32) Result;
+
+//=============================================================================
+// TransformedShape — a shape, placed in the world, queried on its own
+//=============================================================================
+
+pub const TransformedShape = opaque {};
+
+pub const TransformedShapeTransform = extern struct {
+    position: RVec3,
+    rotation: Quat,
+    scale: Vec3,
+};
+
+pub extern fn zjoltTransformedShapeCreate(shape: *const Shape, position: *const RVec3, rotation: *const Quat, scale: ?*const Vec3, body: BodyId, out: **TransformedShape) Result;
+pub extern fn zjoltTransformedShapeDestroy(ts: ?*TransformedShape) void;
+
+pub extern fn zjoltTransformedShapeGetWorldTransform(ts: *const TransformedShape, out: *TransformedShapeTransform) void;
+pub extern fn zjoltTransformedShapeSetWorldTransform(ts: *TransformedShape, position: *const RVec3, rotation: *const Quat, scale: ?*const Vec3) void;
+pub extern fn zjoltTransformedShapeGetWorldSpaceBounds(ts: *const TransformedShape, out: *AABox) void;
+pub extern fn zjoltTransformedShapeGetWorldSpaceSurfaceNormal(ts: *const TransformedShape, sub_shape_id: SubShapeId, position: *const RVec3, out_normal: *Vec3) void;
+pub extern fn zjoltTransformedShapeGetMaterial(ts: *const TransformedShape, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
+pub extern fn zjoltTransformedShapeGetSubShapeUserData(ts: *const TransformedShape, sub_shape_id: SubShapeId) u64;
+pub extern fn zjoltTransformedShapeGetSupportingFace(ts: *const TransformedShape, sub_shape_id: SubShapeId, direction: *const Vec3, base_offset: *const RVec3, out_vertices: [*]Vec3, out_count: *u32) Result;
+
+pub extern fn zjoltTransformedShapeGetTrianglesStart(ts: *const TransformedShape, context: *TransformedShapeTrianglesContext, box: *const AABox, base_offset: *const RVec3) Result;
+pub extern fn zjoltTransformedShapeGetTrianglesNext(ts: *const TransformedShape, context: *TransformedShapeTrianglesContext, max_triangles: u32, out_vertices: [*]Vec3, out_materials: ?[*]?*const PhysicsMaterial, out_count: *u32) Result;
+
+pub extern fn zjoltTransformedShapeCastRayClosest(ts: *const TransformedShape, origin: *const RVec3, direction: *const Vec3, settings: ?*const RayCastSettings, filter: ?*const ShapeFilter, out_hit: *RayCastHit, out_hit_any: *bool) Result;
+pub extern fn zjoltTransformedShapeCastRayAll(ts: *const TransformedShape, origin: *const RVec3, direction: *const Vec3, settings: ?*const RayCastSettings, filter: ?*const ShapeFilter, out_hits: ?[*]RayCastHit, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltTransformedShapeCollidePointAll(ts: *const TransformedShape, point: *const RVec3, filter: ?*const ShapeFilter, out_hits: ?[*]CollidePointHit, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltTransformedShapeCollideShapeAll(ts: *const TransformedShape, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, max_separation_distance: f32, base_offset: *const RVec3, filter: ?*const ShapeFilter, out_hits: ?[*]CollideShapeHit, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltTransformedShapeCastShapeClosest(ts: *const TransformedShape, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, direction: *const Vec3, base_offset: *const RVec3, filter: ?*const ShapeFilter, out_hit: *ShapeCastHit, out_hit_any: *bool) Result;
+pub extern fn zjoltTransformedShapeCastShapeAll(ts: *const TransformedShape, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, direction: *const Vec3, base_offset: *const RVec3, filter: ?*const ShapeFilter, out_hits: ?[*]ShapeCastHit, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltPhysicsMaterialCreate(debug_name: ?[*:0]const u8, debug_color: ?*const Color, out: **PhysicsMaterial) Result;
 pub extern fn zjoltPhysicsMaterialDefault() ?*const PhysicsMaterial;
@@ -910,6 +996,7 @@ pub extern fn zjoltCastRayEach(system: *const PhysicsSystem, origin: *const RVec
 pub extern fn zjoltCastShapeClosest(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, direction: *const Vec3, filters: ?*const QueryFilters, out_hit: *ShapeCastHit, out_hit_any: *bool) Result;
 pub extern fn zjoltCastShapeAll(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, direction: *const Vec3, filters: ?*const QueryFilters, out_hits: ?[*]ShapeCastHit, capacity: u32, out_count: *u32) Result;
 pub extern fn zjoltCastShapeEach(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, direction: *const Vec3, filters: ?*const QueryFilters, on_hit: ShapeCastHitFn, user: ?*anyopaque) Result;
+pub extern fn zjoltCollideShapeClosest(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, max_separation_distance: f32, filters: ?*const QueryFilters, out_hit: *CollideShapeHit, out_hit_any: *bool) Result;
 pub extern fn zjoltCollideShapeAll(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, max_separation_distance: f32, filters: ?*const QueryFilters, out_hits: ?[*]CollideShapeHit, capacity: u32, out_count: *u32) Result;
 pub extern fn zjoltCollideShapeEach(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, max_separation_distance: f32, filters: ?*const QueryFilters, on_hit: CollideShapeHitFn, user: ?*anyopaque) Result;
 pub extern fn zjoltCollidePointAll(system: *const PhysicsSystem, point: *const RVec3, filters: ?*const QueryFilters, out_hits: ?[*]CollidePointHit, capacity: u32, out_count: *u32) Result;

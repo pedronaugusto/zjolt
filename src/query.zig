@@ -418,6 +418,33 @@ pub const Queries = struct {
         max_separation_distance: f32 = 0,
     };
 
+    /// The single deepest overlap — the hit with the largest
+    /// `penetration_depth`. As well-defined as `castShapeClosest`'s nearest
+    /// hit: Jolt orders overlaps by depth the same way it orders casts by
+    /// distance. There is no equivalent for `collidePoint`, because every
+    /// point hit ties (`GetEarlyOutFraction` is a constant there) and
+    /// "closest" would just mean "whichever the traversal visited first".
+    pub fn collideShapeClosest(
+        self: Queries,
+        overlap: Overlap,
+        filters: ?*const Filters,
+    ) err.Error!?CollideShapeHit {
+        var hit: CollideShapeHit = undefined;
+        var did_hit: bool = false;
+        try err.check(c.zjoltCollideShapeClosest(
+            self.handle,
+            overlap.shape.handle,
+            optionalPtr(math.Vec3, &overlap.scale),
+            &overlap.position,
+            &overlap.rotation,
+            overlap.max_separation_distance,
+            filters,
+            &hit,
+            &did_hit,
+        ));
+        return if (did_hit) hit else null;
+    }
+
     pub fn countCollideShapeHits(
         self: Queries,
         overlap: Overlap,
