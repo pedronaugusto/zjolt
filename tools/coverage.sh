@@ -83,7 +83,35 @@ do
   while IFS= read -r m; do
     [ -z "$m" ] && continue
     p=$((p + 1))
-    if printf '%s\n' "$bound" | grep -q "$(printf '%s' "$m" | tr 'A-Z' 'a-z')"; then
+    # Compare by WORDS, not by the flattened name. Flattening is the obvious
+    # thing and it is WRONG on word order: Jolt's `ActivateBodiesInAABox`
+    # flattens to `activatebodiesinaabox`, which does not appear in
+    # `zjoltbodyactivateinaabox` even when that is exactly the binding. The
+    # same bug in the zozz copy of this script reported thirteen already-bound
+    # names as gaps, which is work someone would have done twice.
+    #
+    # Every word must appear somewhere in a single bound name, in any order.
+    # Words shorter than four characters are dropped — `get`, `set`, `add` and
+    # `id` appear in nearly every name and would match anything. If nothing
+    # survives that filter the flattened name is used, which is right for a
+    # short name like `Activate`.
+    words=$(printf '%s' "$m" |
+            sed 's/\([a-z0-9]\)\([A-Z]\)/\1 \2/g' |
+            tr 'A-Z' 'a-z' | tr ' ' '\n' | awk 'length($0) >= 4')
+    [ -z "$words" ] && words=$(printf '%s' "$m" | tr 'A-Z' 'a-z')
+
+    hit=0
+    while IFS= read -r cand; do
+      [ -z "$cand" ] && continue
+      all=1
+      while IFS= read -r w; do
+        [ -z "$w" ] && continue
+        case "$cand" in *"$w"*) ;; *) all=0; break ;; esac
+      done <<< "$words"
+      if [ "$all" -eq 1 ]; then hit=1; break; fi
+    done <<< "$bound"
+
+    if [ "$hit" -eq 1 ]; then
       b=$((b + 1))
     else
       unbound="$unbound$m"$'\n'
