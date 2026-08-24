@@ -1,0 +1,120 @@
+= Physics/Vehicle coverage triage =
+=
+= Every name tools/coverage.sh Vehicle reports as unmatched, classified. The
+= tool matches literally, so a name here is not evidence of a gap: it
+= over-counts solver internals that must never cross a C boundary, and it
+= misses bindings whose declaration wraps onto a second line or whose return
+= type contains a digit (uint32_t/int32_t) — its `bound` regex character class
+= excludes digits, so those declarations are invisible to it.
+=
+= NAME  CATEGORY  reason
+
+AllowSleep  INTERNAL  polled by the physics system, not driven by a host: VehicleConstraint::OnStep asks mController->AllowSleep() (VehicleConstraint.cpp:312), which folds in VehicleTransmission/VehicleEngine::AllowSleep (WheeledVehicleController.cpp:237-238).
+ApplyDamping  INTERNAL  VehicleEngine RPM integration, called from inside the controller's own PreCollide (WheeledVehicleController.cpp:288, TrackedVehicleController.cpp:251).
+ApplyTorque  INTERNAL  VehicleEngine RPM integration from the controller's PostCollide (WheeledVehicleController.cpp:606); the Wheel overload is the brake torque the same pass applies (WheeledVehicleController.cpp:643).
+BuildIslands  INTERNAL  Constraint override the island builder calls per tick.
+BuildIslandSplits  INTERNAL  Constraint override the large-island splitter calls per tick.
+CalculateAngularVelocity  INTERNAL  WheelTV helper the tracked controller calls on its own wheels each step (TrackedVehicleController.cpp:68,347,416).
+CalculateTorqueRatio  INTERNAL  VehicleDifferentialSettings helper used inside the wheeled controller's torque split (WheeledVehicleController.cpp:393).
+ClampRPM  INTERNAL  unit helper; VehicleEngine calls it after every ApplyTorque/ApplyDamping (VehicleEngine.cpp:51,61).
+ConstructController  EXTENSION_POINT  the pure-virtual factory on VehicleControllerSettings that C++ subclassing goes through (VehicleConstraint.cpp:95). zjolt covers it with ZJoltVehicleControllerKind plus the per-kind fields of ZJoltVehicleConstraintDesc: pick a kind, fill in a desc.
+ConvertRPMToAngle  INTERNAL  unit helper for the debug RPM meter's needle angle (VehicleEngine.cpp:70).
+DegreesToRadians  INTERNAL  a Jolt-wide math unit helper, matched by name only; not vehicle API.
+DrawRPM  INTERNAL  debug-draw internal called by the controller's own Draw (WheeledVehicleController.cpp:752, TrackedVehicleController.cpp:437).
+EnableLeanController  BOUND_ELSEWHERE  zjoltVehicleConstraintSetMotorcycleLeanControllerEnabled.
+EnableLeanSteeringLimit  BOUND_ELSEWHERE  zjoltVehicleConstraintSetMotorcycleLeanSteeringLimitEnabled.
+GetAntiRollBars  REAL_GAP  bound as zjoltVehicleConstraintGetAntiRollBarCount / zjoltVehicleConstraintGetAntiRollBar. Stiffness was creation-time only (ZJoltVehicleAntiRollBarDesc) with no read-back.
+GetBodyFilter  REAL_GAP  bound as the `body` member of ZJoltVehicleWheelFilters, read back by zjoltVehicleConstraintGetWheelFilters.
+GetBrakeInput  BOUND_ELSEWHERE  zjoltVehicleConstraintGetBrakeInput; bound literally under that name, on a wrapped declaration line the tool's single-line regex cannot see.
+GetBroadPhaseLayerFilter  REAL_GAP  bound as the `broad_phase_layer` member of ZJoltVehicleWheelFilters.
+GetClutchFriction  BOUND_ELSEWHERE  zjoltVehicleConstraintGetClutchFriction (wrapped declaration line).
+GetCombineFriction  REAL_GAP  bound as zjoltVehicleConstraintGetCombineFrictionCallback / SetCombineFrictionCallback — per-surface tire friction (ice, gravel) was unreachable.
+GetConstraintSettings  BOUND_ELSEWHERE  ZJoltVehicleConstraintDesc plus zjoltVehicleConstraintCreate. Jolt *Settings types exist to serialise a scene; BINDING.md keeps them off the ABI because a host has its own asset format, and the desc is that surface.
+GetContactBodyID  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelContactBodyId.
+GetContactSubShapeID  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelContactSubShapeId.
+GetCurrentGear  BOUND_ELSEWHERE  zjoltVehicleConstraintGetCurrentGear; invisible to the tool because it returns int32_t.
+GetCurrentRatio  BOUND_ELSEWHERE  zjoltVehicleConstraintGetGearRatio.
+GetCurrentRPM  BOUND_ELSEWHERE  zjoltVehicleConstraintGetEngineRpm.
+GetDifferentialLimitedSlipRatio  REAL_GAP  bound as zjoltVehicleConstraintGetDifferentialLimitedSlipRatio; was creation-time only.
+GetDifferentials  REAL_GAP  bound as zjoltVehicleConstraintGetDifferentialCount / GetDifferential / SetDifferential — Jolt's mutable GetDifferentials() retunes ratio, split and limited slip per step; zjolt had creation-time descs only.
+GetEngine  BOUND_ELSEWHERE  its runtime state is zjoltVehicleConstraintGetEngineRpm / SetEngineRpm / GetEngineTorque; its settings are creation-time via ZJoltVehicleEngineDesc.
+GetForwardInput  BOUND_ELSEWHERE  zjoltVehicleConstraintGetForwardInput (wrapped declaration line).
+GetHandBrakeInput  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheeledHandBrakeInput.
+GetLateralLambda  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelLateralLambda.
+GetLeanSmoothingFactor  REAL_GAP  bound as the `lean_smoothing_factor` field of ZJoltVehicleMotorcycleLeanSpring, read by zjoltVehicleConstraintGetMotorcycleLeanSpring.
+GetLeanSpringConstant  REAL_GAP  bound as ZJoltVehicleMotorcycleLeanSpring.spring_constant via zjoltVehicleConstraintGetMotorcycleLeanSpring.
+GetLeanSpringDamping  REAL_GAP  bound as ZJoltVehicleMotorcycleLeanSpring.spring_damping.
+GetLeanSpringIntegrationCoefficient  REAL_GAP  bound as ZJoltVehicleMotorcycleLeanSpring.spring_integration_coefficient.
+GetLeanSpringIntegrationCoefficientDecay  REAL_GAP  bound as ZJoltVehicleMotorcycleLeanSpring.spring_integration_coefficient_decay.
+GetLeftRatio  BOUND_ELSEWHERE  zjoltVehicleConstraintGetTrackedLeftRatio.
+GetLongitudinalLambda  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelLongitudinalLambda.
+GetNumStepsBetweenCollisionTestActive  BOUND_ELSEWHERE  zjoltVehicleConstraintGetNumStepsBetweenCollisionTestActive; invisible to the tool because it returns uint32_t.
+GetNumStepsBetweenCollisionTestInactive  BOUND_ELSEWHERE  zjoltVehicleConstraintGetNumStepsBetweenCollisionTestInactive; same uint32_t blind spot.
+GetObjectLayerFilter  REAL_GAP  bound as the `object_layer` member of ZJoltVehicleWheelFilters.
+GetPostCollideCallback  REAL_GAP  bound as zjoltVehicleConstraintGetPostCollideCallback.
+GetPostStepCallback  REAL_GAP  bound as zjoltVehicleConstraintGetPostStepCallback.
+GetPreStepCallback  REAL_GAP  bound as zjoltVehicleConstraintGetPreStepCallback.
+GetRightInput  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheeledRightInput.
+GetRightRatio  BOUND_ELSEWHERE  zjoltVehicleConstraintGetTrackedRightRatio.
+GetSteerAngle  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelSteerAngle.
+GetSuspensionLambda  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelSuspensionLambda.
+GetSuspensionLength  BOUND_ELSEWHERE  zjoltVehicleConstraintGetWheelSuspensionLength.
+GetTireMaxImpulseCallback  REAL_GAP  bound as zjoltVehicleConstraintGetTireMaxImpulseCallback.
+GetTorque  REAL_GAP  bound as zjoltVehicleConstraintGetEngineTorque — reaching it otherwise means re-implementing Jolt's LinearCurve sampling of the torque curve at the current RPM.
+GetTracks  REAL_GAP  bound as zjoltVehicleConstraintGetTrackAngularVelocity / SetTrackAngularVelocity; a tracked vehicle's track speed (what a track mesh or texture scroll is driven from) had no accessor.
+GetTransmission  BOUND_ELSEWHERE  zjoltVehicleConstraintGetCurrentGear / IsSwitchingGear / GetClutchFriction / GetGearRatio / SetGear; its settings are creation-time via ZJoltVehicleTransmissionDesc.
+GetVehicleBody  BOUND_ELSEWHERE  zjoltVehicleConstraintGetBodyId. A raw Body* never crosses this ABI; the id does.
+GetVehicleCollisionTester  BOUND_ELSEWHERE  zjoltVehicleConstraintGetCollisionTesterKind, plus zjoltVehicleConstraintGetWheelFilters for the filters it carries.
+GetWheelBase  BOUND_ELSEWHERE  zjoltVehicleConstraintGetMotorcycleWheelBase.
+GetWheelSpeedAtClutch  REAL_GAP  bound as zjoltVehicleConstraintGetWheelSpeedAtClutch — the driven-wheel speed measured at the clutch, which is what a clutch-slip readout or engine-audio blend needs.
+HasContact  BOUND_ELSEWHERE  zjoltVehicleConstraintHasWheelContact.
+HasHitHardPoint  BOUND_ELSEWHERE  zjoltVehicleConstraintHasWheelHitHardPoint.
+IsLeanControllerEnabled  BOUND_ELSEWHERE  zjoltVehicleConstraintIsMotorcycleLeanControllerEnabled.
+IsLeanSteeringLimitEnabled  BOUND_ELSEWHERE  zjoltVehicleConstraintIsMotorcycleLeanSteeringLimitEnabled.
+IsSwitchingGear  BOUND_ELSEWHERE  zjoltVehicleConstraintIsSwitchingGear.
+MotorcycleController  EXTENSION_POINT  a VehicleController subclass; reached as ZJOLT_VEHICLE_CONTROLLER_KIND_MOTORCYCLE plus ZJoltVehicleMotorcycleDesc.
+PredictContactProperties  EXTENSION_POINT  a pure virtual of VehicleCollisionTester, called by VehicleConstraint::OnStep (VehicleConstraint.cpp:223) on the steps it skips a full test. Reached by choosing a ZJoltVehicleCollisionTesterKind rather than by subclassing.
+RestoreBinaryState  BOUND_ELSEWHERE  settings serialisation (StreamIn). ZJoltVehicleConstraintDesc plus zjoltVehicleConstraintCreate is this ABI's rebuild path; runtime state is zjoltPhysicsSystemRestoreState in zjolt_state.h.
+SaveBinaryState  BOUND_ELSEWHERE  settings serialisation (StreamOut); same pair — ZJoltVehicleConstraintDesc for configuration, zjoltPhysicsSystemSaveState for runtime state.
+SetBodyFilter  REAL_GAP  bound as ZJoltVehicleWheelFilters.body via zjoltVehicleConstraintSetWheelFilters.
+SetBrakeInput  BOUND_ELSEWHERE  zjoltVehicleConstraintSetWheeledDriverInput / SetTrackedDriverInput set all four inputs at once, and every one of them has a getter, so a single-input change is a read-modify-write rather than a missing entry point.
+SetBroadPhaseLayerFilter  REAL_GAP  bound as ZJoltVehicleWheelFilters.broad_phase_layer.
+SetCurrentRPM  REAL_GAP  bound as zjoltVehicleConstraintSetEngineRpm — needed to launch with revs on, or to restore a drivetrain after a teleport.
+SetDifferentialLimitedSlipRatio  REAL_GAP  bound as zjoltVehicleConstraintSetDifferentialLimitedSlipRatio.
+SetDriverInput  BOUND_ELSEWHERE  zjoltVehicleConstraintSetWheeledDriverInput and zjoltVehicleConstraintSetTrackedDriverInput.
+SetForwardInput  BOUND_ELSEWHERE  as SetBrakeInput: the four-input setter plus the four getters.
+SetHandBrakeInput  BOUND_ELSEWHERE  as SetBrakeInput.
+SetLeanSmoothingFactor  REAL_GAP  bound as zjoltVehicleConstraintSetMotorcycleLeanSpring's lean_smoothing_factor.
+SetLeanSpringConstant  REAL_GAP  bound as zjoltVehicleConstraintSetMotorcycleLeanSpring's spring_constant.
+SetLeanSpringDamping  REAL_GAP  bound as zjoltVehicleConstraintSetMotorcycleLeanSpring's spring_damping.
+SetLeanSpringIntegrationCoefficient  REAL_GAP  bound as zjoltVehicleConstraintSetMotorcycleLeanSpring's spring_integration_coefficient.
+SetLeanSpringIntegrationCoefficientDecay  REAL_GAP  bound as zjoltVehicleConstraintSetMotorcycleLeanSpring's spring_integration_coefficient_decay.
+SetObjectLayerFilter  REAL_GAP  bound as ZJoltVehicleWheelFilters.object_layer.
+SetPostCollideCallback  REAL_GAP  bound as zjoltVehicleConstraintSetPostCollideCallback.
+SetPostStepCallback  REAL_GAP  bound as zjoltVehicleConstraintSetPostStepCallback.
+SetPreStepCallback  REAL_GAP  bound as zjoltVehicleConstraintSetPreStepCallback.
+SetRightInput  BOUND_ELSEWHERE  as SetBrakeInput.
+SetRotationAngle  BOUND_ELSEWHERE  zjoltVehicleConstraintSetWheelRotationAngle.
+SetRPMMeter  REAL_GAP  bound as zjoltVehicleConstraintSetRpmMeter — zjolt exposes zjoltPhysicsSystemDrawConstraints, which draws the controller's RPM meter, and its placement had no knob. Reports ZJOLT_RESULT_UNSUPPORTED when the library was built without JPH_DEBUG_RENDERER.
+SetSteerAngle  BOUND_ELSEWHERE  zjoltVehicleConstraintSetWheelSteerAngle.
+SetTireMaxImpulseCallback  REAL_GAP  bound as zjoltVehicleConstraintSetTireMaxImpulseCallback.
+SetupVelocityConstraint  INTERNAL  per-tick solver stage, Constraint override.
+SetVehicleCollisionTester  REAL_GAP  bound as zjoltVehicleConstraintSetCollisionTester — swapping a distant vehicle down to a ray tester (and back) at runtime had no route; the tester was fixed at creation.
+SolveLateralConstraintPart  INTERNAL  per-tick solver stage; Wheel.h calls it "internal, should only be called by the controller".
+SolveLongitudinalConstraintPart  INTERNAL  per-tick solver stage; same comment in Wheel.h.
+SolvePositionConstraint  INTERNAL  per-tick solver stage, Constraint override.
+SolveVelocityConstraint  INTERNAL  per-tick solver stage, Constraint override.
+Stiffness  REAL_GAP  VehicleAntiRollBar::mStiffness; bound as ZJoltVehicleAntiRollBarDesc.stiffness read through zjoltVehicleConstraintGetAntiRollBar and written by zjoltVehicleConstraintSetAntiRollBarStiffness.
+TrackedVehicleController  EXTENSION_POINT  a VehicleController subclass; reached as ZJOLT_VEHICLE_CONTROLLER_KIND_TRACKED plus the track fields of ZJoltVehicleConstraintDesc.
+TrackedVehicleControllerSettings  EXTENSION_POINT  the settings half of the same subclass pair; same kind plus desc.
+VehicleCollisionTesterCastSphere  EXTENSION_POINT  reached as ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_SPHERE in ZJoltVehicleCollisionTesterDesc.
+VehicleCollisionTesterRay  EXTENSION_POINT  reached as ZJOLT_VEHICLE_COLLISION_TESTER_KIND_RAY in ZJoltVehicleCollisionTesterDesc.
+VehicleController  EXTENSION_POINT  the base a C++ host subclasses to write a controller; ZJoltVehicleControllerKind plus the per-kind desc structs give the same power without a mirrored vtable.
+VehicleEngineSettings  BOUND_ELSEWHERE  ZJoltVehicleEngineDesc and zjoltVehicleEngineDescInit, carried in ZJoltVehicleConstraintDesc.engine.
+WarmStartVelocityConstraint  INTERNAL  per-tick solver stage, Constraint override.
+WheeledVehicleController  EXTENSION_POINT  a VehicleController subclass; reached as ZJOLT_VEHICLE_CONTROLLER_KIND_WHEELED.
+WheelSettingsWV  EXTENSION_POINT  the wheeled half of Jolt's ConstructWheel subclass pair; reached through the wheeled fields of ZJoltVehicleWheelDesc, selected by the constraint's ZJoltVehicleControllerKind.
+WheelTV  EXTENSION_POINT  the tracked runtime wheel of that same pair; reached through the tracked fields of ZJoltVehicleWheelDesc plus the per-wheel accessors on ZJoltVehicleConstraint.
+WheelWV  EXTENSION_POINT  the wheeled runtime wheel of that same pair; same route.
+
+= Counts: INTERNAL 17, EXTENSION_POINT 12, BOUND_ELSEWHERE 42, REAL_GAP 36 (107 total).

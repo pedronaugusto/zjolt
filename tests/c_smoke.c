@@ -296,6 +296,104 @@ static bool rejectShapesOf(void *user, ZJoltBodyId body,
 }
 
 //===----------------------------------------------------------------------===//
+// Vehicle callbacks
+//
+// All five run from inside zjoltPhysicsSystemStep, with every body and
+// constraint lock held. They do the least a callback can do and still prove it
+// was called with the arguments the header promises.
+//===----------------------------------------------------------------------===//
+
+static int g_vehicle_pre = 0;
+static int g_vehicle_post_collide = 0;
+static int g_vehicle_post_step = 0;
+/* One nibble per call, so the ORDER of the three within a step is checkable
+   rather than assumed: pre, post-collide, post-step reads back as 0x123. */
+static unsigned g_vehicle_order = 0;
+static float g_vehicle_delta_time = 0.0f;
+static bool g_vehicle_contact_at_post_collide = false;
+
+static void onVehiclePreStep(void *user, ZJoltVehicleConstraint *vehicle,
+                             const ZJoltVehicleStepContext *context) {
+  (void)user;
+  (void)vehicle;
+  ++g_vehicle_pre;
+  g_vehicle_order = (g_vehicle_order << 4) | 1u;
+  g_vehicle_delta_time = context->delta_time;
+}
+
+static void onVehiclePostCollide(void *user, ZJoltVehicleConstraint *vehicle,
+                                 const ZJoltVehicleStepContext *context) {
+  (void)user;
+  (void)context;
+  ++g_vehicle_post_collide;
+  g_vehicle_order = (g_vehicle_order << 4) | 2u;
+  /* The point of this callback: the contacts found this step are already
+     there, a whole step before anything outside the update can see them. */
+  g_vehicle_contact_at_post_collide =
+      zjoltVehicleConstraintHasWheelContact(vehicle, 0);
+}
+
+static void onVehiclePostStep(void *user, ZJoltVehicleConstraint *vehicle,
+                              const ZJoltVehicleStepContext *context) {
+  (void)user;
+  (void)vehicle;
+  (void)context;
+  ++g_vehicle_post_step;
+  g_vehicle_order = (g_vehicle_order << 4) | 3u;
+}
+
+static int g_combine_calls = 0;
+static bool g_combine_saw_floor = false;
+
+static void onCombineFriction(void *user, uint32_t wheel_index,
+                              ZJoltBodyId body, ZJoltSubShapeId sub_shape_id,
+                              float *longitudinal_friction,
+                              float *lateral_friction) {
+  const ZJoltBodyId *floor = (const ZJoltBodyId *)user;
+  (void)wheel_index;
+  (void)sub_shape_id;
+  ++g_combine_calls;
+  if (floor != NULL && body == *floor) g_combine_saw_floor = true;
+  /* The two arrive holding the TIRE's friction, for this to overwrite with
+     whatever the combination with the surface should be. */
+  *longitudinal_friction *= 0.5f;
+  *lateral_friction *= 0.5f;
+}
+
+static int g_tire_calls = 0;
+static float g_tire_peak_suspension_impulse = 0.0f;
+
+static void onTireMaxImpulse(void *user, uint32_t wheel_index,
+                             const ZJoltVehicleTireImpulseInputs *inputs,
+                             float *out_longitudinal_impulse,
+                             float *out_lateral_impulse) {
+  (void)user;
+  (void)wheel_index;
+  ++g_tire_calls;
+  if (inputs->suspension_impulse > g_tire_peak_suspension_impulse) {
+    g_tire_peak_suspension_impulse = inputs->suspension_impulse;
+  }
+  /* Jolt's own default, written out: an uncoupled friction circle. */
+  *out_longitudinal_impulse =
+      inputs->longitudinal_friction * inputs->suspension_impulse;
+  *out_lateral_impulse = inputs->lateral_friction * inputs->suspension_impulse;
+}
+
+static int g_wheel_filter_rejections = 0;
+static bool g_wheel_filter_saw_vehicle = false;
+static ZJoltBodyId g_vehicle_chassis_id = ZJOLT_BODY_ID_INVALID;
+
+static bool rejectFloorForWheels(void *user, ZJoltBodyId body) {
+  const ZJoltBodyId *floor = (const ZJoltBodyId *)user;
+  if (body == g_vehicle_chassis_id) g_wheel_filter_saw_vehicle = true;
+  if (floor != NULL && body == *floor) {
+    ++g_wheel_filter_rejections;
+    return false;
+  }
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
 // Test body
 //===----------------------------------------------------------------------===//
 
@@ -1428,6 +1526,314 @@ int main(void) {
 
     zjoltBodyDestroy(system, soft_id);
     zjoltSoftBodySharedSettingsRelease(cloth);
+  }
+
+  //-------------------------------------------------------------------------
+  // A vehicle, driven from plain C
+  //
+  // The Zig suite covers the same ground; this is here for what only C can
+  // show — that every one of these entry points is reachable through the
+  // header alone, with the pointer types the header actually declares. The
+  // ABI guard on the Zig side compares pointees only by size and alignment,
+  // so a float * declared as an int32_t * passes it and fails here.
+  //-------------------------------------------------------------------------
+
+  {
+    const ZJoltVec3 chassis_half_extent = {0.75f, 0.25f, 1.75f};
+    ZJoltShape *chassis_shape = NULL;
+    CHECK_OK(zjoltShapeCreateBox(&chassis_half_extent, 0.05f, 300.0f, NULL,
+                                 &chassis_shape));
+
+    ZJoltBodyDesc chassis_desc;
+    zjoltBodyDescInit(&chassis_desc);
+    chassis_desc.shape = chassis_shape;
+    chassis_desc.object_layer = LAYER_MOVING;
+    chassis_desc.position.y = (ZJoltReal)1.0;
+    /* A settled, sleeping chassis stops having its constraints solved, and no
+       driver input ever wakes it again. */
+    chassis_desc.allow_sleeping = false;
+
+    ZJoltBodyId chassis_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltBodyCreateAndAdd(system, &chassis_desc,
+                                   ZJOLT_ACTIVATION_ACTIVATE, &chassis_id));
+    g_vehicle_chassis_id = chassis_id;
+    zjoltBodySetFriction(system, floor_id, 1.0f);
+
+    ZJoltVehicleWheelDesc wheels[4];
+    const float wheel_x = 0.7f;
+    const float wheel_z = 1.4f;
+    const float wheel_local_x[4] = {-wheel_x, wheel_x, -wheel_x, wheel_x};
+    const float wheel_local_z[4] = {wheel_z, wheel_z, -wheel_z, -wheel_z};
+    for (int w = 0; w < 4; ++w) {
+      zjoltVehicleWheelDescInit(&wheels[w]);
+      wheels[w].position.x = wheel_local_x[w];
+      wheels[w].position.y = -0.25f;
+      wheels[w].position.z = wheel_local_z[w];
+    }
+
+    ZJoltVehicleDifferentialDesc differentials[2];
+    for (int d = 0; d < 2; ++d) {
+      zjoltVehicleDifferentialDescInit(&differentials[d]);
+      differentials[d].left_wheel = 2 * d;
+      differentials[d].right_wheel = 2 * d + 1;
+      differentials[d].engine_torque_ratio = 0.5f;
+    }
+
+    ZJoltVehicleAntiRollBarDesc bars[2];
+    for (int b = 0; b < 2; ++b) {
+      zjoltVehicleAntiRollBarDescInit(&bars[b]);
+      bars[b].left_wheel = 2 * b;
+      bars[b].right_wheel = 2 * b + 1;
+      bars[b].stiffness = 1500.0f + 100.0f * (float)b;
+    }
+
+    ZJoltVehicleConstraintDesc vehicle_desc;
+    zjoltVehicleConstraintDescInit(&vehicle_desc);
+    vehicle_desc.wheels = wheels;
+    vehicle_desc.wheel_count = 4;
+    vehicle_desc.differentials = differentials;
+    vehicle_desc.differential_count = 2;
+    vehicle_desc.anti_roll_bars = bars;
+    vehicle_desc.anti_roll_bar_count = 2;
+    /* LAYER_MOVING, not the default LAYER_STATIC: only a moving-layer query
+       is allowed to hit the static broad-phase layer the floor lives in. */
+    vehicle_desc.collision_tester.object_layer = LAYER_MOVING;
+
+    ZJoltVehicleConstraint *vehicle = NULL;
+    CHECK_OK(zjoltVehicleConstraintCreate(system, chassis_id, &vehicle_desc,
+                                          &vehicle));
+
+    for (int i = 0; i < 120; ++i) {
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+    CHECK(zjoltVehicleConstraintHasWheelContact(vehicle, 0),
+          "the vehicle settled onto the floor");
+
+    /* Anti-roll bars: read back, retune, and refuse what Jolt asserts. */
+    CHECK(zjoltVehicleConstraintGetAntiRollBarCount(vehicle) == 2u,
+          "both anti-roll bars are there");
+    ZJoltVehicleAntiRollBarDesc bar_out;
+    CHECK(zjoltVehicleConstraintGetAntiRollBar(vehicle, 0, &bar_out),
+          "the front bar reads back");
+    CHECK(bar_out.left_wheel == 0 && bar_out.right_wheel == 1,
+          "and names the wheels it was built with");
+    CHECK_NEAR(bar_out.stiffness, 1500.0f, 1e-3f);
+    CHECK(!zjoltVehicleConstraintGetAntiRollBar(vehicle, 2, &bar_out),
+          "past the count is false, not a zeroed bar");
+    CHECK_OK(zjoltVehicleConstraintSetAntiRollBarStiffness(vehicle, 0, 9000.0f));
+    CHECK(zjoltVehicleConstraintGetAntiRollBar(vehicle, 0, &bar_out), "reread");
+    CHECK_NEAR(bar_out.stiffness, 9000.0f, 1e-3f);
+    CHECK(zjoltVehicleConstraintSetAntiRollBarStiffness(vehicle, 0, -1.0f) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a negative anti-roll bar is refused");
+
+    /* Differentials. */
+    CHECK(zjoltVehicleConstraintGetDifferentialCount(vehicle) == 2u,
+          "both differentials are there");
+    ZJoltVehicleDifferentialDesc diff_out;
+    CHECK(zjoltVehicleConstraintGetDifferential(vehicle, 1, &diff_out),
+          "the rear differential reads back");
+    CHECK_NEAR(diff_out.engine_torque_ratio, 0.5f, 1e-5f);
+
+    /* Moving torque rearwards takes two calls, because engine_torque_ratio
+       has to sum to 1 across every differential by the time the vehicle is
+       stepped again — see zjoltVehicleConstraintSetDifferential. */
+    diff_out.engine_torque_ratio = 0.75f;
+    CHECK_OK(zjoltVehicleConstraintSetDifferential(vehicle, 1, &diff_out));
+    ZJoltVehicleDifferentialDesc front_diff;
+    CHECK(zjoltVehicleConstraintGetDifferential(vehicle, 0, &front_diff),
+          "the front differential reads back");
+    front_diff.engine_torque_ratio = 0.25f;
+    CHECK_OK(zjoltVehicleConstraintSetDifferential(vehicle, 0, &front_diff));
+
+    diff_out.limited_slip_ratio = 1.0f; /* must be > 1 */
+    CHECK(zjoltVehicleConstraintSetDifferential(vehicle, 1, &diff_out) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "an open-by-mistake differential is refused");
+    CHECK(zjoltVehicleConstraintGetDifferential(vehicle, 1, &diff_out),
+          "reread after the refusal");
+    CHECK_NEAR(diff_out.engine_torque_ratio, 0.75f, 1e-5f);
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+
+    CHECK(zjoltVehicleConstraintGetDifferentialLimitedSlipRatio(vehicle) > 1.0f,
+          "the vehicle-level limited slip ratio starts above 1");
+    CHECK_OK(zjoltVehicleConstraintSetDifferentialLimitedSlipRatio(vehicle, 3.0f));
+    CHECK_NEAR(zjoltVehicleConstraintGetDifferentialLimitedSlipRatio(vehicle),
+               3.0f, 1e-5f);
+    CHECK(zjoltVehicleConstraintSetDifferentialLimitedSlipRatio(vehicle, 0.5f) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "and cannot be set below 1");
+
+    /* Engine and clutch. */
+    CHECK_OK(zjoltVehicleConstraintSetEngineRpm(vehicle, 1.0e6f));
+    CHECK_NEAR(zjoltVehicleConstraintGetEngineRpm(vehicle), 6000.0f, 1e-1f);
+    CHECK_OK(zjoltVehicleConstraintSetEngineRpm(vehicle, 3000.0f));
+    {
+      const float full = zjoltVehicleConstraintGetEngineTorque(vehicle, 1.0f);
+      CHECK(full > 0.0f, "the engine makes torque at 3000 rpm");
+      CHECK_NEAR(zjoltVehicleConstraintGetEngineTorque(vehicle, 0.5f),
+                 full * 0.5f, 1e-3f);
+      CHECK_NEAR(zjoltVehicleConstraintGetEngineTorque(vehicle, 0.0f), 0.0f,
+                 1e-6f);
+    }
+    /* No differential names a wheel is the only case Jolt would divide by
+       zero in; this one does, so it is a real number. */
+    CHECK(zjoltVehicleConstraintGetWheelSpeedAtClutch(vehicle) ==
+              zjoltVehicleConstraintGetWheelSpeedAtClutch(vehicle),
+          "wheel speed at the clutch is not a NaN");
+    {
+      const ZJoltVec3 meter = {0.0f, 1.0f, 0.0f};
+      const ZJoltResult r =
+          zjoltVehicleConstraintSetRpmMeter(vehicle, &meter, 0.5f);
+      CHECK(r == ZJOLT_RESULT_OK || r == ZJOLT_RESULT_UNSUPPORTED,
+            "the RPM meter is placed, or says the debug renderer is absent");
+    }
+
+    /* Wrong-kind entry points answer rather than reinterpreting memory. */
+    ZJoltVehicleMotorcycleLeanSpring lean;
+    CHECK(!zjoltVehicleConstraintGetMotorcycleLeanSpring(vehicle, &lean),
+          "a car has no lean spring");
+    CHECK(zjoltVehicleConstraintSetMotorcycleLeanSpring(vehicle, &lean) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "and cannot be given one");
+    CHECK_NEAR(zjoltVehicleConstraintGetTrackAngularVelocity(
+                   vehicle, ZJOLT_VEHICLE_TRACK_SIDE_LEFT),
+               0.0f, 1e-6f);
+    CHECK(zjoltVehicleConstraintSetTrackAngularVelocity(
+              vehicle, ZJOLT_VEHICLE_TRACK_SIDE_RIGHT, 1.0f) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a car has no tracks");
+
+    /* Step callbacks. */
+    g_vehicle_pre = 0;
+    g_vehicle_post_collide = 0;
+    g_vehicle_post_step = 0;
+    g_vehicle_order = 0;
+    g_vehicle_delta_time = 0.0f;
+    g_vehicle_contact_at_post_collide = false;
+    {
+      ZJoltVehicleStepCallback pre = {onVehiclePreStep, NULL};
+      ZJoltVehicleStepCallback post_collide = {onVehiclePostCollide, NULL};
+      ZJoltVehicleStepCallback post_step = {onVehiclePostStep, NULL};
+      CHECK_OK(zjoltVehicleConstraintSetPreStepCallback(vehicle, &pre));
+      CHECK_OK(zjoltVehicleConstraintSetPostCollideCallback(vehicle,
+                                                            &post_collide));
+      CHECK_OK(zjoltVehicleConstraintSetPostStepCallback(vehicle, &post_step));
+
+      ZJoltVehicleStepCallback read_back;
+      zjoltVehicleConstraintGetPreStepCallback(vehicle, &read_back);
+      CHECK(read_back.on_step == onVehiclePreStep,
+            "exactly what was installed comes back out");
+    }
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK(g_vehicle_pre == 1 && g_vehicle_post_collide == 1 &&
+              g_vehicle_post_step == 1,
+          "each step callback fired once");
+    CHECK(g_vehicle_order == 0x123,
+          "and in order: pre, post-collide, post-step (got 0x%x)",
+          g_vehicle_order);
+    CHECK_NEAR(g_vehicle_delta_time, 1.0f / 60.0f, 1e-6f);
+    CHECK(g_vehicle_contact_at_post_collide,
+          "the wheel contacts are already found by the post-collide callback");
+
+    CHECK_OK(zjoltVehicleConstraintSetPreStepCallback(vehicle, NULL));
+    CHECK_OK(zjoltVehicleConstraintSetPostCollideCallback(vehicle, NULL));
+    CHECK_OK(zjoltVehicleConstraintSetPostStepCallback(vehicle, NULL));
+    g_vehicle_pre = 0;
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK(g_vehicle_pre == 0, "a cleared callback stops firing");
+
+    /* Tire friction callbacks. */
+    g_combine_calls = 0;
+    g_combine_saw_floor = false;
+    g_tire_calls = 0;
+    g_tire_peak_suspension_impulse = 0.0f;
+    {
+      ZJoltVehicleCombineFrictionCallback combine = {onCombineFriction,
+                                                     &floor_id};
+      CHECK_OK(zjoltVehicleConstraintSetCombineFrictionCallback(vehicle,
+                                                                &combine));
+      ZJoltVehicleTireMaxImpulseCallback tire = {onTireMaxImpulse, NULL};
+      CHECK_OK(zjoltVehicleConstraintSetTireMaxImpulseCallback(vehicle, &tire));
+    }
+    CHECK_OK(zjoltVehicleConstraintSetWheeledDriverInput(vehicle, 1.0f, 0.0f,
+                                                         0.0f, 0.0f));
+    for (int i = 0; i < 30; ++i) {
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+    CHECK(g_combine_calls > 0, "the combine-friction callback ran");
+    CHECK(g_combine_saw_floor, "and was told which body the wheel is on");
+    CHECK(g_tire_calls > 0, "the tire max impulse callback ran");
+    CHECK(g_tire_peak_suspension_impulse > 0.0f,
+          "and was handed the suspension load it is capping");
+
+    {
+      ZJoltVehicleTireMaxImpulseCallback tire_out;
+      zjoltVehicleConstraintGetTireMaxImpulseCallback(vehicle, &tire_out);
+      CHECK(tire_out.compute == onTireMaxImpulse, "the tire callback reads back");
+    }
+    CHECK_OK(zjoltVehicleConstraintSetCombineFrictionCallback(vehicle, NULL));
+    CHECK_OK(zjoltVehicleConstraintSetTireMaxImpulseCallback(vehicle, NULL));
+    CHECK_OK(zjoltVehicleConstraintSetWheeledDriverInput(vehicle, 0.0f, 0.0f,
+                                                         1.0f, 0.0f));
+
+    /* Wheel-ground filtering: take the floor away and the wheels lose it. */
+    g_wheel_filter_rejections = 0;
+    g_wheel_filter_saw_vehicle = false;
+    {
+      ZJoltVehicleWheelFilters filters;
+      memset(&filters, 0, sizeof(filters));
+      filters.body.should_collide = rejectFloorForWheels;
+      filters.body.user = &floor_id;
+      CHECK_OK(zjoltVehicleConstraintSetWheelFilters(vehicle, &filters));
+
+      ZJoltVehicleWheelFilters read_back;
+      zjoltVehicleConstraintGetWheelFilters(vehicle, &read_back);
+      CHECK(read_back.body.should_collide == rejectFloorForWheels,
+            "the wheel filters read back");
+    }
+    for (int i = 0; i < 10; ++i) {
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+    CHECK(g_wheel_filter_rejections > 0, "the wheel body filter was consulted");
+    CHECK(!zjoltVehicleConstraintHasWheelContact(vehicle, 0),
+          "and the filtered-out floor is gone from under the wheel");
+    /* Jolt would have replaced its own self-exclusion with this filter; zjolt
+       keeps it, so the callback is never even asked about the chassis. */
+    CHECK(!g_wheel_filter_saw_vehicle,
+          "the vehicle's own body never reaches the filter");
+
+    CHECK_OK(zjoltVehicleConstraintSetWheelFilters(vehicle, NULL));
+    for (int i = 0; i < 10; ++i) {
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+    CHECK(zjoltVehicleConstraintHasWheelContact(vehicle, 0),
+          "clearing the filters puts the floor back");
+
+    /* Swapping the collision tester keeps the wheels on the ground. */
+    CHECK(zjoltVehicleConstraintGetCollisionTesterKind(vehicle) ==
+              ZJOLT_VEHICLE_COLLISION_TESTER_KIND_RAY,
+          "the vehicle was built with a ray tester");
+    {
+      ZJoltVehicleCollisionTesterDesc tester;
+      zjoltVehicleCollisionTesterDescInit(&tester);
+      tester.kind = ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_SPHERE;
+      tester.object_layer = LAYER_MOVING;
+      tester.radius = 0.1f;
+      CHECK_OK(zjoltVehicleConstraintSetCollisionTester(vehicle, &tester));
+    }
+    CHECK(zjoltVehicleConstraintGetCollisionTesterKind(vehicle) ==
+              ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_SPHERE,
+          "and reports the one it was swapped to");
+    for (int i = 0; i < 10; ++i) {
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+    CHECK(zjoltVehicleConstraintHasWheelContact(vehicle, 0),
+          "the swapped-in tester finds the same floor");
+
+    zjoltVehicleConstraintDestroy(vehicle);
+    zjoltBodyDestroy(system, chassis_id);
+    zjoltShapeRelease(chassis_shape);
   }
 
   //-------------------------------------------------------------------------

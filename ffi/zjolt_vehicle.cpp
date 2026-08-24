@@ -34,6 +34,61 @@ inline ZJoltConstraint *ToC(JPH::Constraint *constraint) {
 }  // namespace zjolt
 
 //===----------------------------------------------------------------------===//
+// Wheel-ground collision filters
+//
+// zjolt_internal.h already has adapters of exactly this shape for queries,
+// but they are `final` and hold their ZJolt* table by value at construction.
+// A vehicle's filters are retargetable after the fact and live inside the
+// handle, so these are the same three forwards written to be mutated in
+// place instead.
+//
+// The body one is not quite a forward: it also re-applies the self-exclusion
+// that installing any body filter would otherwise take away from Jolt (see
+// VehicleCollisionTester.cpp, where a NULL mBodyFilter means
+// IgnoreSingleBodyFilter(vehicle body)). Wheels colliding with their own
+// chassis is not a thing any caller wants, so it is not a thing this ABI
+// lets one ask for by omission.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+class VehicleBroadPhaseLayerFilter final : public JPH::BroadPhaseLayerFilter {
+ public:
+  ZJoltBroadPhaseLayerFilter table{};
+
+  bool ShouldCollide(JPH::BroadPhaseLayer inLayer) const override {
+    if (table.should_collide == nullptr) return true;
+    return table.should_collide(
+        table.user, static_cast<ZJoltBroadPhaseLayer>(inLayer.GetValue()));
+  }
+};
+
+class VehicleObjectLayerFilter final : public JPH::ObjectLayerFilter {
+ public:
+  ZJoltObjectLayerFilter table{};
+
+  bool ShouldCollide(JPH::ObjectLayer inLayer) const override {
+    if (table.should_collide == nullptr) return true;
+    return table.should_collide(table.user,
+                                static_cast<ZJoltObjectLayer>(inLayer));
+  }
+};
+
+class VehicleBodyFilter final : public JPH::BodyFilter {
+ public:
+  ZJoltBodyFilter table{};
+  JPH::BodyID vehicle_body;
+
+  bool ShouldCollide(const JPH::BodyID &inBodyID) const override {
+    if (inBodyID == vehicle_body) return false;
+    if (table.should_collide == nullptr) return true;
+    return table.should_collide(table.user, zjolt::ToC(inBodyID));
+  }
+};
+
+}  // namespace
+
+//===----------------------------------------------------------------------===//
 // The handle
 //
 // Defined here rather than in zjolt_internal.h — the handle types living
@@ -54,6 +109,28 @@ struct ZJoltVehicleConstraint {
   /// guess.
   ZJoltVehicleControllerKind controller_kind;
   ZJoltVehicleCollisionTesterKind collision_tester_kind;
+
+  /// The tester `impl` is using. `impl` holds it as a RefConst, so this is
+  /// the only mutable route to it — which both the filters and
+  /// zjoltVehicleConstraintSetCollisionTester need.
+  JPH::Ref<JPH::VehicleCollisionTester> tester;
+
+  /// Live for as long as the handle, because the tester holds bare pointers
+  /// to them; `filters` is what the caller last handed over, kept verbatim so
+  /// zjoltVehicleConstraintGetWheelFilters can give it back unchanged.
+  ZJoltVehicleWheelFilters filters{};
+  VehicleBroadPhaseLayerFilter broad_phase_filter;
+  VehicleObjectLayerFilter object_layer_filter;
+  VehicleBodyFilter body_filter;
+
+  /// Every callback below is read from inside the std::function installed on
+  /// Jolt's side, which captures only this handle — so clearing one here is
+  /// enough to stop it being called even if Jolt still holds the shim.
+  ZJoltVehicleStepCallback pre_step{};
+  ZJoltVehicleStepCallback post_collide{};
+  ZJoltVehicleStepCallback post_step{};
+  ZJoltVehicleCombineFrictionCallback combine_friction{};
+  ZJoltVehicleTireMaxImpulseCallback tire_max_impulse{};
 };
 
 namespace {
@@ -147,6 +224,14 @@ const JPH::VehicleEngine *EngineOf(const ZJoltVehicleConstraint *c) {
   if (const JPH::WheeledVehicleController *wc = WheeledController(c))
     return &wc->GetEngine();
   if (const JPH::TrackedVehicleController *tc = TrackedController(c))
+    return &tc->GetEngine();
+  return nullptr;
+}
+
+JPH::VehicleEngine *EngineOf(ZJoltVehicleConstraint *c) {
+  if (JPH::WheeledVehicleController *wc = WheeledController(c))
+    return &wc->GetEngine();
+  if (JPH::TrackedVehicleController *tc = TrackedController(c))
     return &tc->GetEngine();
   return nullptr;
 }
@@ -512,6 +597,75 @@ JPH::VehicleCollisionTester *BuildCollisionTester(
       return zjolt::New<JPH::VehicleCollisionTesterRay>(
           static_cast<JPH::ObjectLayer>(d.object_layer), up, d.max_slope_angle);
   }
+}
+
+/// Points the tester at whichever of the three adapters the caller actually
+/// filled in. A level with a NULL function pointer is left unset rather than
+/// pointed at an accept-everything adapter, because "unset" is what makes
+/// Jolt fall back to the tester's own object layer — an adapter that says yes
+/// to everything would instead switch that check off.
+void ApplyFilters(ZJoltVehicleConstraint *c) {
+  if (c == nullptr || c->tester == nullptr) return;
+
+  c->broad_phase_filter.table = c->filters.broad_phase_layer;
+  c->object_layer_filter.table = c->filters.object_layer;
+  c->body_filter.table = c->filters.body;
+
+  const JPH::VehicleConstraint *impl = Impl(c);
+  c->body_filter.vehicle_body =
+      (impl != nullptr && impl->GetVehicleBody() != nullptr)
+          ? impl->GetVehicleBody()->GetID()
+          : JPH::BodyID();
+
+  c->tester->SetBroadPhaseLayerFilter(
+      c->filters.broad_phase_layer.should_collide != nullptr
+          ? &c->broad_phase_filter
+          : nullptr);
+  c->tester->SetObjectLayerFilter(
+      c->filters.object_layer.should_collide != nullptr ? &c->object_layer_filter
+                                                        : nullptr);
+  c->tester->SetBodyFilter(
+      c->filters.body.should_collide != nullptr ? &c->body_filter : nullptr);
+}
+
+//===----------------------------------------------------------------------===//
+// Callback shims
+//
+// Each captures only the handle and re-reads the C table out of it, so
+// clearing a callback takes effect even while Jolt still holds the shim, and
+// one pointer is all the capture std::function has to store (no allocation).
+//===----------------------------------------------------------------------===//
+
+void InvokeStepCallback(const ZJoltVehicleStepCallback &cb,
+                        ZJoltVehicleConstraint *handle,
+                        const JPH::PhysicsStepListenerContext &context) {
+  if (cb.on_step == nullptr) return;
+  const ZJoltVehicleStepContext c{context.mDeltaTime, context.mIsFirstStep,
+                                  context.mIsLastStep};
+  cb.on_step(cb.user, handle, &c);
+}
+
+/// Jolt's own default, respelled here because clearing a callback has to put
+/// it back and Jolt only writes it in VehicleConstraint's member initialiser
+/// (VehicleConstraint.h:238) — there is nothing to copy it from afterwards.
+JPH::VehicleConstraint::CombineFunction DefaultCombineFriction() {
+  return [](JPH::uint, float &io_longitudinal, float &io_lateral,
+            const JPH::Body &body2, const JPH::SubShapeID &) {
+    const float body_friction = body2.GetFriction();
+    io_longitudinal = std::sqrt(io_longitudinal * body_friction);
+    io_lateral = std::sqrt(io_lateral * body_friction);
+  };
+}
+
+/// As DefaultCombineFriction, for WheeledVehicleController.h:191.
+JPH::WheeledVehicleController::TireMaxImpulseCallback DefaultTireMaxImpulse() {
+  return [](JPH::uint, float &out_longitudinal_impulse,
+            float &out_lateral_impulse, float suspension_impulse,
+            float longitudinal_friction, float lateral_friction, float, float,
+            float) {
+    out_longitudinal_impulse = longitudinal_friction * suspension_impulse;
+    out_lateral_impulse = lateral_friction * suspension_impulse;
+  };
 }
 
 }  // namespace
@@ -883,6 +1037,10 @@ ZJoltResult zjoltVehicleConstraintCreate(ZJoltPhysicsSystem *system,
   handle->owner = system;
   handle->controller_kind = desc->controller_kind;
   handle->collision_tester_kind = desc->collision_tester.kind;
+  // A second reference on top of the one SetVehicleCollisionTester took, so
+  // the handle can hand out a mutable tester (filters, swapping) for as long
+  // as it lives. Dropped in zjoltVehicleConstraintDestroy.
+  handle->tester = tester;
   zjolt::HandleCreated();
   *out = handle;
   return ZJOLT_RESULT_OK;
@@ -897,8 +1055,10 @@ void zjoltVehicleConstraintDestroy(ZJoltVehicleConstraint *constraint) {
   }
   // Drops the handle's own reference. If this is the last one (the usual
   // case — RemoveConstraint above dropped the system's), the constraint
-  // deletes itself through Jolt's allocator here.
+  // deletes itself through Jolt's allocator here — and with it the tester
+  // reference it holds, leaving the handle's own `tester` below as the last.
   constraint->impl = nullptr;
+  constraint->tester = nullptr;
   zjolt::Delete(constraint);
   zjolt::HandleDestroyed();
 }
@@ -1362,6 +1522,494 @@ void zjoltVehicleConstraintGetWheelWorldTransform(
       wheel_index, zjolt::ToJolt(*wheel_right), zjolt::ToJolt(*wheel_up));
   zjolt::WriteRVec3(out_position, transform.GetTranslation());
   zjolt::WriteQuat(out_rotation, transform.GetQuaternion());
+}
+
+//===----------------------------------------------------------------------===//
+// Anti-roll bars — runtime
+//===----------------------------------------------------------------------===//
+
+uint32_t zjoltVehicleConstraintGetAntiRollBarCount(
+    const ZJoltVehicleConstraint *constraint) {
+  const JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) return 0;
+  return static_cast<uint32_t>(impl->GetAntiRollBars().size());
+}
+
+bool zjoltVehicleConstraintGetAntiRollBar(
+    const ZJoltVehicleConstraint *constraint, uint32_t index,
+    ZJoltVehicleAntiRollBarDesc *out) {
+  if (out != nullptr) *out = ZJoltVehicleAntiRollBarDesc{};
+  const JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr || out == nullptr) return false;
+  const JPH::VehicleAntiRollBars &bars = impl->GetAntiRollBars();
+  if (index >= bars.size()) return false;
+  const JPH::VehicleAntiRollBar &bar = bars[index];
+  out->left_wheel = bar.mLeftWheel;
+  out->right_wheel = bar.mRightWheel;
+  out->stiffness = bar.mStiffness;
+  return true;
+}
+
+ZJoltResult zjoltVehicleConstraintSetAntiRollBarStiffness(
+    ZJoltVehicleConstraint *constraint, uint32_t index, float stiffness) {
+  ZJOLT_ENTER();
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint must not be null");
+  }
+  JPH::VehicleAntiRollBars &bars = impl->GetAntiRollBars();
+  if (index >= bars.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "anti-roll bar index is past the bar count");
+  }
+  // VehicleConstraint::OnStep asserts this every step it runs.
+  if (!(stiffness >= 0.0f)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "anti-roll bar stiffness must be >= 0");
+  }
+  bars[index].mStiffness = stiffness;
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Differentials — runtime
+//===----------------------------------------------------------------------===//
+
+uint32_t zjoltVehicleConstraintGetDifferentialCount(
+    const ZJoltVehicleConstraint *constraint) {
+  const JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr) return 0;
+  return static_cast<uint32_t>(wc->GetDifferentials().size());
+}
+
+bool zjoltVehicleConstraintGetDifferential(
+    const ZJoltVehicleConstraint *constraint, uint32_t index,
+    ZJoltVehicleDifferentialDesc *out) {
+  if (out != nullptr) *out = ZJoltVehicleDifferentialDesc{};
+  const JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr || out == nullptr) return false;
+  const JPH::WheeledVehicleController::Differentials &ds = wc->GetDifferentials();
+  if (index >= ds.size()) return false;
+  const JPH::VehicleDifferentialSettings &d = ds[index];
+  out->left_wheel = d.mLeftWheel;
+  out->right_wheel = d.mRightWheel;
+  out->differential_ratio = d.mDifferentialRatio;
+  out->left_right_split = d.mLeftRightSplit;
+  out->limited_slip_ratio = d.mLimitedSlipRatio;
+  out->engine_torque_ratio = d.mEngineTorqueRatio;
+  return true;
+}
+
+ZJoltResult zjoltVehicleConstraintSetDifferential(
+    ZJoltVehicleConstraint *constraint, uint32_t index,
+    const ZJoltVehicleDifferentialDesc *desc) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "differentials need a wheeled or motorcycle controller");
+  }
+  JPH::WheeledVehicleController::Differentials &ds = wc->GetDifferentials();
+  if (index >= ds.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "differential index is past the differential count");
+  }
+  const uint32_t wheel_count =
+      static_cast<uint32_t>(Impl(constraint)->GetWheels().size());
+  if (!WheelIndexValid(desc->left_wheel, wheel_count, true) ||
+      !WheelIndexValid(desc->right_wheel, wheel_count, true)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "differential left_wheel/right_wheel must be -1 or a real wheel index");
+  }
+  const ZJoltResult r = ValidateDifferentialDesc(*desc);
+  if (r != ZJOLT_RESULT_OK) return r;
+
+  JPH::VehicleDifferentialSettings &d = ds[index];
+  d.mLeftWheel = desc->left_wheel;
+  d.mRightWheel = desc->right_wheel;
+  d.mDifferentialRatio = desc->differential_ratio;
+  d.mLeftRightSplit = desc->left_right_split;
+  d.mLimitedSlipRatio = desc->limited_slip_ratio;
+  d.mEngineTorqueRatio = desc->engine_torque_ratio;
+  return ZJOLT_RESULT_OK;
+}
+
+float zjoltVehicleConstraintGetDifferentialLimitedSlipRatio(
+    const ZJoltVehicleConstraint *constraint) {
+  const JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  return wc != nullptr ? wc->GetDifferentialLimitedSlipRatio() : 0.0f;
+}
+
+ZJoltResult zjoltVehicleConstraintSetDifferentialLimitedSlipRatio(
+    ZJoltVehicleConstraint *constraint, float ratio) {
+  ZJOLT_ENTER();
+  JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "differentials need a wheeled or motorcycle controller");
+  }
+  // WheeledVehicleController's constructor asserts the same bound.
+  if (!(ratio > 1.0f)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "differential_limited_slip_ratio must be > 1");
+  }
+  wc->SetDifferentialLimitedSlipRatio(ratio);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Tracks
+//===----------------------------------------------------------------------===//
+
+float zjoltVehicleConstraintGetTrackAngularVelocity(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side) {
+  const JPH::TrackedVehicleController *tc = TrackedController(constraint);
+  if (tc == nullptr) return 0.0f;
+  const int index = side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
+  return tc->GetTracks()[index].mAngularVelocity;
+}
+
+ZJoltResult zjoltVehicleConstraintSetTrackAngularVelocity(
+    ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side,
+    float angular_velocity) {
+  ZJOLT_ENTER();
+  JPH::TrackedVehicleController *tc = TrackedController(constraint);
+  if (tc == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "tracks need a tracked controller");
+  }
+  const int index = side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
+  tc->GetTracks()[index].mAngularVelocity = angular_velocity;
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Engine and clutch — runtime
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltVehicleConstraintSetEngineRpm(
+    ZJoltVehicleConstraint *constraint, float rpm) {
+  ZJOLT_ENTER();
+  JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint has no engine");
+  }
+  // SetCurrentRPM clamps into [mMinRPM, mMaxRPM] itself.
+  e->SetCurrentRPM(rpm);
+  return ZJOLT_RESULT_OK;
+}
+
+float zjoltVehicleConstraintGetEngineTorque(
+    const ZJoltVehicleConstraint *constraint, float acceleration) {
+  const JPH::VehicleEngine *e = EngineOf(constraint);
+  return e != nullptr ? e->GetTorque(acceleration) : 0.0f;
+}
+
+float zjoltVehicleConstraintGetWheelSpeedAtClutch(
+    const ZJoltVehicleConstraint *constraint) {
+  const JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr) return 0.0f;
+  // WheeledVehicleController::GetWheelSpeedAtClutch divides by the number of
+  // driven wheels without checking it (WheeledVehicleController.cpp:217-231),
+  // so a vehicle whose differentials name no wheels returns a NaN there. The
+  // same count, done first.
+  uint32_t driven = 0;
+  for (const JPH::VehicleDifferentialSettings &d : wc->GetDifferentials()) {
+    if (d.mLeftWheel >= 0) driven++;
+    if (d.mRightWheel >= 0) driven++;
+  }
+  if (driven == 0) return 0.0f;
+  return wc->GetWheelSpeedAtClutch();
+}
+
+ZJoltResult zjoltVehicleConstraintSetRpmMeter(
+    ZJoltVehicleConstraint *constraint, const ZJoltVec3 *position, float size) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint, position)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_DEBUG_RENDERER
+  if (JPH::WheeledVehicleController *wc = WheeledController(constraint)) {
+    wc->SetRPMMeter(zjolt::ToJolt(*position), size);
+    return ZJOLT_RESULT_OK;
+  }
+  if (JPH::TrackedVehicleController *tc = TrackedController(constraint)) {
+    tc->SetRPMMeter(zjolt::ToJolt(*position), size);
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                         "constraint has no controller with an RPM meter");
+#else
+  (void)size;
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+//===----------------------------------------------------------------------===//
+// Motorcycle lean spring — runtime tuning
+//===----------------------------------------------------------------------===//
+
+bool zjoltVehicleConstraintGetMotorcycleLeanSpring(
+    const ZJoltVehicleConstraint *constraint,
+    ZJoltVehicleMotorcycleLeanSpring *out) {
+  if (out != nullptr) *out = ZJoltVehicleMotorcycleLeanSpring{};
+  const JPH::MotorcycleController *mc = MotorcycleControllerOf(constraint);
+  if (mc == nullptr || out == nullptr) return false;
+  out->spring_constant = mc->GetLeanSpringConstant();
+  out->spring_damping = mc->GetLeanSpringDamping();
+  out->spring_integration_coefficient =
+      mc->GetLeanSpringIntegrationCoefficient();
+  out->spring_integration_coefficient_decay =
+      mc->GetLeanSpringIntegrationCoefficientDecay();
+  out->lean_smoothing_factor = mc->GetLeanSmoothingFactor();
+  return true;
+}
+
+ZJoltResult zjoltVehicleConstraintSetMotorcycleLeanSpring(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleMotorcycleLeanSpring *spring) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(spring)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::MotorcycleController *mc = MotorcycleControllerOf(constraint);
+  if (mc == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "lean spring needs a motorcycle controller");
+  }
+  mc->SetLeanSpringConstant(spring->spring_constant);
+  mc->SetLeanSpringDamping(spring->spring_damping);
+  mc->SetLeanSpringIntegrationCoefficient(
+      spring->spring_integration_coefficient);
+  mc->SetLeanSpringIntegrationCoefficientDecay(
+      spring->spring_integration_coefficient_decay);
+  mc->SetLeanSmoothingFactor(spring->lean_smoothing_factor);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Wheel-ground collision filtering
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltVehicleConstraintSetWheelFilters(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleWheelFilters *filters) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  constraint->filters =
+      filters != nullptr ? *filters : ZJoltVehicleWheelFilters{};
+  ApplyFilters(constraint);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetWheelFilters(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleWheelFilters *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->filters
+                               : ZJoltVehicleWheelFilters{};
+}
+
+ZJoltResult zjoltVehicleConstraintSetCollisionTester(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleCollisionTesterDesc *desc) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint, desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint must not be null");
+  }
+  JPH::VehicleCollisionTester *fresh = BuildCollisionTester(*desc);
+  if (fresh == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  // The handle's reference first (0 -> 1), then the constraint's, which also
+  // releases its reference to the old tester. The handle's own old reference
+  // goes with the assignment above it, so the old one reaches zero and frees
+  // exactly once.
+  constraint->tester = fresh;
+  impl->SetVehicleCollisionTester(fresh);
+  constraint->collision_tester_kind = desc->kind;
+  ApplyFilters(constraint);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Step callbacks
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltVehicleConstraintSetPreStepCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleStepCallback *callback) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  constraint->pre_step =
+      callback != nullptr ? *callback : ZJoltVehicleStepCallback{};
+  if (constraint->pre_step.on_step != nullptr) {
+    ZJoltVehicleConstraint *handle = constraint;
+    impl->SetPreStepCallback(
+        [handle](JPH::VehicleConstraint &,
+                 const JPH::PhysicsStepListenerContext &context) {
+          InvokeStepCallback(handle->pre_step, handle, context);
+        });
+  } else {
+    impl->SetPreStepCallback(JPH::VehicleConstraint::StepCallback());
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetPreStepCallback(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleStepCallback *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->pre_step
+                               : ZJoltVehicleStepCallback{};
+}
+
+ZJoltResult zjoltVehicleConstraintSetPostCollideCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleStepCallback *callback) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  constraint->post_collide =
+      callback != nullptr ? *callback : ZJoltVehicleStepCallback{};
+  if (constraint->post_collide.on_step != nullptr) {
+    ZJoltVehicleConstraint *handle = constraint;
+    impl->SetPostCollideCallback(
+        [handle](JPH::VehicleConstraint &,
+                 const JPH::PhysicsStepListenerContext &context) {
+          InvokeStepCallback(handle->post_collide, handle, context);
+        });
+  } else {
+    impl->SetPostCollideCallback(JPH::VehicleConstraint::StepCallback());
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetPostCollideCallback(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleStepCallback *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->post_collide
+                               : ZJoltVehicleStepCallback{};
+}
+
+ZJoltResult zjoltVehicleConstraintSetPostStepCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleStepCallback *callback) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  constraint->post_step =
+      callback != nullptr ? *callback : ZJoltVehicleStepCallback{};
+  if (constraint->post_step.on_step != nullptr) {
+    ZJoltVehicleConstraint *handle = constraint;
+    impl->SetPostStepCallback(
+        [handle](JPH::VehicleConstraint &,
+                 const JPH::PhysicsStepListenerContext &context) {
+          InvokeStepCallback(handle->post_step, handle, context);
+        });
+  } else {
+    impl->SetPostStepCallback(JPH::VehicleConstraint::StepCallback());
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetPostStepCallback(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleStepCallback *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->post_step
+                               : ZJoltVehicleStepCallback{};
+}
+
+//===----------------------------------------------------------------------===//
+// Tire friction callbacks
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltVehicleConstraintSetCombineFrictionCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleCombineFrictionCallback *callback) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  constraint->combine_friction =
+      callback != nullptr ? *callback : ZJoltVehicleCombineFrictionCallback{};
+  if (constraint->combine_friction.combine != nullptr) {
+    ZJoltVehicleConstraint *handle = constraint;
+    impl->SetCombineFriction([handle](JPH::uint wheel_index,
+                                      float &io_longitudinal, float &io_lateral,
+                                      const JPH::Body &body2,
+                                      const JPH::SubShapeID &sub_shape_id) {
+      const ZJoltVehicleCombineFrictionCallback &cb = handle->combine_friction;
+      if (cb.combine == nullptr) return;
+      cb.combine(cb.user, static_cast<uint32_t>(wheel_index),
+                 zjolt::ToC(body2.GetID()), zjolt::ToC(sub_shape_id),
+                 &io_longitudinal, &io_lateral);
+    });
+  } else {
+    impl->SetCombineFriction(DefaultCombineFriction());
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetCombineFrictionCallback(
+    const ZJoltVehicleConstraint *constraint,
+    ZJoltVehicleCombineFrictionCallback *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->combine_friction
+                               : ZJoltVehicleCombineFrictionCallback{};
+}
+
+ZJoltResult zjoltVehicleConstraintSetTireMaxImpulseCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleTireMaxImpulseCallback *callback) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "tire impulses need a wheeled or motorcycle controller");
+  }
+  constraint->tire_max_impulse =
+      callback != nullptr ? *callback : ZJoltVehicleTireMaxImpulseCallback{};
+  if (constraint->tire_max_impulse.compute != nullptr) {
+    ZJoltVehicleConstraint *handle = constraint;
+    wc->SetTireMaxImpulseCallback(
+        [handle](JPH::uint wheel_index, float &out_longitudinal_impulse,
+                 float &out_lateral_impulse, float suspension_impulse,
+                 float longitudinal_friction, float lateral_friction,
+                 float longitudinal_slip, float lateral_slip, float delta_time) {
+          const ZJoltVehicleTireMaxImpulseCallback &cb =
+              handle->tire_max_impulse;
+          if (cb.compute == nullptr) {
+            out_longitudinal_impulse = longitudinal_friction * suspension_impulse;
+            out_lateral_impulse = lateral_friction * suspension_impulse;
+            return;
+          }
+          const ZJoltVehicleTireImpulseInputs inputs{
+              suspension_impulse, longitudinal_friction, lateral_friction,
+              longitudinal_slip,  lateral_slip,          delta_time};
+          cb.compute(cb.user, static_cast<uint32_t>(wheel_index), &inputs,
+                     &out_longitudinal_impulse, &out_lateral_impulse);
+        });
+  } else {
+    wc->SetTireMaxImpulseCallback(DefaultTireMaxImpulse());
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetTireMaxImpulseCallback(
+    const ZJoltVehicleConstraint *constraint,
+    ZJoltVehicleTireMaxImpulseCallback *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->tire_max_impulse
+                               : ZJoltVehicleTireMaxImpulseCallback{};
 }
 
 //===----------------------------------------------------------------------===//
