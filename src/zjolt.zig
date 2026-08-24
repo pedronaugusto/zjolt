@@ -522,6 +522,7 @@ test {
     _ = @import("constraint_test.zig");
     _ = @import("ragdoll_test.zig");
     _ = @import("character_test.zig");
+    _ = @import("query_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
     // with nulls, discovered by reflection rather than listed.
