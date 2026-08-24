@@ -300,8 +300,22 @@ ZJOLT_API ZJoltResult zjoltRagdollSettingsCreateRagdoll(
 
 ZJOLT_API void zjoltRagdollAddRef(const ZJoltRagdoll *ragdoll);
 
-/// Destroys every body the ragdoll owns (removing them from their system
-/// first if still added) once the last reference drops.
+/// Drops one reference, and destroys every body the ragdoll owns once the
+/// last one goes.
+///
+/// REMOVE THE RAGDOLL FROM ITS PHYSICS SYSTEM FIRST. Releasing the last
+/// reference to a ragdoll that is still added destroys bodies the broad
+/// phase still holds: Jolt asserts on it in a build with assertions, and
+/// silently corrupts the broad phase in one without. Jolt's own ownership
+/// rule, not a rule this library adds — `~Ragdoll` destroys the bodies
+/// directly and cannot remove them itself, because by then it no longer
+/// knows whether they were ever added.
+///
+///     zjoltRagdollRemoveFromPhysicsSystem(ragdoll, true);
+///     zjoltRagdollRelease(ragdoll);
+///
+/// Removing is not idempotent either, so remove exactly once — the pair
+/// above is the whole teardown for a ragdoll that was added.
 ZJOLT_API void zjoltRagdollRelease(const ZJoltRagdoll *ragdoll);
 ZJOLT_API uint32_t zjoltRagdollGetRefCount(const ZJoltRagdoll *ragdoll);
 
@@ -313,6 +327,29 @@ ZJOLT_API void zjoltRagdollAddToPhysicsSystem(ZJoltRagdoll *ragdoll,
 
 ZJOLT_API void zjoltRagdollRemoveFromPhysicsSystem(ZJoltRagdoll *ragdoll,
                                                    bool lock_bodies);
+
+/// The body ids of the ragdoll's parts, indexed by joint — so index `i` is
+/// the body built from skeleton joint `i`, and
+/// zjoltSkeletonGetJoints/zjoltSkeletonGetJointName name it.
+///
+/// This is how a contact, a ray hit or a constraint gets mapped back to a
+/// limb: shoot a ragdoll and the hit reports a ZJoltBodyId, and without this
+/// there is no way to say which part of it was hit. It is also what
+/// zjoltBodyInterface* needs to reach one part on its own — to attach a rope
+/// to a hand, or to make one limb heavier.
+///
+/// Two-call protocol, as zjoltSkeletonPoseGetJoints: `*out_count` always
+/// receives the body count, and a NULL array with any capacity is a size
+/// query. A capacity below the count reports
+/// ZJOLT_RESULT_BUFFER_TOO_SMALL and writes nothing.
+///
+/// The ids stay valid until the ragdoll's last reference drops; they name
+/// bodies the ragdoll owns, so do not destroy one through
+/// zjoltBodyInterfaceDestroyBody.
+ZJOLT_API ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
+                                             ZJoltBodyId *out_ids,
+                                             uint32_t capacity,
+                                             uint32_t *out_count);
 
 ZJOLT_API void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies);
 ZJOLT_API bool zjoltRagdollIsActive(const ZJoltRagdoll *ragdoll,

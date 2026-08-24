@@ -65,7 +65,12 @@ ZJOLT_API void zjoltTransformedShapeGetWorldTransform(
     const ZJoltTransformedShape *ts, ZJoltTransformedShapeTransform *out);
 
 /// Repositions `ts` in place, in the same sense zjoltTransformedShapeCreate
-/// took its placement in. `scale` may be NULL for (1, 1, 1).
+/// took its placement in.
+///
+/// A NULL `scale` SETS the scale to (1, 1, 1); it does not leave the current
+/// one alone. Moving an already-scaled shape means passing its scale again —
+/// read it back with zjoltTransformedShapeGetWorldTransform first if the
+/// caller does not still hold it.
 ZJOLT_API void zjoltTransformedShapeSetWorldTransform(
     ZJoltTransformedShape *ts, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *scale);
@@ -147,8 +152,8 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeGetTrianglesNext(
 // except the streaming *Each form, left out here: the result set behind one
 // already-resolved shape is bounded by its own leaf count rather than by
 // however much of a world a broad phase might otherwise hand back, so the
-// allocation-avoidance streaming exists for in zjolt_query.h matters far less
-// on this side. Add it if that stops being true for some caller; nothing
+// allocation avoidance that streaming exists for in zjolt_query.h matters far
+// less on this side. Add it if that stops being true for some caller; nothing
 // here forecloses it.
 //===----------------------------------------------------------------------===//
 

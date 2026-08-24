@@ -39,6 +39,7 @@ const math_mod = @import("math.zig");
 const memory_mod = @import("memory.zig");
 const material_mod = @import("material.zig");
 const shape_mod = @import("shape.zig");
+const transformed_mod = @import("transformed.zig");
 const body_mod = @import("body.zig");
 const query_mod = @import("query.zig");
 const system_mod = @import("system.zig");
@@ -91,6 +92,10 @@ pub const compoundChild = shape_mod.compoundChild;
 pub const SubShapeId = c.SubShapeId;
 pub const sub_shape_id_empty = shape_mod.sub_shape_id_empty;
 pub const height_field_no_collision = shape_mod.height_field_no_collision;
+
+pub const TransformedShape = transformed_mod.TransformedShape;
+pub const TransformedShapeTransform = transformed_mod.Transform;
+pub const TransformedShapeTriangleWalk = transformed_mod.TriangleWalk;
 
 pub const PhysicsMaterial = material_mod.PhysicsMaterial;
 pub const Color = material_mod.Color;
@@ -413,6 +418,7 @@ test {
     _ = memory_mod;
     _ = material_mod;
     _ = shape_mod;
+    _ = transformed_mod;
     _ = body_mod;
     _ = query_mod;
     _ = system_mod;

@@ -421,8 +421,23 @@ pub const Ragdoll = struct {
         c.zjoltRagdollAddRef(self.handle);
     }
 
-    /// Destroys every body the ragdoll owns (removing them from their system
-    /// first if still added) once the last reference drops.
+    /// Drops one reference, and destroys every body the ragdoll owns once
+    /// the last one goes.
+    ///
+    /// CALL `removeFromPhysicsSystem` FIRST. Releasing the last reference to
+    /// a ragdoll that is still added destroys bodies the broad phase still
+    /// holds: Jolt asserts on it in a build with assertions, and silently
+    /// corrupts the broad phase in one without. It is Jolt's ownership rule
+    /// rather than one this package adds — `~Ragdoll` destroys the bodies
+    /// directly and cannot remove them itself, because by then it no longer
+    /// knows whether they were ever added.
+    ///
+    /// ```zig
+    /// ragdoll.removeFromPhysicsSystem(true);
+    /// ragdoll.release();
+    /// ```
+    ///
+    /// Removing is not idempotent either, so remove exactly once.
     pub fn release(self: Ragdoll) void {
         c.zjoltRagdollRelease(self.handle);
     }
@@ -439,6 +454,35 @@ pub const Ragdoll = struct {
 
     pub fn removeFromPhysicsSystem(self: Ragdoll, lock_bodies: bool) void {
         c.zjoltRagdollRemoveFromPhysicsSystem(self.handle, lock_bodies);
+    }
+
+    /// How many bodies the ragdoll owns — one per skeleton joint.
+    pub fn bodyCount(self: Ragdoll) u32 {
+        var count: u32 = undefined;
+        // Cannot fail: a size query on a non-null ragdoll.
+        err.check(c.zjoltRagdollGetBodyIds(self.handle, null, 0, &count)) catch unreachable;
+        return count;
+    }
+
+    /// Writes the ragdoll's body ids into `out`, indexed by joint — so
+    /// `out[i]` is the body built from skeleton joint `i`.
+    ///
+    /// This is how a contact or a ray hit gets mapped back to a limb, and how
+    /// `BodyInterface` reaches one part on its own. `out` must have at least
+    /// `bodyCount()` entries; a shorter one reports `error.BufferTooSmall`
+    /// and writes nothing.
+    ///
+    /// The ids stay valid until the ragdoll's last reference drops. They name
+    /// bodies the ragdoll owns — do not destroy one through `BodyInterface`.
+    pub fn getBodyIds(self: Ragdoll, out: []body_mod.BodyId) err.Error![]body_mod.BodyId {
+        var count: u32 = undefined;
+        try err.check(c.zjoltRagdollGetBodyIds(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return out[0..count];
     }
 
     pub fn activate(self: Ragdoll, lock_bodies: bool) void {

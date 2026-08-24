@@ -420,6 +420,18 @@ ZJOLT_API ZJoltResult zjoltHairSetTransform(ZJoltHair *hair,
                                             const ZJoltRVec3 *position,
                                             const ZJoltQuat *rotation);
 
+/// Where the hair is, as last set — the matrix that takes the LOCAL-space
+/// vertices zjoltHairGetVertices reports into world space. Either out
+/// pointer may be NULL.
+///
+/// Cached on this side, because JPH::Hair takes a transform and never gives
+/// it back. It therefore reports what zjoltHairSetTransform or
+/// zjoltHairFollowBody last put there, which is the same thing the solver is
+/// using.
+ZJOLT_API ZJoltResult zjoltHairGetTransform(const ZJoltHair *hair,
+                                            ZJoltRVec3 *out_position,
+                                            ZJoltQuat *out_rotation);
+
 /// Takes the transform from a body, which is the usual way to hang hair on a
 /// head. Equivalent to reading the body's position and rotation and calling
 /// zjoltHairSetTransform, and returns ZJOLT_RESULT_BODY_NOT_FOUND when the id
