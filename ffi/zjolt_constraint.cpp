@@ -741,6 +741,29 @@ bool zjoltConstraintIsActive(const ZJoltConstraint *constraint) {
   return zjolt::ToJolt(constraint)->IsActive();
 }
 
+ZJoltResult zjoltConstraintActivate(ZJoltPhysicsSystem *system,
+                                    ZJoltConstraint *constraint) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system, constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::Constraint *base = zjolt::ToJolt(constraint);
+  if (base->GetType() != JPH::EConstraintType::TwoBodyConstraint) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint is not a two-body constraint");
+  }
+  const JPH::TwoBodyConstraint *two =
+      static_cast<const JPH::TwoBodyConstraint *>(base);
+
+  if (!BodiesBelongTo(system, two)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the constraint's bodies do not belong to this physics system");
+  }
+
+  system->system.GetBodyInterface().ActivateConstraint(two);
+  return ZJOLT_RESULT_OK;
+}
+
 void zjoltConstraintSetUserData(ZJoltConstraint *constraint,
                                 uint64_t user_data) {
   if (constraint == nullptr) return;

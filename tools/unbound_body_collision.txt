@@ -1,0 +1,609 @@
+# Exhaustive classification of every name `tools/coverage.sh Physics/Body`
+# and `tools/coverage.sh Physics/Collision` report unbound, against the four
+# categories:
+#
+#   INTERNAL         solver step, island building, *Internal, SIMD, tree/
+#                     allocator internals. No host ever calls it.
+#   EXTENSION_POINT   a C++ interface a host would subclass, already turned
+#                     into a C callback. The zjolt entry point is named.
+#   BOUND_ELSEWHERE   reachable under a different name, or trivially
+#                     composable/reconstructable from what is already bound,
+#                     or is a *Settings companion class (settings do not
+#                     cross this ABI by design; the zjoltXCreate* call that
+#                     takes the same parameters directly is named).
+#   REAL_GAP          bind-worthy. "(bound)" marks ones bound in this pass;
+#                     "(deferred: reason)" marks ones judged real but not
+#                     bound, with why.
+#
+# Same tooling caveat throughout: the coverage script's own bound-name
+# extraction regex `[A-Za-z_ *]*` cannot match a return type containing a
+# digit (uint32_t, uint64_t, int32_t, ...), so a genuinely-bound entry point
+# with such a return type is invisible to it and its Jolt counterpart shows
+# as spuriously unbound. Caught twice below (GetNum*StepsOverride,
+# Get/SetInverseMass — the latter additionally hidden because Jolt's own
+# one-line inline definition puts JPH_ASSERT on the same line the method-name
+# regex scans, which the parser's own JPH_ASSERT-skip rule then drops
+# entirely, so it never even reaches the "unbound" list to be second-guessed).
+# Neither is a reason to trust a "bound" verdict from the tool without
+# checking; both are reasons a "looks bound" reading from raw grep can also
+# be wrong in the other direction.
+#
+# UPDATE, after tools/coverage.sh was fixed mid-pass (commit "Match coverage
+# by words, not by the flattened name"): re-ran both areas against the fixed
+# matcher and diffed old-vs-new unbound sets. The new set is a strict subset
+# of the old one in both areas (nothing newly appeared as unbound that this
+# file had not already classified), so nothing below was missed. Of the names
+# that flipped to "bound", every one already bound in this session (see the
+# REAL_GAP "(bound)" entries) is a genuine new match, confirmed by diffing
+# ffi/zjolt_body.h and ffi/zjolt_constraint.h against their committed
+# versions before this session's edits.
+#
+# The fix is not perfect: when a name's only words of 4+ characters happen to
+# be a single word (Get/Set/Add/Is are all under four characters and get
+# dropped), matching degrades back to a bare substring test, and a few names
+# flip to "bound" on a coincidental match against an UNRELATED SoftBody
+# entry point that happens to share that one word — GetRadius and
+# GetTopRadius match only via "radius" against zjoltSoftBodyGetVertexRadius,
+# GetNumFaces matches only via "faces" against
+# zjoltSoftBodySharedSettingsAddFaces/zjoltSoftBodySetFacesDoubleSided, and
+# GetVertices matches only via "vertices" against
+# zjoltSoftBodySharedSettingsAddVertices — none of which is a shape-radius or
+# shape-vertex binding. Checked directly (`grep radius`/`faces`/`vertices`
+# over the bound-name list): no shape-introspection entry point exists.
+# Their REAL_GAP verdicts below stand; the raw tool output for these four
+# specifically should not be trusted without this check. Same class of
+# false positive on the Body side for TryGetBody (survives only as "body",
+# matching any zjoltBody* name) and LockAngular (survives as "lock" +
+# "angular", matching zjoltBodyGetAngularVelocityLocked purely because
+# "locked" contains "lock") — both already correctly INTERNAL below, for
+# reasons independent of whichever way the tool's substring check falls.
+
+# =====================================================================
+# Physics/Body (171 names)
+# =====================================================================
+
+AccumulateSleepTime	INTERNAL	solver's own per-step sleep-timer bookkeeping
+ActivateBodies	BOUND_ELSEWHERE	zjoltBodyActivateBatch (ffi/zjolt_batch.h; zjolt_batch.cpp:347 calls BodyInterface::ActivateBodies)
+ActivateBodiesInAABox	BOUND_ELSEWHERE	zjoltBodyActivateInBox (ffi/zjolt_batch.h; zjolt_batch.cpp:379)
+ActivateBody	BOUND_ELSEWHERE	zjoltBodyActivate
+ActivateConstraint	REAL_GAP	(bound) zjoltConstraintActivate, ffi/zjolt_constraint.{h,cpp} — wakes both bodies of a TwoBodyConstraint; nothing did this before
+AddAngularVelocityStep	INTERNAL	solver sub-step integration accumulator
+AddBodiesAbort	BOUND_ELSEWHERE	zjoltBodyAddBatchAbort (ffi/zjolt_batch.h)
+AddBodiesFinalize	BOUND_ELSEWHERE	zjoltBodyAddBatchFinalize (ffi/zjolt_batch.h)
+AddBodiesPrepare	BOUND_ELSEWHERE	zjoltBodyAddBatchPrepare (ffi/zjolt_batch.h)
+AddBodyWithCustomID	REAL_GAP	(bound) the host-facing entry point is BodyInterface::CreateBodyWithID, not BodyManager::AddBodyWithCustomID itself (which a host cannot call — no BodyManager handle is exposed); bound as zjoltBodyCreateWithId/zjoltBodyCreateAndAddWithId, ffi/zjolt_body.{h,cpp}
+AddForceAndTorque	REAL_GAP	(bound) zjoltBodyAddForceAndTorque — one lock, one activation check, unlike calling AddForce then AddTorque separately
+AddLinearVelocityStep	INTERNAL	solver sub-step integration accumulator
+AddRotationStep	INTERNAL	solver sub-step integration accumulator
+AllocateBody	BOUND_ELSEWHERE	zjoltBodyCreate (AllocateBody + AddBody together)
+AllocateSoftBody	BOUND_ELSEWHERE	zjoltSoftBodyCreate, ffi/zjolt_softbody.h
+ApplyAngularVelocityStep	INTERNAL	solver sub-step integration
+ApplyBodyCreationSettings	INTERNAL	Body-construction-time field application, run inside zjoltBodyCreate; not separately callable
+ApplyForceTorqueAndDragInternal	INTERNAL	*Internal, per-step solver application
+ApplyGyroscopicForceInternal	INTERNAL	*Internal, per-step solver application
+ApplyLinearVelocityStep	INTERNAL	solver sub-step integration
+ApplySoftBodyCreationSettings	BOUND_ELSEWHERE	zjoltSoftBodyCreate, ffi/zjolt_softbody.h
+AssignBodyID	REAL_GAP	(deferred: part of the decoupled CreateBodyWithoutID/AssignBodyID/DestroyBodyWithoutID allocate-off-thread pattern — niche multithreaded-loading optimization; zjoltBodyCreate/zjoltBodyCreateWithId already cover the common single-step case)
+BodyCreationSettings	BOUND_ELSEWHERE	settings do not cross this ABI; ZJoltBodyDesc + zjoltBodyCreate take the same parameters directly
+BodyDrawFilter	REAL_GAP	(deferred: debug-render body filter — no zjolt entry point takes one; zjoltPhysicsSystemDrawBodies always draws every body. Same family as ShouldDraw below. Debug-tooling value, lower priority than simulation-affecting gaps)
+BodyFilter	EXTENSION_POINT	ZJoltBodyFilter, ffi/zjolt_query.h (part of ZJoltQueryFilters)
+BodyLockBase	BOUND_ELSEWHERE	zjoltBodyLockRead/zjoltBodyLockWrite cover the capability without exposing Jolt's RAII base type
+BodyLockInterface	BOUND_ELSEWHERE	same — zjoltBodyLockRead/Write are the host-facing surface of this
+BodyLockMultiBase	BOUND_ELSEWHERE	zjoltBodyGetTransforms/zjoltBodyGetMotions (bulk read-back under one lock) is the shape zjolt chose instead of exposing Jolt's multi-lock RAII type
+BodyManager	BOUND_ELSEWHERE	BodyInterface (which zjolt wraps throughout zjolt_body.h) is BodyManager's public-facing façade
+BodyPair	INTERNAL	plain struct used as an internal contact-cache hash key
+CalculateWorldSpaceBoundsInternal	INTERNAL	*Internal
+CanBeKinematicOrDynamic	REAL_GAP	(deferred: reads back the allow_dynamic_or_kinematic flag ZJoltBodyDesc already set at creation — caller already knows what it asked for; low value)
+ClampAngularVelocity	INTERNAL	solver-internal, enforces max_angular_velocity each step; the configured limit itself is exposed via zjoltBodySetMaxAngularVelocity
+ClampLinearVelocity	INTERNAL	same, for max_linear_velocity
+ConvertShapeSettings	INTERNAL	BodyCreationSettings-internal legacy-settings conversion; ZJoltBodyDesc takes the shape directly
+CreateAndAddBody	BOUND_ELSEWHERE	zjoltBodyCreateAndAdd
+CreateAndAddSoftBody	BOUND_ELSEWHERE	zjoltSoftBodyCreateAndAdd, ffi/zjolt_softbody.h
+CreateBody	BOUND_ELSEWHERE	zjoltBodyCreate
+CreateBodyWithID	REAL_GAP	(bound) zjoltBodyCreateWithId/zjoltBodyCreateAndAddWithId, ffi/zjolt_body.{h,cpp} — see AddBodyWithCustomID above, same gap
+CreateBodyWithoutID	REAL_GAP	(deferred: decoupled allocation pattern, see AssignBodyID)
+CreateSoftBody	BOUND_ELSEWHERE	zjoltSoftBodyCreate
+CreateSoftBodyWithID	REAL_GAP	(deferred: belongs in ffi/zjolt_softbody.{h,cpp}, the SoftBody subsystem another agent owns — flagging the gap accurately, not binding it here)
+CreateSoftBodyWithoutID	REAL_GAP	(deferred: same, SoftBody subsystem)
+DeactivateBodies	BOUND_ELSEWHERE	zjoltBodyDeactivateBatch (ffi/zjolt_batch.h; zjolt_batch.cpp:366)
+DeactivateBody	BOUND_ELSEWHERE	zjoltBodyDeactivate
+DecomposePrincipalMomentsOfInertia	INTERNAL	mass-property math internal to automatic inertia computation
+DestroyBodies	BOUND_ELSEWHERE	zjoltBodyDestroyBatch (ffi/zjolt_batch.h)
+DestroyBody	BOUND_ELSEWHERE	zjoltBodyDestroy
+DestroyBodyWithoutID	REAL_GAP	(deferred: decoupled allocation pattern, see AssignBodyID)
+EAllowedDOFs	BOUND_ELSEWHERE	ZJoltAllowedDofs bit mask, zjolt_core.h / BodyDesc.allowed_dofs
+Float3	BOUND_ELSEWHERE	ZJoltVec3 is the ABI's "three floats" type throughout
+FreeBody	BOUND_ELSEWHERE	zjoltBodyDestroy
+GetAccumulatedForce	REAL_GAP	(deferred: Body::GetAccumulatedForce asserts IsDynamic() — reachable, would need the same guard pattern as zjoltBodyGetInverseInertia; niche debug/inspection value, deferred for time)
+GetAccumulatedTorque	REAL_GAP	(deferred: same as GetAccumulatedForce)
+GetActiveBodiesUnsafe	BOUND_ELSEWHERE	zjoltPhysicsSystemGetActiveBodies is the safe copy-out equivalent
+GetAllBodiesMutexMask	INTERNAL	internal per-body mutex-shard bitmask
+GetAllowedDOFs	REAL_GAP	(deferred: readback of BodyDesc.allowed_dofs; caller already knows what it set; low value)
+GetAllowSleeping	REAL_GAP	(bound) zjoltBodyGetAllowSleeping/zjoltBodySetAllowSleeping, ffi/zjolt_body.{h,cpp} — Body::GetAllowSleeping/SetAllowSleeping dereference mMotionProperties unconditionally (no null check, no assert) so this guards static bodies itself rather than forwarding a crash
+GetAngularDamping	REAL_GAP	(bound) zjoltBodyGetAngularDamping/zjoltBodySetAngularDamping — the missing runtime half of BodyDesc.angular_damping
+GetAngularDOFsMask	INTERNAL	solver-derived bitmask from allowed_dofs
+GetApplyGyroscopicForce	REAL_GAP	(deferred: mApplyGyroscopicForce is not in ZJoltBodyDesc at all — both the creation-time setting and this getter are missing; niche/advanced feature, deferred)
+GetBodyActivationListener	BOUND_ELSEWHERE	the caller already knows what it installed via zjoltPhysicsSystemSetBodyActivationListener
+GetBodyCreationSettings	BOUND_ELSEWHERE	settings do not cross this ABI; covered piecemeal by individual getters (position/rotation/velocities/friction/restitution/damping/gravity_factor/motion_type/...) — allowed_dofs and enhanced_internal_edge_removal readback specifically are tracked as their own separate gaps below
+GetBroadPhaseLayer	BOUND_ELSEWHERE	derivable from zjoltBodyGetObjectLayer + the same broad_phase_layer_for_object_layer mapping the host supplied at system creation
+GetBroadPhaseLayerInterface	INTERNAL	internal adapter wrapping the host's own layer-mapping callback, which the host already has
+GetCollideKinematicVsNonDynamic	REAL_GAP	(deferred: mCollideKinematicVsNonDynamic is not in ZJoltBodyDesc at all; niche kinematic-vs-kinematic tuning)
+GetEnhancedInternalEdgeRemovalWithBody	REAL_GAP	(deferred: no runtime getter for BodyDesc.enhanced_internal_edge_removal exists; caller already knows what it set; low value, same family as GetAllowedDOFs)
+GetHash	BOUND_ELSEWHERE	BodyId is a plain u32 the host can hash however it likes
+GetIndex	BOUND_ELSEWHERE	the low 23 bits of the already-exposed raw BodyId (documented layout)
+GetIndexAndSequenceNumber	BOUND_ELSEWHERE	identical to the raw BodyId value itself (ToJolt/ToC are the identity mapping)
+GetIndexInActiveBodiesInternal	INTERNAL	*Internal
+GetInertiaRotation	INTERNAL	principal-axis mass-property math internal
+GetInverseCenterOfMassTransform	BOUND_ELSEWHERE	host inverts the already-exposed zjoltBodyGetCenterOfMassTransform itself
+GetInverseInertiaForRotation	REAL_GAP	(deferred: computes inverse inertia for an ARBITRARY given rotation, not the body's current one — zjoltBodyGetInverseInertia already covers the body's own current orientation; specialized predictive-simulation use, low priority)
+GetInverseMassUnchecked	REAL_GAP	(deferred: no zjolt*InverseMass* entry point exists at all — Jolt's checked GetInverseMass is additionally invisible to coverage.sh, see header note; niche diagnostic value)
+GetIslandIndexInternal	INTERNAL	*Internal
+GetLinearDamping	REAL_GAP	(bound) zjoltBodyGetLinearDamping/zjoltBodySetLinearDamping — see GetAngularDamping
+GetLinearDOFsMask	INTERNAL	solver-derived bitmask, same family as GetAngularDOFsMask
+GetLocalSpaceInverseInertia	REAL_GAP	(deferred: unrotated body-space inverse inertia tensor; zjoltBodyGetInverseInertia already covers the world-space form most host code wants; niche)
+GetLocalSpaceInverseInertiaUnchecked	INTERNAL	Unchecked-suffixed internal fast path, not what a host should reach for even if the checked sibling were bound
+GetMaxBodies	BOUND_ELSEWHERE	zjoltPhysicsSystemGetMaxBodies
+GetMotionPropertiesUnchecked	INTERNAL	internal fast-path; zjolt exposes body properties through named accessors rather than a raw MotionProperties* handle
+GetMutexForBody	INTERNAL	internal per-body mutex-shard lookup; zjoltBodyLockRead/Write already give locking without this
+GetMutexMask	INTERNAL	same family as GetAllBodiesMutexMask
+GetNumActiveBodies	BOUND_ELSEWHERE	zjoltPhysicsSystemGetNumActiveBodies
+GetNumActiveCCDBodies	REAL_GAP	(deferred: no entry point anywhere exposes this count; perf-diagnostic value, lower priority)
+GetNumBodies	BOUND_ELSEWHERE	zjoltPhysicsSystemGetNumBodies
+GetNumPositionStepsOverride	REAL_GAP	(deferred: per-body solver position-iteration override on MotionProperties — distinct from Constraint's own same-named override, which IS bound (zjoltConstraintGetNumPositionStepsOverride); the tool's own bound-name regex cannot see uint32_t-returning declarations, which is why the Constraint Set* variant reads as a false "bound" match here too — neither Body-level getter nor setter is actually reachable. Real, valuable per-body solver-quality tuning; deferred for scope)
+GetNumVelocityStepsOverride	REAL_GAP	(deferred: same as GetNumPositionStepsOverride, for velocity)
+GetPointVelocityCOM	BOUND_ELSEWHERE	composable from zjoltBodyGetCenterOfMassPosition + zjoltBodyGetPointVelocity
+GetSequenceNumber	BOUND_ELSEWHERE	the high byte of the already-exposed raw BodyId (documented layout)
+GetShapeSettings	BOUND_ELSEWHERE	settings do not cross; zjoltBodyGetShapeLocked exposes the live Shape handle itself
+GetSimulationStats	REAL_GAP	(deferred: no entry point exposes PhysicsSystem's step statistics; perf/diagnostic tooling, lower priority)
+GetSleepTestOffset	INTERNAL	internal detail of the sleep-detection algorithm
+GetSoftBodyCreationSettings	REAL_GAP	(deferred: SoftBody subsystem, another agent's area)
+GetSubmergedVolume	REAL_GAP	(deferred: zjoltBodyApplyBuoyancyImpulse already computes this internally and applies the resulting force, but there is no way to just QUERY submerged volume without also applying an impulse — real, niche, deferred)
+GetTransformedShape	BOUND_ELSEWHERE	composable: zjoltBodyGetShapeLocked + zjoltBodyGetWorldTransform + zjoltTransformedShapeCreate
+GetUseManifoldReductionWithBody	INTERNAL	static/free variant used internally during contact-pair processing; the per-body flag itself is bound (zjoltBodyGetUseManifoldReduction)
+GetUserData	BOUND_ELSEWHERE	zjoltBodyGetUserData
+Grant	INTERNAL	debug-only thread-access-verification machinery (BodyManager's active-bodies-list reentrancy guard)
+GrantActiveBodiesAccess	INTERNAL	same family as Grant
+HasMassProperties	BOUND_ELSEWHERE	derivable from motion_type + allow_dynamic_or_kinematic, both already known to the caller since it set them
+IgnoreBody	EXTENSION_POINT	ZJoltBodyFilter, ffi/zjolt_query.h — a host writes `body == ignored_id` as its own one-line predicate
+IgnoreSingleBodyFilter	EXTENSION_POINT	ZJoltBodyFilter, same reasoning
+IgnoreSingleBodyFilterChained	EXTENSION_POINT	ZJoltBodyFilter — a host checks against multiple ids in its own callback
+InvalidateContactCacheForBody	BOUND_ELSEWHERE	zjoltBodyInvalidateContactCache, ffi/zjolt_group.h
+InvalidateContactCacheInternal	INTERNAL	*Internal
+IsCollisionCacheInvalid	INTERNAL	internal contact-cache bookkeeping flag
+IsDynamic	BOUND_ELSEWHERE	zjoltBodyGetMotionType == ZJOLT_MOTION_TYPE_DYNAMIC
+IsInBroadPhase	BOUND_ELSEWHERE	zjoltBodyIsAdded
+IsInvalid	BOUND_ELSEWHERE	host compares the raw BodyId to ZJOLT_BODY_ID_INVALID directly
+IsKinematic	BOUND_ELSEWHERE	zjoltBodyGetMotionType == ZJOLT_MOTION_TYPE_KINEMATIC
+IsRigidBody	BOUND_ELSEWHERE	zjoltBodyGetBodyType == ZJOLT_BODY_TYPE_RIGID_BODY
+IsSoftBody	BOUND_ELSEWHERE	zjoltBodyGetBodyType == ZJOLT_BODY_TYPE_SOFT_BODY
+IsStatic	BOUND_ELSEWHERE	zjoltBodyGetMotionType == ZJOLT_MOTION_TYPE_STATIC
+LockAllBodies	BOUND_ELSEWHERE	zjoltBodyGetTransforms/zjoltBodyGetMotions give the practical "read many under one lock" capability without exposing Jolt's whole-system lock
+LockAngular	INTERNAL	MotionProperties-internal DOF-lock-mask application
+LockTranslation	INTERNAL	same family as LockAngular
+MultiplyWorldSpaceInverseInertiaByVector	BOUND_ELSEWHERE	composable from zjoltBodyGetInverseInertia + host-side matrix-vector multiply
+OnBodyActivated	BOUND_ELSEWHERE	ZJoltBodyActivationListener, zjoltPhysicsSystemSetBodyActivationListener
+OnBodyDeactivated	BOUND_ELSEWHERE	same
+ReleaseLock	BOUND_ELSEWHERE	zjoltBodyLockReadRelease/zjoltBodyLockWriteRelease
+ReleaseLocks	BOUND_ELSEWHERE	same, multi-lock counterpart underlying the bulk read-back calls
+RemoveBodies	BOUND_ELSEWHERE	zjoltBodyRemoveBatch, ffi/zjolt_batch.h
+RemoveBody	BOUND_ELSEWHERE	zjoltBodyRemove
+ReportSimulationStats	INTERNAL	internal collector feeding GetSimulationStats, run during a step
+Reserve	BOUND_ELSEWHERE	covered by max_bodies at PhysicsSystem creation
+ResetForce	REAL_GAP	(deferred: cancels a force accumulated this frame before the step consumes it; narrow use case — normally a caller just does not call AddForce)
+ResetMotion	BOUND_ELSEWHERE	zjoltBodySetLinearAndAngularVelocity(zero, zero)
+ResetSimulationStats	INTERNAL	internal counterpart to ReportSimulationStats
+ResetSleepTestSpheres	INTERNAL	internal detail of the sleep-detection algorithm
+ResetSleepTestTimer	BOUND_ELSEWHERE	zjoltBodyResetSleepTimer
+ResetTorque	REAL_GAP	(deferred: same as ResetForce, for torque)
+RestoreBinaryState	BOUND_ELSEWHERE	zjolt_state.h/zjolt_scene.h's scene-level save/restore is the ABI-safe persistence path; Jolt's own binary stream format is deliberately not exposed for the same "settings/serialization objects do not cross" reason
+SaveBinaryState	BOUND_ELSEWHERE	same
+SaveWithChildren	BOUND_ELSEWHERE	same, zjolt_state.h/zjolt_scene.h
+ScaleToMass	BOUND_ELSEWHERE	already exposed via override_mass_properties=CALCULATE_INERTIA + BodyDesc.mass
+SetActiveBodiesLocked	INTERNAL	debug-only reentrancy-guard flag
+SetAllowSleeping	REAL_GAP	(bound) see GetAllowSleeping
+SetAngularVelocityClamped	REAL_GAP	(deferred: Body::SetAngularVelocity, which zjoltBodySetAngularVelocity binds, is the UNCLAMPED variant confirmed against BodyInterface.h's @see Body::SetAngularVelocity — the clamped-to-max_angular_velocity form is a distinct, currently-unreachable capability; host can replicate by reading max_angular_velocity and clamping client-side, so this is a convenience gap, deferred)
+SetInBroadPhaseInternal	INTERNAL	*Internal
+SetInverseInertia	INTERNAL	low-level tensor setter Jolt's own mass-property pipeline uses internally; a host configures mass via override_mass_properties+mass
+SetInverseMass	INTERNAL	same family as SetInverseInertia — low-level field write Jolt's own mass-property pipeline uses internally, paired with the already-INTERNAL GetInverseMassUnchecked above
+SetIslandIndexInternal	INTERNAL	*Internal
+SetLinearVelocityClamped	REAL_GAP	(deferred: same as SetAngularVelocityClamped, for linear velocity)
+SetMassAndInertiaOfSolidBox	REAL_GAP	(deferred: convenience for approximating a shape's inertia as a solid box of given size+density rather than its true shape — real but niche; override_mass_properties already covers the common "custom mass" need)
+SetMassProperties	REAL_GAP	(deferred: setting a fully custom inertia TENSOR, not just a scalar mass — override_mass_properties=CALCULATE_INERTIA only takes a mass today; a bigger design addition than a quick bind, deferred)
+SetObjectLayerInternal	INTERNAL	*Internal; host-facing form is zjoltBodySetObjectLayer
+SetPositionAndRotationInternal	INTERNAL	*Internal
+SetShapeInternal	INTERNAL	*Internal; host-facing form is zjoltBodySetShape
+SetShapeSettings	BOUND_ELSEWHERE	zjoltBodySetShape takes the shape directly (settings do not cross)
+ShouldCollide	EXTENSION_POINT	GroupFilter::ShouldCollide / BodyFilter::ShouldCollide — covered by ZJoltGroupFilter (ffi/zjolt_group.h, zjoltGroupFilterTableCreate) and ZJoltBodyFilter (ffi/zjolt_query.h) respectively
+ShouldCollideLocked	INTERNAL	internal locking-protocol variant of GroupFilter's own ShouldCollide, not host-facing
+ShouldDraw	REAL_GAP	(deferred: debug-render per-body filter predicate, same family as BodyDrawFilter above)
+SubAngularVelocityStep	INTERNAL	solver sub-step accumulator
+SubLinearVelocityStep	INTERNAL	solver sub-step accumulator
+SubRotationStep	INTERNAL	solver sub-step accumulator
+Succeeded	BOUND_ELSEWHERE	ZJoltBodyLock.body != NULL is the same signal (documented: "NULL when the id was stale")
+SucceededAndIsInBroadPhase	BOUND_ELSEWHERE	composable: lock.body != NULL plus zjoltBodyIsAdded
+TryGetBody	INTERNAL	raw-pointer-without-locking fast path Jolt uses in already-proven-safe contexts; a host always goes through zjoltBodyLockRead/Write
+UnassignBodyID	REAL_GAP	(deferred: decoupled allocation pattern, see AssignBodyID)
+UnassignBodyIDs	REAL_GAP	(deferred: bulk form of UnassignBodyID)
+UnlockAllBodies	BOUND_ELSEWHERE	counterpart to LockAllBodies — same reasoning
+UnlockRead	BOUND_ELSEWHERE	underlies zjoltBodyLockReadRelease
+UnlockWrite	BOUND_ELSEWHERE	underlies zjoltBodyLockWriteRelease
+UpdateCenterOfMassInternal	INTERNAL	*Internal
+UpdateSleepStateInternal	INTERNAL	*Internal; the per-step sleep-detection state machine itself
+ValidateActiveBodyBounds	INTERNAL	debug-only consistency check
+ValidateCachedBounds	INTERNAL	debug-only consistency check
+ValidateContactCacheForAllBodies	INTERNAL	debug-only consistency check
+ValidateMotion	INTERNAL	debug-only NaN/sanity check the solver runs after integration
+
+# =====================================================================
+# Physics/Collision (369 names)
+# =====================================================================
+
+AABox4EnlargeWithExtent	INTERNAL	SIMD 4-wide AABB math
+AABox4Scale	INTERNAL	SIMD 4-wide AABB math
+AABox4VsBox	INTERNAL	SIMD, broadphase tree node test
+AABox4VsPoint	INTERNAL	SIMD, broadphase tree node test
+AddBodiesAbort	BOUND_ELSEWHERE	zjoltBodyAddBatchAbort, ffi/zjolt_batch.h
+AddBodiesFinalize	BOUND_ELSEWHERE	zjoltBodyAddBatchFinalize, ffi/zjolt_batch.h
+AddBodiesPrepare	BOUND_ELSEWHERE	zjoltBodyAddBatchPrepare, ffi/zjolt_batch.h
+AddHit	EXTENSION_POINT	CollisionCollector::AddHit — covered by zjoltCastRayEach/zjoltCastShapeEach/zjoltCollideShapeEach/zjoltCollidePointEach (per-hit C callback replaces subclassing the collector)
+AddPart	BOUND_ELSEWHERE	MeshShapeSettings-internal build step; zjoltShapeCreateMesh takes triangle data directly
+AddShape	BOUND_ELSEWHERE	CompoundShapeSettings-internal; zjoltShapeCreateStaticCompound/zjoltShapeMutableCompoundAddChild take children directly
+AllocateBuffers	INTERNAL	MeshShape/HeightField internal build-time buffer allocation
+AllocateNode	INTERNAL	broadphase tree internal
+AreAllAbove	INTERNAL	SIMD lane-reduction helper
+AreAllBelow	INTERNAL	SIMD lane-reduction helper
+AtomicNodeID	INTERNAL	broadphase tree internal atomic node handle
+BoxShape	BOUND_ELSEWHERE	zjoltShapeCreateBox
+BoxShapeSettings	BOUND_ELSEWHERE	settings do not cross; zjoltShapeCreateBox takes parameters directly
+BroadPhaseLayer	BOUND_ELSEWHERE	ZJoltBroadPhaseLayer type, used throughout zjolt_broadphase.h/zjolt_system.h
+BroadPhaseLayerFilter	EXTENSION_POINT	ZJoltBroadPhaseLayerFilter, ffi/zjolt_query.h
+BroadPhaseLayerInterface	EXTENSION_POINT	the host's own layer-mapping callbacks at system creation (ffi/zjolt_system.h), which ARE this interface
+BroadPhaseLayerInterfaceMask	BOUND_ELSEWHERE	a Jolt-provided concrete implementation; the host's own callback table (above) covers the same need
+BroadPhaseLayerInterfaceTable	BOUND_ELSEWHERE	same, concrete table-based variant
+BroadPhaseQuadTree	INTERNAL	the concrete broad-phase tree implementation; touched only through PhysicsSystem/BodyInterface/broadphase query entry points
+BroadPhaseQuery	BOUND_ELSEWHERE	zjoltBroadPhaseCastRay/CollideAABox/CollideSphere/CollidePoint/CollideOrientedBox/CastAABox, ffi/zjolt_broadphase.h, are this interface's host-facing surface
+BuildTree	BOUND_ELSEWHERE	zjoltPhysicsSystemOptimizeBroadPhase
+CacheValues	INTERNAL	MeshShape-internal precomputed acceleration cache
+CalculateActiveEdges	BOUND_ELSEWHERE	runs automatically inside zjoltShapeCreateMesh
+CalculateBitsPerSampleForError	BOUND_ELSEWHERE	runs automatically inside zjoltShapeCreateHeightField
+CalculateInnerRadius	INTERNAL	construction-time computation feeding a shape's convex radius; distinct from the (deferred) public GetInnerRadius readback below
+CalculateLocalBounds	BOUND_ELSEWHERE	result exposed via zjoltShapeGetLocalBounds
+CalculateSubShapeBounds	BOUND_ELSEWHERE	result reachable via zjoltShapeGetLocalBounds / zjoltShapeGetSubShapeTransformedShape
+CanBeUpdated	INTERNAL	broadphase-tree-internal (in-place-update-vs-rebuild decision)
+CanCollide	EXTENSION_POINT	covered by ZJoltShapeFilter/ZJoltObjectLayerFilter/ZJoltBodyFilter, ffi/zjolt_query.h
+CanScaleBeRotated	BOUND_ELSEWHERE	internal helper feeding zjoltShapeIsValidScale/zjoltShapeMakeScaleValid
+CapsuleShape	BOUND_ELSEWHERE	zjoltShapeCreateCapsule
+CapsuleShapeSettings	BOUND_ELSEWHERE	settings do not cross
+CastAABoxNoLock	BOUND_ELSEWHERE	zjoltBroadPhaseCastAABox is the locked, host-facing form
+CastConvexVsTriangles	INTERNAL	narrow-phase-internal algorithm leg; covered end-to-end by zjoltCastShapeEach/zjoltCollideShapeEach
+CastRayVisitor	INTERNAL	Jolt's own tree-traversal implementation, not a host-subclassable interface
+CastRayVisitorCollector	INTERNAL	same, internal traversal glue
+CastShapeVisitor	INTERNAL	same family
+CastSphereVsTriangles	INTERNAL	narrow-phase-internal algorithm leg
+Chain	EXTENSION_POINT	a host combines two checks in its own one callback (ZJoltObjectLayerFilter/ZJoltShapeFilter etc)
+ChainAndVoid	EXTENSION_POINT	same
+ClearCachedResult	INTERNAL	contact-cache-internal memoization reset
+Clone	BOUND_ELSEWHERE	zjolt's save/restore (zjoltShapeSave/Restore, zjolt_state.h) is the ABI-level "duplicate" mechanism, not an in-memory virtual clone
+CollectTransformedShapes	BOUND_ELSEWHERE	composable from a broad-phase query's body ids + zjoltBodyGetTransformedShape-equivalent construction
+CollectTransformedShapesVisitor	INTERNAL	internal implementation detail behind the above
+CollideCompoundVsShapeVisitor	INTERNAL	narrow-phase-internal traversal
+CollideConvexVsTriangles	INTERNAL	narrow-phase-internal algorithm leg
+CollidePointVisitor	INTERNAL	internal traversal behind zjoltCollidePointEach
+CollideShapeCollector	EXTENSION_POINT	covered by zjoltCollideShapeEach
+CollideShapeResult	BOUND_ELSEWHERE	ZJoltCollideShapeHit already mirrors this struct's fields
+CollideShapeVsCompoundVisitor	INTERNAL	narrow-phase-internal traversal
+CollideShapeWithInternalEdgeRemoval	REAL_GAP	(deferred: NOT wrapped anywhere — ffi/zjolt_query_internal.h says so explicitly ("mInternalEdgeRemovalVertexToleranceSq is deliberately not exposed... nothing in this ABI wraps a query in it"). A host running its own manual shape-vs-mesh collide cannot get the ghost-collision suppression the automatic per-body enhanced_internal_edge_removal gives. Genuine, previously-flagged gap; would need a new query variant, deferred for scope)
+CollideSoftBodyVertexIterator	INTERNAL	soft-body narrow-phase-internal iterator
+CollideSoftBodyVertices	REAL_GAP	(deferred: SoftBody subsystem, another agent's area)
+CollideSoftBodyVerticesVsTriangles	INTERNAL	narrow-phase-internal leg feeding the above
+CollideSphereVsTriangles	INTERNAL	narrow-phase-internal algorithm leg
+CollisionCollector	EXTENSION_POINT	the base template interface itself; covered by the zjolt*Each callback family across zjolt_query.h/zjolt_broadphase.h/zjolt_transformed.h
+CompareExchange	INTERNAL	atomic/threading primitive
+CompoundShape	BOUND_ELSEWHERE	zjoltShapeCreateStaticCompound/zjoltShapeCreateMutableCompound
+CompoundShapeSettings	BOUND_ELSEWHERE	settings do not cross
+ConfigureLayer	BOUND_ELSEWHERE	the host's own ZJoltObjectVsBroadPhaseLayerFilter/ZJoltObjectLayerPairFilter callbacks (ffi/zjolt_system.h) configure this directly
+ConvexHullShape	BOUND_ELSEWHERE	zjoltShapeCreateConvexHull
+ConvexHullShapeSettings	BOUND_ELSEWHERE	settings do not cross
+ConvexShape	INTERNAL	abstract base; a host only ever touches concrete subtypes via zjoltShapeCreate*
+ConvexShapeSettings	BOUND_ELSEWHERE	settings do not cross
+CountAndSortTrues	INTERNAL	SIMD helper
+CountLeadingZeros	INTERNAL	bit-twiddling primitive
+Cross	BOUND_ELSEWHERE	trivial host-side vector math, not something that needs to cross the ABI
+CylinderShape	BOUND_ELSEWHERE	zjoltShapeCreateCylinder
+CylinderShapeSettings	BOUND_ELSEWHERE	settings do not cross
+DecodeSubShapeID	BOUND_ELSEWHERE	zjoltShapeGetSubShapeTransformedShape already resolves a SubShapeID internally
+Decompose	INTERNAL	mass-property eigenvalue decomposition, internal
+DecoratedShape	BOUND_ELSEWHERE	abstract base; concrete subtypes (Scaled/RotatedTranslated/OffsetCenterOfMass) covered by their own zjoltShapeCreate*
+DecoratedShapeSettings	BOUND_ELSEWHERE	settings do not cross
+DefaultBroadPhaseLayerFilter	EXTENSION_POINT	ZJoltBroadPhaseLayerFilter — a NULL filter already accepts everything, matching this Jolt default
+DefaultObjectLayerFilter	EXTENSION_POINT	ZJoltObjectLayerFilter, same reasoning
+DetermineMinAndMaxSample	BOUND_ELSEWHERE	runs automatically inside zjoltShapeCreateHeightField
+DiscardOldTree	INTERNAL	broadphase-internal, frees a previous tree generation once queries against it finish
+DrawArrow	BOUND_ELSEWHERE	zjoltDebugRendererGetLines/GetTriangles — Jolt calls this INTO the renderer zjolt already subclassed once; a host never calls or subclasses it, only reads the accumulated result
+DrawGetSupportFunction	BOUND_ELSEWHERE	same family — debug-only, output reachable via the Get* readback
+DrawGetSupportingFace	BOUND_ELSEWHERE	same family
+DrawMarker	BOUND_ELSEWHERE	same family
+DrawShrunkShape	BOUND_ELSEWHERE	same family
+DrawText3D	BOUND_ELSEWHERE	zjoltDebugRendererGetTexts
+DrawWirePolygon	BOUND_ELSEWHERE	same family as DrawArrow
+DumpTree	INTERNAL	broadphase-internal debug dump, a Jolt developer diagnostic
+EmptyShape	BOUND_ELSEWHERE	zjoltShapeCreateEmpty
+EmptyShapeSettings	BOUND_ELSEWHERE	settings do not cross
+EncapsulateChildBounds	INTERNAL	compound/broadphase-internal bounds-union bookkeeping
+EncodeSubShapeID	BOUND_ELSEWHERE	the host receives already-encoded ZJoltSubShapeId values directly in every hit struct
+EnsureSubShapeBoundsCapacity	BOUND_ELSEWHERE	runs automatically inside zjoltShapeMutableCompoundAddChild
+EstimateCollisionResponse	REAL_GAP	(deferred: free utility for a ContactListener doing custom collision response from a manifold — no zjolt entry point wraps it; specialized/advanced use, deferred)
+ExpandBy	BOUND_ELSEWHERE	trivial host-side AABox math (ZJoltAABox is a plain struct)
+FindCollidingPairs	INTERNAL	per-step broad-to-narrow-phase pairing, run internally every step
+FinishVertex	INTERNAL	MeshShape/HeightField-internal build-time streaming helper, subsumed into zjoltShapeCreateMesh/CreateHeightField
+FixNormal	INTERNAL	narrow-phase-internal active-edge normal correction
+Flush	INTERNAL	internal buffering primitive
+ForceEarlyOut	BOUND_ELSEWHERE	the host's own callback returning ZJOLT_HIT_ACTION_STOP already provides early-out
+FrameSync	INTERNAL	broadphase-internal double-buffer synchronization point
+FromSettings	BOUND_ELSEWHERE	settings do not cross; zjoltShapeCreate*/zjoltPhysicsMaterialCreate take parameters directly
+GetBaryCentricCoordinates	BOUND_ELSEWHERE	host-side math once it has face vertices from zjoltShapeGetSupportingFace
+GetBit	INTERNAL	HeightField-internal compressed-bitstream primitive
+GetBlockOffsetAndScale	INTERNAL	HeightField-internal compression detail
+GetBlockSize	BOUND_ELSEWHERE	zjoltShapeHeightFieldGetBlockSize
+GetBody1ID	BOUND_ELSEWHERE	delivered directly as a struct field in every hit/contact result
+GetBody2ID	BOUND_ELSEWHERE	same
+GetBodyLocation	INTERNAL	BodyManager-internal storage-location bookkeeping
+GetBottomRadius	REAL_GAP	(deferred: shape-introspection cluster — see GetRadius below, the flagship example)
+GetBroadPhaseLayer	BOUND_ELSEWHERE	host already has object_layer + its own mapping function
+GetBroadPhaseLayerName	BOUND_ELSEWHERE	debug-only name; the host already knows the names of layers it defined itself
+GetChildBounds	BOUND_ELSEWHERE	reachable via zjoltShapeGetSubShapeTransformedShape + zjoltShapeGetLocalBounds composition
+GetClosestPointOnTriangle	BOUND_ELSEWHERE	host-side math given triangle vertices from zjoltShapeGetTrianglesStart/Next or zjoltShapeGetSupportingFace
+GetCompoundUserData	BOUND_ELSEWHERE	closely related to, and covered by, zjoltShapeCompoundGetChildUserData
+GetContext	BOUND_ELSEWHERE	the host's own `user` pointer in every ffi callback already serves this
+GetConvexRadius	REAL_GAP	(deferred: shape-introspection cluster, see GetRadius)
+GetCurrentRoot	INTERNAL	broadphase-internal, which tree generation is current
+GetDebugName	INTERNAL	diagnostic-only naming
+GetDensity	BOUND_ELSEWHERE	density is creation-time-only; the practically useful derived value (mass/inertia) is exposed via zjoltShapeGetMassProperties
+GetDescription	INTERNAL	diagnostic-only description string
+GetEarlyOutFraction	BOUND_ELSEWHERE	the host receives the closest hit directly from the *Closest family of query entry points
+GetEdgeFlags	BOUND_ELSEWHERE	active-edge behaviour is already automatic via active_edge_mode/enhanced_internal_edge_removal; the raw per-edge bits are not separately needed
+GetFaceVertices	BOUND_ELSEWHERE	zjoltShapeGetSupportingFace
+GetFilter	BOUND_ELSEWHERE	the host already knows what filter object it installed itself
+GetGroupFilter	BOUND_ELSEWHERE	zjoltBodyGetCollisionGroup (struct includes the filter field)
+GetGroupID	BOUND_ELSEWHERE	zjoltBodyGetCollisionGroup (struct field)
+GetHalfExtent	REAL_GAP	(deferred: shape-introspection cluster, see GetRadius)
+GetHalfHeight	REAL_GAP	(deferred: shape-introspection cluster, see GetRadius)
+GetHalfHeightOfCylinder	REAL_GAP	(deferred: shape-introspection cluster, see GetRadius)
+GetHash	BOUND_ELSEWHERE	trivial host-side hash of an already-exposed plain value
+GetHeightSample	BOUND_ELSEWHERE	zjoltShapeHeightFieldGetHeights (bulk readback)
+GetIndexAndSequenceNumber	BOUND_ELSEWHERE	identical to the raw BodyId (same as Physics/Body's own entry)
+GetInertiaApproximation	BOUND_ELSEWHERE	result exposed via zjoltShapeGetMassProperties
+GetInnerRadius	REAL_GAP	(deferred: shape-introspection cluster, see GetRadius)
+GetInnerShape	BOUND_ELSEWHERE	the caller already holds the inner shape — it is what it passed to zjoltShapeCreateScaled/RotatedTranslated/OffsetCenterOfMass
+GetIntersectingSubShapes	REAL_GAP	(deferred: "which of this compound's children overlap a given box/shape" — no direct entry point; composable but clunky via per-child iteration; niche compound-introspection, deferred)
+GetIntersectingSubShapesVisitor	INTERNAL	internal implementation detail behind GetIntersectingSubShapes
+GetInverseCenterOfMassTransform	BOUND_ELSEWHERE	host inverts zjoltBodyGetCenterOfMassTransform itself
+GetInvMass	BOUND_ELSEWHERE	contact/result structs already expose what a ContactListener needs for response
+GetLeafShape	REAL_GAP	(deferred: same family as GetIntersectingSubShapes — drills through a decorated-shape/compound chain to the innermost real shape; caller usually already has it, but not always if the shape came from elsewhere; deferred)
+GetLocalTransformNoScale	BOUND_ELSEWHERE	the host already knows the rotation/translation it passed to zjoltShapeCreateRotatedTranslated
+GetMaterialIndex	BOUND_ELSEWHERE	zjoltShapeMeshGetMaterialIndex
+GetMaterials	BOUND_ELSEWHERE	zjoltShapeGetMaterialList
+GetMaxTreeDepth	INTERNAL	broadphase-internal diagnostic
+GetName	INTERNAL	diagnostic-only naming, same family as GetDebugName
+GetNodeBounds	INTERNAL	broadphase-tree-internal
+GetNodeID	INTERNAL	broadphase-tree-internal handle
+GetNodeOrBodyBounds	INTERNAL	broadphase-tree-internal
+GetNumBitsWritten	INTERNAL	HeightField-internal compression bookkeeping
+GetNumBlocks	INTERNAL	HeightField-internal compression detail, distinct from the bound public sample-count/block-size getters
+GetNumBroadPhaseLayers	BOUND_ELSEWHERE	the host already knows this — it is the count it provided via its own broadPhaseLayerCount() callback
+GetNumFaces	REAL_GAP	(deferred: shape-introspection cluster — ConvexHullShape face count)
+GetNumObjectLayers	BOUND_ELSEWHERE	the host already knows this — a value it configured itself
+GetNumPoints	REAL_GAP	(deferred: shape-introspection cluster — ConvexHullShape vertex count)
+GetNumResults	BOUND_ELSEWHERE	the host already counts hits itself as they arrive via callback
+GetNumSubShapes	BOUND_ELSEWHERE	zjoltShapeCompoundGetNumChildren
+GetNumVerticesInFace	REAL_GAP	(deferred: shape-introspection cluster — ConvexHullShape per-face vertex count, pairs with GetNumFaces/GetFaceVertices)
+GetOffset	BOUND_ELSEWHERE	the host already knows the offset it passed to zjoltShapeCreateOffsetCenterOfMass (or it is a HeightField-internal compression detail)
+GetPlanes	REAL_GAP	(deferred: shape-introspection cluster — PlaneShape's own plane equation)
+GetPointOnRay	BOUND_ELSEWHERE	trivial host-side math (origin + t*direction) given the ray it already provided
+GetPositionCOM	BOUND_ELSEWHERE	delivered directly as a result-struct field, or covered by zjoltBodyGetCenterOfMassPosition
+GetPositiveEarlyOutFraction	INTERNAL	CollisionCollector-internal default-threshold constant
+GetProcessorTickCount	INTERNAL	platform CPU-cycle timing utility, profiling-only
+GetRadius	REAL_GAP	(deferred: SHAPE-INTROSPECTION CLUSTER, the flagship example — given an opaque ZJoltShape* (from a hit result, a compound child, or a deserialized shape), a host can learn its GetSubType() and its generic bounds/volume/mass, but cannot recover the exact per-subtype construction dimensions: GetRadius (Sphere/Capsule/Cylinder), GetHalfExtent (Box), GetHalfHeight (Capsule/Cylinder), GetTopRadius/GetBottomRadius/GetHalfHeightOfCylinder (Tapered*), GetInnerRadius (TaperedCylinder), GetConvexRadius, GetPlanes (Plane), GetNumPoints/GetNumFaces/GetNumVerticesInFace/GetVertices (ConvexHull). This is real and reasonably wide — a shape editor, debug tool, or asset-introspection host would hit it immediately. NOT bound in this pass: it is one getter per convex shape subtype, roughly 15-20 new entry points with their own JPH_ASSERT/subtype-mismatch checks each, and is better done as its own focused follow-up than folded into this one. All the related names below are cross-referenced back to this entry rather than repeating the same paragraph)
+GetRangeBlock	INTERNAL	HeightField-internal compression detail
+GetReferencePointIdx	INTERNAL	ConvexHullShape-internal GJK bookkeeping
+GetResult	BOUND_ELSEWHERE	the "collect them all" family (zjoltCastRayAll etc, zjolt_transformed.h) returns exactly this via the two-call protocol
+GetSampleCount	BOUND_ELSEWHERE	zjoltShapeHeightFieldGetSampleCount
+GetScale	BOUND_ELSEWHERE	the host already knows the scale it passed to zjoltShapeCreateScaled
+GetScaled	BOUND_ELSEWHERE	zjoltShapeCreateScaled
+GetShapeScale	BOUND_ELSEWHERE	same as GetScale
+GetStatsRecursive	BOUND_ELSEWHERE	zjoltShapeGetStats (internal implementation detail feeding it for compounds)
+GetSubGroupID	BOUND_ELSEWHERE	zjoltBodyGetCollisionGroup (struct field)
+GetSubmergedVolume	REAL_GAP	(deferred: see Physics/Body's GetSubmergedVolume entry — same underlying gap, Shape-level overload)
+GetSubShapeID1	BOUND_ELSEWHERE	delivered directly as a result-struct field
+GetSubShapeID2	BOUND_ELSEWHERE	same
+GetSubShapeIDBits	BOUND_ELSEWHERE	zjoltShapeGetSubShapeIDBits
+GetSubShapeIDBitsRecursive	BOUND_ELSEWHERE	internal implementation detail feeding the above for compounds
+GetSubShapeIDFromIndex	REAL_GAP	(deferred: convert a compound child INDEX to a SubShapeID for use with other calls — small convenience gap, low priority)
+GetSubShapeIndexFromID	REAL_GAP	(deferred: inverse of GetSubShapeIDFromIndex)
+GetSubShapes	BOUND_ELSEWHERE	iterable via zjoltShapeCompoundGetNumChildren + per-index accessors
+GetSubShapeUserData	BOUND_ELSEWHERE	zjoltShapeCompoundGetChildUserData
+GetSupportFunction	INTERNAL	GJK/EPA convex-support-function interface, narrow-phase-internal
+GetTicks100Pct	INTERNAL	profiling-internal constant
+GetTopRadius	REAL_GAP	(deferred: shape-introspection cluster, see GetRadius)
+GetTranslation	BOUND_ELSEWHERE	the host already knows the translation it passed to zjoltShapeCreateRotatedTranslated
+GetTrianglesContextMultiVertexList	BOUND_ELSEWHERE	internal detail behind the already-bound zjoltShapeGetTrianglesStart/Next
+GetTrianglesContextVertexList	BOUND_ELSEWHERE	same
+GetTriangleUserData	BOUND_ELSEWHERE	zjoltShapeMeshGetTriangleUserData
+GetType	BOUND_ELSEWHERE	zjoltShapeGetSubType is the finer-grained equivalent zjolt chose to bind; the coarse EShapeType is derivable from it
+GetUserData	BOUND_ELSEWHERE	covered by the per-context user-data getters already bound (child/triangle/body)
+GetValue	INTERNAL	generic low-level accessor on an internal helper type
+GetVertex1	BOUND_ELSEWHERE	composable via zjoltShapeGetTrianglesStart/Next for a triangle shape
+GetVertex2	BOUND_ELSEWHERE	same
+GetVertex3	BOUND_ELSEWHERE	same
+GetVertices	REAL_GAP	(deferred: shape-introspection cluster — ConvexHullShape's own vertex list, distinct from mesh triangle streaming)
+GetWorldSpaceContactPointOn1	BOUND_ELSEWHERE	delivered directly as a result-struct field
+GetWorldSpaceContactPointOn2	BOUND_ELSEWHERE	same
+GroupID	BOUND_ELSEWHERE	the type itself, already used as a field in ZJoltCollisionGroup
+HadHit	BOUND_ELSEWHERE	the host already knows whether it received a callback / how many results it collected
+HasBodies	BOUND_ELSEWHERE	composable — a query with ZJOLT_HIT_ACTION_STOP on first hit already answers "does anything overlap" cheaply
+HeightFieldShape	BOUND_ELSEWHERE	zjoltShapeCreateHeightField
+HeightFieldShapeSettings	BOUND_ELSEWHERE	settings do not cross
+InternalEdgeRemovingCollector	INTERNAL	the concrete collector implementing CollideShapeWithInternalEdgeRemoval (above); implementation detail of that (deferred) gap, not separately bindable
+InvalidateChildBounds	BOUND_ELSEWHERE	runs automatically inside zjoltShapeMutableCompound* mutators
+InversedRotationTranslation	BOUND_ELSEWHERE	trivial host-side math
+IsBody	BOUND_ELSEWHERE	comparing a SubShapeId against ZJOLT_SUB_SHAPE_ID_EMPTY already answers this
+IsClose	BOUND_ELSEWHERE	trivial host-side float/vector comparison
+IsDirty	INTERNAL	broadphase-tree-internal rebuild flag
+IsEdgeActive	BOUND_ELSEWHERE	same reasoning as GetEdgeFlags — behaviour is automatic
+IsEmpty	BOUND_ELSEWHERE	zjoltShapeGetSubType == ZJOLT_SHAPE_SUB_TYPE_EMPTY, or the host's own accumulated-result count
+IsInsideOut	BOUND_ELSEWHERE	zjoltShapeCreateConvexHull/CreateMesh already refuse degenerate input with a specific error (see "a malformed mesh is refused with a reason" test)
+IsNode	INTERNAL	broadphase-tree-internal leaf/node discriminator
+IsNotScaled	BOUND_ELSEWHERE	the host already knows the scale it passed in
+IsSphere	BOUND_ELSEWHERE	zjoltShapeGetSubType == ZJOLT_SHAPE_SUB_TYPE_SPHERE
+IsSubShapeIDValid	BOUND_ELSEWHERE	misuse is caught by the ordinary INVALID_ARGUMENT error path of whichever call consumes the id
+IsUniformScale	BOUND_ELSEWHERE	the host already knows the scale it passed in
+IsUniformScaleXZ	BOUND_ELSEWHERE	same
+IsVoided	BOUND_ELSEWHERE	zjoltShapeHeightFieldIsNoCollision
+IsZeroScale	BOUND_ELSEWHERE	the host already knows the scale it passed in
+LeafShape	REAL_GAP	(deferred: same family as GetIntersectingSubShapes — a struct pairing a compound leaf's shape+transform; cross-referenced there)
+LengthSq	BOUND_ELSEWHERE	trivial host-side vector math
+LockModifications	BOUND_ELSEWHERE	the batch add/remove protocol (zjoltBodyAddBatchPrepare/Finalize) already covers this
+MakeNonZeroScale	BOUND_ELSEWHERE	internal helper feeding zjoltShapeMakeScaleValid
+MakeSubShapeIDRelativeToShape	BOUND_ELSEWHERE	the host receives already-rebased SubShapeId values directly from hit callbacks
+MakeUniformScale	BOUND_ELSEWHERE	internal helper, same family as MakeNonZeroScale
+MakeUniformScaleXZ	BOUND_ELSEWHERE	same
+ManifoldBetweenTwoFaces	BOUND_ELSEWHERE	the resulting contact points are what a ContactListener already receives via zjoltPhysicsSystemSetContactListener
+MapObjectToBroadPhaseLayer	BOUND_ELSEWHERE	the host's own broad_phase_layer_for_object_layer callback IS this mapping
+MarkNodeAndParentsChanged	INTERNAL	broadphase-tree-internal
+MeshShape	BOUND_ELSEWHERE	zjoltShapeCreateMesh
+MeshShapeSettings	BOUND_ELSEWHERE	settings do not cross
+ModifyShape	REAL_GAP	(deferred: MutableCompoundShape in-place child-shape swap without removing+re-adding — real but niche convenience beyond AddChild/RemoveChild/MoveChild)
+ModifyShapes	REAL_GAP	(deferred: bulk form of ModifyShape)
+Multiply3x3	INTERNAL	SIMD matrix-math primitive
+Multiply3x3LeftTransposed	INTERNAL	SIMD matrix-math primitive
+Multiply3x3Transposed	INTERNAL	SIMD matrix-math primitive
+MustBeStatic	BOUND_ELSEWHERE	which shape kinds require a static body is documented Jolt behaviour the host already follows when choosing motion_type
+MutableCompoundShape	BOUND_ELSEWHERE	zjoltShapeCreateMutableCompound
+MyCollector	INTERNAL	tooling noise — an example/sample class name, not production API surface
+Node	INTERNAL	broadphase-tree-internal type
+NodeID	INTERNAL	broadphase-tree-internal type
+NotifyBodiesAABBChanged	REAL_GAP	(deferred: bulk "refresh these AABBs" between per-body zjoltBodyNotifyShapeChanged and whole-system zjoltPhysicsSystemOptimizeBroadPhase — real middle ground, niche, deferred)
+NotifyBodiesLayerChanged	BOUND_ELSEWHERE	already covered end-to-end by zjoltBodySetObjectLayer, which notifies the broad phase internally
+ObjectLayerFilter	EXTENSION_POINT	ZJoltObjectLayerFilter, ffi/zjolt_query.h
+ObjectLayerPairFilter	EXTENSION_POINT	ZJoltObjectLayerPairFilter, ffi/zjolt_system.h
+ObjectLayerPairFilterTable	BOUND_ELSEWHERE	Jolt's own concrete table; the host's callback covers the same need
+ObjectVsBroadPhaseLayerFilter	EXTENSION_POINT	ZJoltObjectVsBroadPhaseLayerFilter, ffi/zjolt_system.h
+ObjectVsBroadPhaseLayerFilterMask	BOUND_ELSEWHERE	Jolt's own concrete bitmask filter; the host's callback covers the same need
+ObjectVsBroadPhaseLayerFilterTable	BOUND_ELSEWHERE	same, concrete table variant
+OffsetCenterOfMassShape	BOUND_ELSEWHERE	zjoltShapeCreateOffsetCenterOfMass
+OffsetCenterOfMassShapeSettings	BOUND_ELSEWHERE	settings do not cross
+OnBody	EXTENSION_POINT	covered by the per-hit callback of zjoltBroadPhaseCastRay/CollideAABox/etc (ZJoltBroadPhaseCastHit)
+OnBodyEnd	INTERNAL	internal end-of-traversal signal for a compound-aware collector; not needed by the simpler host-facing per-hit callback
+OnContactAdded	EXTENSION_POINT	ZJoltContactListener, zjoltPhysicsSystemSetContactListener
+OnContactPersisted	EXTENSION_POINT	same
+OnContactRemoved	EXTENSION_POINT	same
+OnContactValidate	EXTENSION_POINT	same
+PhysicsMaterialSimple	BOUND_ELSEWHERE	zjoltPhysicsMaterialCreate
+PlaneShape	BOUND_ELSEWHERE	zjoltShapeCreatePlane
+PlaneShapeSettings	BOUND_ELSEWHERE	settings do not cross
+PolyhedronSubmergedVolumeCalculator	INTERNAL	buoyancy-calculation implementation detail feeding zjoltBodyApplyBuoyancyImpulse
+PopID	BOUND_ELSEWHERE	the host receives fully-formed SubShapeId values already, never builds one component-by-component
+PostTransformed	BOUND_ELSEWHERE	every result zjolt delivers is already in world space
+PostTranslated	BOUND_ELSEWHERE	same
+ProcessTriangle	INTERNAL	MeshShape-internal per-triangle narrow-phase callback
+PruneContactPoints	REAL_GAP	(deferred: standalone manifold-point-reduction utility for a host doing custom contact processing in a ContactListener — per-body use_manifold_reduction already covers the automatic case; advanced/niche, deferred)
+PushID	BOUND_ELSEWHERE	same reasoning as PopID
+QuadTree	INTERNAL	the concrete broadphase tree class
+QuickSort	INTERNAL	internal sort primitive
+RayAABox4	INTERNAL	SIMD ray-vs-4-boxes primitive
+RayCastT	BOUND_ELSEWHERE	ZJoltRayCastHit/ZJoltRayCastSettings already mirror this templated type
+RemoveBodies	BOUND_ELSEWHERE	zjoltBodyRemoveBatch — BroadPhase's own copy of the same concept as Physics/Body's entry
+RemoveShape	BOUND_ELSEWHERE	zjoltShapeMutableCompoundRemoveChild
+ReportStats	INTERNAL	profiling-internal, same family as Physics/Body's ReportSimulationStats
+ResetEarlyOutFraction	INTERNAL	CollisionCollector-internal reset between reused internal collector instances
+RestoreBinaryState	BOUND_ELSEWHERE	zjoltShapeSave/Restore and zjolt_state.h are the ABI-safe persistence path
+RestoreMaterialState	BOUND_ELSEWHERE	internal detail feeding zjoltShapeRestore, which already reconstructs materials
+RestoreSubShapeState	BOUND_ELSEWHERE	internal detail feeding zjoltShapeRestore for compounds
+Reversed	BOUND_ELSEWHERE	trivial host-side math (negate direction)
+ReversedShapeFilter	EXTENSION_POINT	ZJoltShapeFilter — a host swaps which side it checks in its own predicate
+RotatedTranslatedShape	BOUND_ELSEWHERE	zjoltShapeCreateRotatedTranslated
+RotatedTranslatedShapeSettings	BOUND_ELSEWHERE	settings do not cross
+RotateScale	INTERNAL	scale/rotation composition primitive feeding zjoltShapeIsValidScale/MakeScaleValid
+RRayCast	BOUND_ELSEWHERE	ZJoltRVec3 + direction pair already mirror a world-space ray throughout zjolt_query.h
+RShapeCast	BOUND_ELSEWHERE	ZJoltShapeCastSettings/params already mirror this
+Sanitize	INTERNAL	Jolt's own internal NaN/degenerate cleanup; zjolt does its own equivalent renormalization at its own boundary (see "a rotation that is not unit length is renormalised" test)
+SaveBinaryState	BOUND_ELSEWHERE	zjoltShapeSave
+SaveMaterialState	BOUND_ELSEWHERE	internal detail feeding zjoltShapeSave
+SaveSubShapeState	BOUND_ELSEWHERE	internal detail feeding zjoltShapeSave
+SaveWithChildren	BOUND_ELSEWHERE	zjolt_state.h/zjolt_scene.h scene-level persistence
+ScaleConvexRadius	INTERNAL	internal detail of how scale-validation adjusts a convex radius
+ScaledShape	BOUND_ELSEWHERE	zjoltShapeCreateScaled
+ScaledShapeSettings	BOUND_ELSEWHERE	settings do not cross
+SetBackFaceMode	BOUND_ELSEWHERE	already a field on ZJoltRayCastSettings/ZJoltShapeCastSettings/ZJoltCollideShapeSettings
+SetBody2	INTERNAL	internal result-assembly step; a host only ever reads a result, never mutates one
+SetBodyLocation	INTERNAL	BodyManager-internal bookkeeping
+SetBroadPhaseLayerName	INTERNAL	diagnostic-only; the host names its own layers in its own code
+SetChildBounds	INTERNAL	CompoundShape-internal bounds-cache mutator
+SetChildInvalid	INTERNAL	CompoundShape-internal
+SetCompoundUserData	BOUND_ELSEWHERE	see GetCompoundUserData
+SetContext	INTERNAL	CollisionCollector-internal; the host's own `user` pointer already serves this
+SetDensity	BOUND_ELSEWHERE	density is creation-time-only, taken directly by zjoltShapeCreate*
+SetGroupFilter	BOUND_ELSEWHERE	zjoltBodySetCollisionGroup (struct field)
+SetGroupID	BOUND_ELSEWHERE	zjoltBodySetCollisionGroup (struct field)
+SetHeights	REAL_GAP	(deferred: runtime terrain deformation for an already-built HeightFieldShape — genuinely valuable for gameplay (craters, digging) but needs careful checking of Jolt's own mutation preconditions; a bigger, focused addition, deferred)
+SetMaterial	BOUND_ELSEWHERE	materials are set per-shape at creation, taken directly by zjoltShapeCreate*
+SetMaterials	BOUND_ELSEWHERE	bulk form, same reasoning — zjoltShapeCreateMesh takes material lists directly
+SetName	INTERNAL	diagnostic-only naming
+SetPositionCOM	INTERNAL	internal result-assembly mutator, same family as SetBody2
+SetShapeScale	BOUND_ELSEWHERE	zjoltShapeScaleShape (produces a new scaled shape, matching the immutable-shapes design already used by zjoltShapeCreateScaled)
+SetSubGroupID	BOUND_ELSEWHERE	zjoltBodySetCollisionGroup (struct field)
+SetValue	INTERNAL	generic low-level setter on an internal helper type
+ShapeCastResult	BOUND_ELSEWHERE	ZJoltShapeCastHit already mirrors this
+ShapeCastT	BOUND_ELSEWHERE	ZJoltShapeCastSettings/params already mirror this templated type
+ShapeCastType	BOUND_ELSEWHERE	a compile-time template selector; zjolt's runtime API exposes the same behavioural choices through explicit fields
+ShapeFilter	EXTENSION_POINT	ZJoltShapeFilter, ffi/zjolt_query.h
+ShouldAbort	EXTENSION_POINT	the host's callback returning ZJOLT_HIT_ACTION_STOP already covers this
+ShouldCollide	EXTENSION_POINT	Collision-area occurrence of the same concept as Physics/Body's ShouldCollide entry — ZJoltShapeFilter/ZJoltObjectLayerFilter/ZJoltBroadPhaseLayerFilter family
+ShouldEarlyOut	BOUND_ELSEWHERE	the host's own callback return value communicates this
+ShouldVisitBlock	INTERNAL	broadphase-tree-internal traversal-pruning hook
+ShouldVisitNode	INTERNAL	same family
+ShouldVisitSubShape	INTERNAL	compound-traversal-internal, same family
+SignedDistance	REAL_GAP	(deferred: exact point-to-shape signed-distance query — approximable via a shape cast but not identical; niche/advanced, e.g. fluid sim or procedural placement, deferred)
+SimShapeFilter	REAL_GAP	(deferred: the PER-STEP simulation-time shape-pair filter, distinct call site from the query-time ZJoltShapeFilter — not found wrapped anywhere in zjolt_system.h or zjolt_query.h. A host wanting fine-grained control over which sub-shapes generate contacts DURING SIMULATION, not just during an explicit query, cannot express that today. Real, advanced gap — would need a new per-system callback installation point comparable in shape to ZJoltContactListener; deferred as a focused follow-up)
+SimShapeFilterWrapper	INTERNAL	Jolt's own internal adapter wrapping a SimShapeFilter instance; implementation detail of the (deferred) gap above
+Sort	INTERNAL	generic internal sort primitive
+SpecifiedBroadPhaseLayerFilter	EXTENSION_POINT	ZJoltBroadPhaseLayerFilter — a host's own predicate replaces this concrete "accept exactly these layers" helper trivially
+SpecifiedObjectLayerFilter	EXTENSION_POINT	ZJoltObjectLayerFilter, same reasoning
+SphereShape	BOUND_ELSEWHERE	zjoltShapeCreateSphere
+SphereShapeSettings	BOUND_ELSEWHERE	settings do not cross
+StartVertex	INTERNAL	MeshShape/HeightField-internal build-time streaming helper
+StaticCompoundShape	BOUND_ELSEWHERE	zjoltShapeCreateStaticCompound
+StoreFloat3	INTERNAL	SIMD store primitive
+StoreMaterialIndices	INTERNAL	MeshShape-internal build-time detail, subsumed into zjoltShapeCreateMesh
+SubGroupID	BOUND_ELSEWHERE	the type itself, already used as a field in ZJoltCollisionGroup
+SubShapeIDPair	BOUND_ELSEWHERE	the contact-listener callback's own body1/subshape1 + body2/subshape2 parameters already mirror this pair
+SwapShapes	REAL_GAP	(deferred: same family as ModifyShape/ModifyShapes)
+TaperedCapsuleShape	BOUND_ELSEWHERE	zjoltShapeCreateTaperedCapsule
+TaperedCapsuleShapeSettings	BOUND_ELSEWHERE	settings do not cross
+TaperedCylinderShape	BOUND_ELSEWHERE	zjoltShapeCreateTaperedCylinder
+TaperedCylinderShapeSettings	BOUND_ELSEWHERE	settings do not cross
+TestAnyTrue	INTERNAL	SIMD lane-reduction helper
+TestBlock	INTERNAL	broadphase-tree-internal SIMD block test
+TestBounds	INTERNAL	broadphase-tree-internal bounds test
+TrackNarrowPhaseCollector	INTERNAL	profiling-internal instrumentation wrapper
+TrackNarrowPhaseStat	INTERNAL	profiling-internal, same family
+TransformScale	INTERNAL	scale-under-transform composition primitive feeding zjoltShapeIsValidScale/MakeScaleValid
+TransformShape	BOUND_ELSEWHERE	zjoltShapeGetSubShapeTransformedShape already resolves a shape+placement under a world transform
+TriangleShape	BOUND_ELSEWHERE	zjoltShapeCreateTriangle
+TriangleShapeSettings	BOUND_ELSEWHERE	settings do not cross
+TryCreateNewRoot	INTERNAL	broadphase-tree-internal
+TryInsertLeaf	INTERNAL	broadphase-tree-internal
+UnlockModifications	BOUND_ELSEWHERE	counterpart to LockModifications — same reasoning
+UpdateEarlyOutFraction	INTERNAL	CollisionCollector-internal, same family as GetEarlyOutFraction
+UpdateFinalize	INTERNAL	broadphase-internal, implementation behind zjoltPhysicsSystemOptimizeBroadPhase
+UpdatePenetration	INTERNAL	narrow-phase-internal GJK/EPA refinement step
+UpdatePrepare	INTERNAL	broadphase-internal, same family as UpdateFinalize
+ValidateTree	INTERNAL	broadphase-internal debug-only consistency check
+VisitNodes	INTERNAL	broadphase-tree-internal traversal
+VisitShape	INTERNAL	Shape-internal double-dispatch visitor Jolt uses to implement per-subtype algorithms
+VoidFeatures	INTERNAL	HeightField-internal "hole" bookkeeping, feeds zjoltShapeHeightFieldIsNoCollision
+WalkHeightField	INTERNAL	HeightField-internal traversal, feeds zjoltShapeHeightFieldProjectOntoSurface/GetHeights
+WalkSubShapes	INTERNAL	CompoundShape-internal traversal, feeds the already-bound per-child accessors
+WalkTree	INTERNAL	broadphase-tree-internal traversal
+WalkTreePerTriangle	INTERNAL	broadphase/mesh-internal traversal
+WidenAndMarkNodeAndParentsChanged	INTERNAL	broadphase-tree-internal, same family as MarkNodeAndParentsChanged

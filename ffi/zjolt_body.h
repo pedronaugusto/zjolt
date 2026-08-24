@@ -72,6 +72,28 @@ ZJOLT_API ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                             ZJoltActivation activation,
                                             ZJoltBodyId *out);
 
+/// As zjoltBodyCreate, but the body takes the id the caller names instead of
+/// the next one Jolt would assign — the id deterministic lockstep networking
+/// needs a body to carry identically on every peer.
+///
+/// `id` must not be ZJOLT_BODY_ID_INVALID, must not already name a live body,
+/// and must not set bit 31: that bit is reserved for the broad phase's own
+/// bookkeeping, and Jolt's own id constructor asserts on it rather than
+/// reporting it. An id round-tripped from zjoltBodyGetId or zjoltBodyCreate's
+/// own `out` always satisfies this; one built by hand from an arbitrary
+/// integer might not, which is why this checks rather than trusting the
+/// caller. A violation of any of the three is ZJOLT_RESULT_INVALID_ARGUMENT.
+ZJOLT_API ZJoltResult zjoltBodyCreateWithId(ZJoltPhysicsSystem *system,
+                                            const ZJoltBodyDesc *desc,
+                                            ZJoltBodyId id, ZJoltBodyId *out);
+
+/// As zjoltBodyCreateWithId, followed immediately by zjoltBodyAdd.
+ZJOLT_API ZJoltResult zjoltBodyCreateAndAddWithId(ZJoltPhysicsSystem *system,
+                                                  const ZJoltBodyDesc *desc,
+                                                  ZJoltBodyId id,
+                                                  ZJoltActivation activation,
+                                                  ZJoltBodyId *out);
+
 /// Removes the body if it is still added, then destroys it. The id becomes
 /// stale; further calls with it report ZJOLT_RESULT_BODY_NOT_FOUND rather than
 /// touching whatever body was created next.
@@ -248,6 +270,14 @@ ZJOLT_API void zjoltBodyAddForceAtPoint(ZJoltPhysicsSystem *system,
                                         const ZJoltRVec3 *point);
 ZJOLT_API void zjoltBodyAddTorque(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                                   const ZJoltVec3 *torque);
+/// As calling zjoltBodyAddForce then zjoltBodyAddTorque, but under the SAME
+/// body lock and the SAME activation check — the two separate calls can
+/// straddle a concurrent step and leave it seeing only the force applied
+/// this sub-step; this cannot.
+ZJOLT_API void zjoltBodyAddForceAndTorque(ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body,
+                                          const ZJoltVec3 *force,
+                                          const ZJoltVec3 *torque);
 ZJOLT_API void zjoltBodyAddImpulse(ZJoltPhysicsSystem *system,
                                    ZJoltBodyId body,
                                    const ZJoltVec3 *impulse);
@@ -334,6 +364,42 @@ ZJOLT_API void zjoltBodySetUseManifoldReduction(ZJoltPhysicsSystem *system,
                                                 bool use_reduction);
 ZJOLT_API bool zjoltBodyGetUseManifoldReduction(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Whether this body is allowed to settle and go to sleep. Disabling it on a
+/// body that is already asleep does not wake it — pair with zjoltBodyActivate
+/// when it should.
+///
+/// Both are a no-op on a STATIC body, which has no motion properties to hold
+/// this — Jolt's own `Body::GetAllowSleeping` dereferences one unconditionally
+/// rather than asserting, so this checks the body's motion type first rather
+/// than forwarding a crash. The getter then answers true, Jolt's own
+/// construction-time default (`BodyCreationSettings::mAllowSleeping`),
+/// exactly as it does for a NULL system or a stale id.
+ZJOLT_API void zjoltBodySetAllowSleeping(ZJoltPhysicsSystem *system,
+                                         ZJoltBodyId body, bool allow);
+ZJOLT_API bool zjoltBodyGetAllowSleeping(const ZJoltPhysicsSystem *system,
+                                         ZJoltBodyId body);
+
+/// Runtime linear and angular damping: dv/dt = -c * v. ZJoltBodyDesc sets the
+/// starting value at creation; these are the missing other half, for a
+/// caller that wants to change drag after the fact instead of destroying and
+/// recreating the body — a mud patch, an underwater volume, a speed limiter.
+///
+/// `damping` must not be negative: Jolt asserts that in a build with asserts
+/// enabled, so it is checked here and refused instead of forwarded. Both are
+/// a no-op (the setters) or answer 0.05, Jolt's own construction-time default
+/// (the getters), on a STATIC body, which has no motion properties to hold
+/// this, exactly as for a NULL system or a stale id.
+ZJOLT_API ZJoltResult zjoltBodySetLinearDamping(ZJoltPhysicsSystem *system,
+                                                ZJoltBodyId body,
+                                                float damping);
+ZJOLT_API float zjoltBodyGetLinearDamping(const ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body);
+ZJOLT_API ZJoltResult zjoltBodySetAngularDamping(ZJoltPhysicsSystem *system,
+                                                 ZJoltBodyId body,
+                                                 float damping);
+ZJOLT_API float zjoltBodyGetAngularDamping(const ZJoltPhysicsSystem *system,
+                                           ZJoltBodyId body);
 
 /// Whether this body reports contacts without responding to them — a trigger
 /// volume. Unlocked counterpart of zjoltBodyIsSensorLocked; NULL system or a

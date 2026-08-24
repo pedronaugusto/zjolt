@@ -863,6 +863,51 @@ int main(void) {
             ZJOLT_RESULT_INVALID_ARGUMENT,
         "a body without a shape is refused");
 
+  /* A caller-chosen id: exactly what was asked for, a duplicate refused, and
+     the broad phase's own bit refused before it ever reaches Jolt's id
+     constructor. */
+  ZJoltBodyDesc chosen_desc;
+  zjoltBodyDescInit(&chosen_desc);
+  chosen_desc.shape = sphere;
+  chosen_desc.object_layer = LAYER_MOVING;
+  chosen_desc.position.y = (ZJoltReal)5.0;
+
+  const ZJoltBodyId chosen_id = 42u;
+  ZJoltBodyId out_id = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltBodyCreateWithId(system, &chosen_desc, chosen_id, &out_id));
+  CHECK(out_id == chosen_id, "the body got the id asked for");
+  CHECK(zjoltBodyCreateWithId(system, &chosen_desc, chosen_id, &out_id) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the same id twice is refused");
+  CHECK(zjoltBodyCreateWithId(system, &chosen_desc, chosen_id | 0x80000000u,
+                               &out_id) == ZJOLT_RESULT_INVALID_ARGUMENT,
+        "bit 31 is refused rather than reaching Jolt's assert");
+  zjoltBodyDestroy(system, chosen_id);
+
+  /* AllowSleeping and both dampings: read back what was set. */
+  CHECK(zjoltBodyGetAllowSleeping(system, ball_id), "allow_sleeping defaults true");
+  zjoltBodySetAllowSleeping(system, ball_id, false);
+  CHECK(!zjoltBodyGetAllowSleeping(system, ball_id), "allow_sleeping took");
+  zjoltBodySetAllowSleeping(system, ball_id, true);
+
+  CHECK_OK(zjoltBodySetLinearDamping(system, ball_id, 0.3f));
+  CHECK(fabsf(zjoltBodyGetLinearDamping(system, ball_id) - 0.3f) < 1e-6f,
+        "linear damping took");
+  CHECK(zjoltBodySetLinearDamping(system, ball_id, -1.0f) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "negative linear damping is refused");
+  CHECK_OK(zjoltBodySetAngularDamping(system, ball_id, 0.3f));
+  CHECK(fabsf(zjoltBodyGetAngularDamping(system, ball_id) - 0.3f) < 1e-6f,
+        "angular damping took");
+  CHECK(zjoltBodySetAngularDamping(system, ball_id, -1.0f) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "negative angular damping is refused");
+
+  /* A force and a torque in one call: both still wait for the step. */
+  const ZJoltVec3 force = {0.0f, 0.0f, 100.0f};
+  const ZJoltVec3 torque = {0.0f, 50.0f, 0.0f};
+  zjoltBodyAddForceAndTorque(system, ball_id, &force, &torque);
+
   /* Jolt asserts its way out of a max_bodies past its id range; this has to
      come back as an error instead. */
   ZJoltPhysicsSystemDesc huge = system_desc;

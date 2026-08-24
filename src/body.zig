@@ -152,6 +152,34 @@ pub const BodyInterface = struct {
         return id;
     }
 
+    /// As `create`, but the body takes `id` instead of the next one Jolt
+    /// would assign — the id deterministic lockstep networking needs a body
+    /// to carry identically on every peer.
+    ///
+    /// `id` must not be `invalid_body_id`, must not already name a live
+    /// body, and must not set bit 31 (Jolt reserves it for the broad phase).
+    /// An id round-tripped from a body this binding already created always
+    /// satisfies all three; error.Error.InvalidArgument otherwise.
+    pub fn createWithId(self: BodyInterface, desc: BodyDesc, id: BodyId) err.Error!BodyId {
+        const c_desc = desc.toC();
+        var out: BodyId = invalid_body_id;
+        try err.check(c.zjoltBodyCreateWithId(self.handle, &c_desc, id, &out));
+        return out;
+    }
+
+    /// As `createWithId`, followed immediately by `add`.
+    pub fn createAndAddWithId(
+        self: BodyInterface,
+        desc: BodyDesc,
+        id: BodyId,
+        activation: Activation,
+    ) err.Error!BodyId {
+        const c_desc = desc.toC();
+        var out: BodyId = invalid_body_id;
+        try err.check(c.zjoltBodyCreateAndAddWithId(self.handle, &c_desc, id, activation, &out));
+        return out;
+    }
+
     /// Removes the body if it is still added, then destroys it. The id becomes
     /// stale; later calls with it are ignored rather than reaching whatever
     /// body was created next.
@@ -420,6 +448,19 @@ pub const BodyInterface = struct {
         c.zjoltBodyAddTorque(self.handle, body, &torque);
     }
 
+    /// As calling `addForce` then `addTorque`, but under the same body lock
+    /// and the same activation check — the two separate calls can straddle a
+    /// concurrent step and leave it seeing only the force applied this
+    /// sub-step; this cannot.
+    pub fn addForceAndTorque(
+        self: BodyInterface,
+        body: BodyId,
+        force: math.Vec3,
+        torque: math.Vec3,
+    ) void {
+        c.zjoltBodyAddForceAndTorque(self.handle, body, &force, &torque);
+    }
+
     /// Changes velocity immediately, unlike a force.
     pub fn addImpulse(self: BodyInterface, body: BodyId, impulse: math.Vec3) void {
         c.zjoltBodyAddImpulse(self.handle, body, &impulse);
@@ -578,6 +619,46 @@ pub const BodyInterface = struct {
 
     pub fn getUseManifoldReduction(self: BodyInterface, body: BodyId) bool {
         return c.zjoltBodyGetUseManifoldReduction(self.handle, body);
+    }
+
+    /// Whether this body is allowed to settle and go to sleep. Disabling it
+    /// on a body that is already asleep does not wake it — pair with
+    /// `activate` when it should.
+    ///
+    /// Both are a no-op on a static body, which has no motion properties to
+    /// hold this. The getter then answers `true`, Jolt's own
+    /// construction-time default, exactly as for a stale id.
+    pub fn setAllowSleeping(self: BodyInterface, body: BodyId, allow: bool) void {
+        c.zjoltBodySetAllowSleeping(self.handle, body, allow);
+    }
+
+    pub fn getAllowSleeping(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyGetAllowSleeping(self.handle, body);
+    }
+
+    /// Runtime linear damping: dv/dt = -c * v. `BodyDesc.linear_damping` sets
+    /// the starting value at creation; this is the missing other half, for a
+    /// caller that wants to change drag after the fact instead of destroying
+    /// and recreating the body — a mud patch, an underwater volume.
+    ///
+    /// `damping` must not be negative. A no-op (the setter) or 0.05, Jolt's
+    /// own construction-time default (the getter), on a static body, which
+    /// has no motion properties to hold this.
+    pub fn setLinearDamping(self: BodyInterface, body: BodyId, damping: f32) err.Error!void {
+        try err.check(c.zjoltBodySetLinearDamping(self.handle, body, damping));
+    }
+
+    pub fn getLinearDamping(self: BodyInterface, body: BodyId) f32 {
+        return c.zjoltBodyGetLinearDamping(self.handle, body);
+    }
+
+    /// As `setLinearDamping`/`getLinearDamping`, for angular damping.
+    pub fn setAngularDamping(self: BodyInterface, body: BodyId, damping: f32) err.Error!void {
+        try err.check(c.zjoltBodySetAngularDamping(self.handle, body, damping));
+    }
+
+    pub fn getAngularDamping(self: BodyInterface, body: BodyId) f32 {
+        return c.zjoltBodyGetAngularDamping(self.handle, body);
     }
 
     /// Whether this body reports contacts without responding to them — a

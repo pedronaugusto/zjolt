@@ -306,6 +306,8 @@ pub extern fn zjoltConstraintIsEnabled(constraint: *const Constraint) bool;
 
 pub extern fn zjoltConstraintIsActive(constraint: *const Constraint) bool;
 
+pub extern fn zjoltConstraintActivate(system: *PhysicsSystem, constraint: *Constraint) Result;
+
 pub extern fn zjoltConstraintSetUserData(constraint: *Constraint, user_data: u64) void;
 
 pub extern fn zjoltConstraintGetUserData(constraint: *const Constraint) u64;

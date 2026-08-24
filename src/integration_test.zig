@@ -880,6 +880,129 @@ test "a rotation that is not unit length is renormalised, not fatal" {
     }, null);
 }
 
+test "a body created with a custom id carries exactly that id" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const desc = zjolt.BodyDesc{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    };
+
+    // The id deterministic lockstep networking wants a body to carry
+    // identically on every peer, not the next one Jolt happens to pick.
+    const chosen: zjolt.BodyId = 42;
+    const id = try bodies.createWithId(desc, chosen);
+    try std.testing.expectEqual(chosen, id);
+    try std.testing.expect(!bodies.isAdded(id));
+
+    // The same id a second time is refused rather than silently colliding
+    // with the first body's slot.
+    try std.testing.expectError(zjolt.Error.InvalidArgument, bodies.createWithId(desc, chosen));
+
+    // Bit 31 is reserved for the broad phase; Jolt's own BodyID constructor
+    // asserts on it rather than reporting it, so this is the one input this
+    // entry point has to catch itself before ever building one.
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        bodies.createWithId(desc, chosen | 0x8000_0000),
+    );
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        bodies.createWithId(desc, zjolt.invalid_body_id),
+    );
+
+    // createAndAddWithId does the same and also adds it.
+    const second = try bodies.createAndAddWithId(desc, 43, .activate);
+    try std.testing.expectEqual(@as(zjolt.BodyId, 43), second);
+    try std.testing.expect(bodies.isAdded(second));
+
+    bodies.add(id, .activate);
+    try world.stepFor(0.5);
+    try std.testing.expect(bodies.getPosition(id).y < 5);
+}
+
+test "allow_sleeping can be changed after creation, and a static body ignores it" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 1, 0),
+        .allow_sleeping = true,
+    }, .activate);
+    try std.testing.expect(bodies.getAllowSleeping(ball));
+
+    bodies.setAllowSleeping(ball, false);
+    try std.testing.expect(!bodies.getAllowSleeping(ball));
+
+    bodies.setAllowSleeping(ball, true);
+    try std.testing.expect(bodies.getAllowSleeping(ball));
+
+    // A static body has no motion properties to hold this. Jolt's own
+    // Body::GetAllowSleeping would dereference one unconditionally; this
+    // reports Jolt's construction-time default instead, and the setter is a
+    // quiet no-op rather than a crash.
+    bodies.setAllowSleeping(world.floor, false);
+    try std.testing.expect(bodies.getAllowSleeping(world.floor));
+}
+
+test "linear and angular damping read back what was set, and refuse a negative value" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+        .gravity_factor = 0,
+        .linear_damping = 0.05,
+        .angular_damping = 0.05,
+    }, .activate);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.05), bodies.getLinearDamping(ball), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.05), bodies.getAngularDamping(ball), 1e-6);
+
+    try bodies.setLinearDamping(ball, 2.0);
+    try bodies.setAngularDamping(ball, 3.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), bodies.getLinearDamping(ball), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), bodies.getAngularDamping(ball), 1e-6);
+
+    try std.testing.expectError(zjolt.Error.InvalidArgument, bodies.setLinearDamping(ball, -1.0));
+    try std.testing.expectError(zjolt.Error.InvalidArgument, bodies.setAngularDamping(ball, -1.0));
+
+    // Heavier damping (c = 2.0) bleeds off a push far faster than the
+    // default (c = 0.05) would: dv/dt = -c * v decays to under a fifth of
+    // its start within one second at this rate, well past what rounding
+    // could explain.
+    bodies.setLinearVelocity(ball, zjolt.vec3(0, 0, 10));
+    try world.stepFor(1.0);
+    try std.testing.expect(bodies.getLinearVelocity(ball).z < 2.0);
+}
+
 test "an impulse changes velocity immediately and a force does not" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
@@ -912,6 +1035,37 @@ test "an impulse changes velocity immediately and a force does not" {
     );
     _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
     try std.testing.expect(bodies.getLinearVelocity(ball).z > 0);
+}
+
+test "a force and a torque applied together both survive to the next step" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+        .gravity_factor = 0,
+    }, .activate);
+
+    bodies.addForceAndTorque(ball, zjolt.vec3(0, 0, 100), zjolt.vec3(0, 50, 0));
+    // Both accumulate until the step, exactly as the separate calls do.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bodies.getLinearVelocity(ball).z, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bodies.getAngularVelocity(ball).y, 1e-6);
+
+    _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+
+    // Both took effect from the ONE call — not just whichever a caller would
+    // notice first if the two had silently been dropped to one.
+    try std.testing.expect(bodies.getLinearVelocity(ball).z > 0);
+    try std.testing.expect(bodies.getAngularVelocity(ball).y > 0);
 }
 
 test "a body constrained to a plane stays in it" {

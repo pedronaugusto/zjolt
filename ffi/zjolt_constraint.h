@@ -644,6 +644,17 @@ ZJOLT_API bool zjoltConstraintIsEnabled(const ZJoltConstraint *constraint);
 /// one of its two bodies awake and dynamic.
 ZJOLT_API bool zjoltConstraintIsActive(const ZJoltConstraint *constraint);
 
+/// Wakes both of `constraint`'s bodies — the pairwise counterpart of
+/// zjoltBodyActivate, for when what a caller has in hand is the joint rather
+/// than either body it names.
+///
+/// Same two refusals as zjoltConstraintAdd, and for the same reason: a
+/// constraint that is not a two-body constraint has no bodies for this to
+/// wake, and one whose bodies do not belong to `system` would wake whatever
+/// body that system happens to have at the same numeric id.
+ZJOLT_API ZJoltResult zjoltConstraintActivate(ZJoltPhysicsSystem *system,
+                                              ZJoltConstraint *constraint);
+
 ZJOLT_API void zjoltConstraintSetUserData(ZJoltConstraint *constraint,
                                           uint64_t user_data);
 ZJOLT_API uint64_t zjoltConstraintGetUserData(const ZJoltConstraint *constraint);
