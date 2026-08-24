@@ -163,6 +163,30 @@ brushes against as ground. `zjoltCharacterCreate` places the plane at the
 bottom of the character's own shape instead, which is what makes
 `zjoltCharacterGetGroundState` mean what its name says.
 
+**A compound of one sub-shape reaches `CountLeadingZeros(0)`, which is
+undefined on ARM.** `CompoundShape::GetSubShapeIDBits` sizes the index field of
+a sub-shape id as `32 - CountLeadingZeros(count - 1)`
+(`CompoundShape.h:329-334`). `Math.h:180-206` guards a zero argument on x86 and
+on E2K, RISC-V, PowerPC and LoongArch — but the ARM path is a bare
+`__builtin_clz`, for which zero is undefined. A count of one makes the argument
+zero, and a count of none underflows the subtraction into `0xffffffff` first.
+
+`StaticCompoundShapeSettings::Create` never gets there, because it simplifies a
+single child into the child itself or a `RotatedTranslatedShape`
+(`StaticCompoundShape.cpp:33-58`). `MutableCompoundShape` does not simplify, so
+one child is constructible through Jolt's ordinary API and the resulting shape
+is undefined from the constructor onward. Reproduced by building one on
+aarch64-macos with `-Dsanitize_c`, which is on by default in Debug: *"passing
+zero to clz(), which is not a valid argument"*, inside
+`MutableCompoundShape`'s own constructor.
+
+Worked around by refusing fewer than two children at both ends —
+`zjoltShapeCreateMutableCompound` and `zjoltShapeMutableCompoundRemoveChild` —
+so the shape cannot be put into that state through this ABI at all. It is the
+one place this package narrows an upstream API rather than forwarding it, and
+the narrowing is what makes the sanitizer's finding unreachable instead of
+suppressed.
+
 ## Re-vendoring procedure
 
 `ci/verify-vendor.sh` fetches the pinned commit and diffs it against `libs/`,
