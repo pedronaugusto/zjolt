@@ -13,6 +13,7 @@
         // Contributing tells people to run ci/run.sh before pushing, so a
         // fetched copy has to actually contain it, and the workflow it mirrors.
         "ci",
+        "tools",
         ".github",
         "LICENSE",
         "BINDING.md",
