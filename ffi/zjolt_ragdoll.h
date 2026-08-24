@@ -185,17 +185,6 @@ ZJOLT_API ZJoltResult zjoltSkeletonPoseCalculateJointStates(
 // RagdollSettings
 //===----------------------------------------------------------------------===//
 
-/// Deprecated spellings of ZJoltSwingType and its enumerators, which
-/// zjolt_constraint.h declares.
-///
-/// There was one enum per subsystem mirroring JPH::ESwingType, added by
-/// separate changes, and a caller should not have to know which one an entry
-/// point wants. These aliases keep existing code building; write ZJoltSwingType
-/// in anything new.
-#define ZJoltRagdollSwingType ZJoltSwingType
-#define ZJOLT_RAGDOLL_SWING_TYPE_CONE ZJOLT_SWING_TYPE_CONE
-#define ZJOLT_RAGDOLL_SWING_TYPE_PYRAMID ZJOLT_SWING_TYPE_PYRAMID
-
 /// The swing-twist constraint attaching one part to its parent, in WORLD
 /// space — the same space as the parts' ZJoltBodyDesc::position/rotation.
 /// Motor tuning is not exposed: driving through
