@@ -60,8 +60,11 @@ extern "C" {
 // clients with JPH_VERSION_ID, for the same reason.
 //===----------------------------------------------------------------------===//
 
+// Unreleased. These stay 0.0.0 until the surface is complete and a version is
+// actually cut; they are not decoration, they are folded into ZJOLT_CONFIG_ID
+// below, so a consumer built against a different header is refused at init.
 #define ZJOLT_VERSION_MAJOR 0
-#define ZJOLT_VERSION_MINOR 1
+#define ZJOLT_VERSION_MINOR 0
 #define ZJOLT_VERSION_PATCH 0
 
 /// Defined by the build when world positions are doubles. Must match the

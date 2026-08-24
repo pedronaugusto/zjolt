@@ -15,17 +15,21 @@ renderer, no entity system and no clock attached.
   host writes no `callconv(.c)` and needs no per-ABI special cases.
 - Host allocator injection: every Jolt allocation can go through your
   `std.mem.Allocator`.
-- Layout drift between the C header and the Zig externs is a **test failure**,
-  not a memory-corruption bug — including a swap of two same-sized fields,
-  and including a changed parameter count.
+- Drift between the C header and the Zig externs **fails the build**, not
+  production: a test compares the two by reflection, with nothing listed by
+  hand. Nine kinds of deliberate drift are verified to fail it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
   reach has been turned into a returned error, with a test that fails if the
   guard is removed.
 
-Status: **v0.1** — shapes, bodies, the step, queries, and `CharacterVirtual`.
-Vehicles, ragdolls, soft bodies and constraints are not exposed; see
-[Scope](#scope).
+Status: **in development, unreleased.** No version is cut yet, and the package
+is not API-stable — it is being grown into complete Jolt bindings, and naming
+and shape may change until it is.
+
+Working today: shapes, bodies, the step, queries and `CharacterVirtual`. Not
+yet exposed: constraints, vehicles, ragdolls, soft bodies, hair, debug draw,
+and the non-virtual `Character`. See [Scope](#scope).
 
 ## Usage
 
@@ -301,7 +305,7 @@ library.
 Every Zig test runs the whole library through `std.testing.allocator`, which
 fails on a leak — that is the allocator seam's assertion, not a separate one.
 `zig build test-c` proves the same property from the other side: the C smoke
-test drives the whole v0.1 slice through the header alone, with a counting
+test drives the whole exposed surface through the header alone, with a counting
 `malloc`/`free` allocator, and fails if a single byte is outstanding at the
 end.
 
