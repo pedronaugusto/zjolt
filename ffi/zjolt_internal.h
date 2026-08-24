@@ -23,6 +23,7 @@
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeID.h>
+#include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include <cmath>
@@ -391,7 +392,44 @@ class BodyFilterAdapter final : public JPH::BodyFilter {
   ZJoltBodyFilter filter_;
 };
 
-/// The three adapters a query needs, built once from an optional
+/// The narrowest of the four, and the only one Jolt asks twice.
+///
+/// One overload is for queries with no shape of their own (a ray, a point) and
+/// the other for shape-versus-shape. Both are answered by the same C callback,
+/// with the empty sub-shape id standing in for the source shape the first
+/// overload does not have — one question is easier to answer correctly than
+/// two, and no caller has yet wanted to distinguish them.
+///
+/// `mBodyID2` is Jolt's, not ours: the base class carries it and the narrow
+/// phase sets it before every call, which is the only reason this filter can
+/// say WHICH body it is being asked about.
+class ShapeFilterAdapter final : public JPH::ShapeFilter {
+ public:
+  explicit ShapeFilterAdapter(const ZJoltShapeFilter &f) : filter_(f) {}
+
+  bool ShouldCollide(const JPH::Shape *,
+                     const JPH::SubShapeID &inSubShapeIDOfShape2) const override {
+    if (filter_.should_collide == nullptr) return true;
+    return filter_.should_collide(filter_.user, ToC(mBodyID2),
+                                  ToC(inSubShapeIDOfShape2),
+                                  ZJOLT_SUB_SHAPE_ID_EMPTY);
+  }
+
+  bool ShouldCollide(const JPH::Shape *,
+                     const JPH::SubShapeID &inSubShapeIDOfShape1,
+                     const JPH::Shape *,
+                     const JPH::SubShapeID &inSubShapeIDOfShape2) const override {
+    if (filter_.should_collide == nullptr) return true;
+    return filter_.should_collide(filter_.user, ToC(mBodyID2),
+                                  ToC(inSubShapeIDOfShape2),
+                                  ToC(inSubShapeIDOfShape1));
+  }
+
+ private:
+  ZJoltShapeFilter filter_;
+};
+
+/// The four adapters a query needs, built once from an optional
 /// ZJoltQueryFilters and passed to Jolt by reference.
 struct QueryFilters {
   explicit QueryFilters(const ZJoltQueryFilters *filters)
@@ -399,11 +437,13 @@ struct QueryFilters {
                                        : ZJoltBroadPhaseLayerFilter{}),
         object_layer(filters != nullptr ? filters->object_layer
                                         : ZJoltObjectLayerFilter{}),
-        body(filters != nullptr ? filters->body : ZJoltBodyFilter{}) {}
+        body(filters != nullptr ? filters->body : ZJoltBodyFilter{}),
+        shape(filters != nullptr ? filters->shape : ZJoltShapeFilter{}) {}
 
   BroadPhaseLayerFilterAdapter broad_phase;
   ObjectLayerFilterAdapter object_layer;
   BodyFilterAdapter body;
+  ShapeFilterAdapter shape;
 };
 
 //===----------------------------------------------------------------------===//
