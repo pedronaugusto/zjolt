@@ -2,9 +2,10 @@
 
 [![CI](https://github.com/pedronaugusto/zjolt/actions/workflows/ci.yml/badge.svg)](https://github.com/pedronaugusto/zjolt/actions/workflows/ci.yml)
 
-Zig bindings for [Jolt Physics](https://github.com/jrouwe/JoltPhysics) — rigid
-bodies, shapes, queries and a character controller, in a package with no
-renderer, no entity system and no clock attached.
+Zig bindings for [Jolt Physics](https://github.com/jrouwe/JoltPhysics) — the
+whole runtime, from shapes and the step to constraints, characters, vehicles,
+ragdolls, soft bodies and hair, in a package with no renderer, no entity
+system and no clock attached.
 
 - Vendored, pinned upstream Jolt (5.6.0). No fork, no patches. See
   [UPSTREAM.md](UPSTREAM.md).
@@ -17,7 +18,8 @@ renderer, no entity system and no clock attached.
   `std.mem.Allocator`.
 - Drift between the C header and the Zig externs **fails the build**, not
   production: a test compares the two by reflection, with nothing listed by
-  hand. Nine kinds of deliberate drift are verified to fail it.
+  hand. Twelve kinds of deliberate drift are verified to fail it, including a
+  field swap that leaves every offset in the struct unchanged.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
   reach has been turned into a returned error, with a test that fails if the

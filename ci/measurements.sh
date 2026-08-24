@@ -72,7 +72,7 @@ printf 'ABI drift mutations                   %s\n' \
 printf 'ci/run.sh checks (static)             %s\n' \
   "$(grep -cE "^ *run ['\"]" ci/run.sh)"
 printf 'ci/run.sh cross targets               %s\n' \
-  "$(sed -n '/^  for target in/,/^  do$/p' ci/run.sh | grep -cE '^ +[a-z0-9_]+-')"
+  "$(sed -n '/^ *for target in/,/^ *do$/p' ci/run.sh | grep -cE '^ +[a-z0-9_]+-')"
 
 # The one number in ci/run.sh that is written into a label rather than
 # computed, so it is the one that can silently disagree with the script it
