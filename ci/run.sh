@@ -12,9 +12,10 @@
 # The default is trimmed rather than complete, and that is a deliberate
 # concession to what Jolt is: 130 translation units, so a single configuration
 # is tens of seconds rather than the couple of seconds a smaller library would
-# take. `--full` adds four more optimize modes, eight cross-compilation targets
-# and six build configurations, which is several minutes. Run the default while
-# working and --full before pushing something structural.
+# take. `--full` adds four more optimize modes, eight cross-compilation targets,
+# six build configurations and the ABI drift mutation test, which is several
+# minutes. Run the default while working and --full before pushing something
+# structural.
 #
 # `ci/verify-vendor.sh` is not run here: it needs network, so it is its own CI
 # job.
@@ -94,6 +95,15 @@ if [ $FULL -eq 1 ]; then
   for mode in ReleaseSafe ReleaseFast ReleaseSmall; do
     run "test $mode" zig build test -Doptimize="$mode"
   done
+
+  #---------------------------------------------------------------------------
+  section 'ABI'
+  #---------------------------------------------------------------------------
+
+  # Mutation test for the ABI cross-check itself — see the script's own header
+  # for why a check that guards everything else needs one. It rebuilds once per
+  # mutation, which is why it is here and not in the default run.
+  run 'abi drift (9 mutations)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
   section 'Tests — build configurations'

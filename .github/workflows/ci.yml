@@ -98,6 +98,22 @@ jobs:
       - name: Shared library
         run: zig build -Dshared=true
 
+  # The ABI cross-check is the one test here that cannot test itself: a
+  # refactor that quietly makes it vacuous looks exactly like a passing build.
+  # This mutates the sources nine ways and asserts each is refused. It is not
+  # platform-specific — the comparison is between two declarations of the same
+  # header — so one host is enough, and it is its own job because it rebuilds
+  # once per mutation.
+  abi-drift:
+    name: abi drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - run: ci/check-abi-drift.sh
+
   # Compile-only coverage of the targets the suite cannot execute on. These
   # prove the sources and build graph are portable; the `test` job above is
   # what proves behaviour.
