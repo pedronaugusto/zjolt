@@ -47,6 +47,7 @@ const broadphase_mod = @import("broadphase.zig");
 const batch_mod = @import("batch.zig");
 const group_mod = @import("group.zig");
 const state_mod = @import("state.zig");
+const debug_mod = @import("debug.zig");
 
 //=============================================================================
 // Public surface
@@ -139,6 +140,16 @@ pub const max_sub_groups = group_mod.max_sub_groups;
 
 pub const State = state_mod.State;
 pub const StateRecorderState = state_mod.RecorderState;
+
+pub const DebugRenderer = debug_mod.Renderer;
+pub const DebugLine = debug_mod.Line;
+pub const DebugTriangle = debug_mod.Triangle;
+pub const DebugText = debug_mod.Text;
+pub const DebugDrawBodiesSettings = debug_mod.DrawBodiesSettings;
+pub const ShapeColor = debug_mod.ShapeColor;
+pub const defaultDrawBodiesSettings = debug_mod.defaultDrawBodiesSettings;
+pub const debugTextSlice = debug_mod.textSlice;
+pub const debug_text_max_length = debug_mod.text_max_length;
 
 pub const Queries = query_mod.Queries;
 pub const QueryFilters = query_mod.Filters;
@@ -288,6 +299,7 @@ test {
     _ = batch_mod;
     _ = group_mod;
     _ = state_mod;
+    _ = debug_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
