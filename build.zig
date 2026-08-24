@@ -9,10 +9,9 @@ const std = @import("std");
 ///
 /// Not compiled, deliberately (see UPSTREAM.md):
 ///
-///   * `Compute/{DX12,VK,MTL,CPU}` — GPU compute backends, which need the
-///     Direct3D 12, Vulkan or Metal SDKs.
-///   * `Shaders/*.cpp` — the CPU-compute shader wrappers, live only under
-///     `JPH_USE_CPU_COMPUTE`.
+///   * `Compute/{DX12,VK,MTL}` — GPU compute backends, which need the
+///     Direct3D 12, Vulkan or Metal SDKs. A host that has one supplies it
+///     through `ZJoltComputeInterface` instead; see `ffi/zjolt_hair.h`.
 ///   * `ObjectStream/*.cpp` — optional upstream (`ENABLE_OBJECT_STREAM`), and
 ///     unused here: shape serialisation goes through StreamIn/StreamOut.
 ///
@@ -152,6 +151,25 @@ const jolt_sources = [_][]const u8{
     "libs/JoltPhysics/Jolt/TriangleSplitter/TriangleSplitterMean.cpp",
 };
 
+/// Jolt's CPU implementation of the compute interface, plus the shader
+/// translation units that only exist under it. Upstream gates exactly this set
+/// on `JPH_USE_CPU_COMPUTE` (`Jolt/Jolt.cmake`), and every file below is itself
+/// wrapped in that macro, so compiling them without it would produce five empty
+/// objects rather than an error.
+///
+/// This is what makes hair usable, and testable, with no graphics SDK anywhere
+/// in the build — the hair solver runs entirely through `JPH::ComputeSystem`,
+/// and without a backend there is nothing to run it on. It is on by default and
+/// it is not fast; upstream calls it a debugging aid. A host that owns a device
+/// supplies a real one through `ZJoltComputeInterface`.
+const cpu_compute_sources = [_][]const u8{
+    "libs/JoltPhysics/Jolt/Compute/CPU/ComputeBufferCPU.cpp",
+    "libs/JoltPhysics/Jolt/Compute/CPU/ComputeQueueCPU.cpp",
+    "libs/JoltPhysics/Jolt/Compute/CPU/ComputeSystemCPU.cpp",
+    "libs/JoltPhysics/Jolt/Shaders/HairWrapper.cpp",
+    "libs/JoltPhysics/Jolt/Shaders/TestComputeWrapper.cpp",
+};
+
 /// The public headers, installed for consumers. `ffi/zjolt.h` is the umbrella
 /// that includes the rest; `ffi/zjolt_internal.h` is deliberately absent,
 /// being implementation-private.
@@ -172,6 +190,7 @@ const public_headers = [_][]const u8{
     "ffi/zjolt_softbody.h",
     "ffi/zjolt_vehicle.h",
     "ffi/zjolt_ragdoll.h",
+    "ffi/zjolt_hair.h",
 };
 
 /// The zjolt C boundary. One translation unit per concern — deliberately not a
@@ -190,6 +209,7 @@ const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_group.cpp",
     "ffi/zjolt_state.cpp",
     "ffi/zjolt_softbody.cpp",
+    "ffi/zjolt_hair.cpp",
     "ffi/zjolt_abi.cpp",
     "ffi/zjolt_vehicle.cpp",
     "ffi/zjolt_ragdoll.cpp",
@@ -259,6 +279,17 @@ pub fn build(b: *std.Build) void {
             "debug_renderer",
             "Build Jolt's debug-draw geometry collection (JPH_DEBUG_RENDERER)",
         ) orelse false,
+        // On by default, and it costs a graphics SDK exactly nothing: this is
+        // Jolt's own CPU implementation of its compute interface, which is what
+        // the hair solver runs on when the host has no device to lend. Turning
+        // it off does not remove a declaration — zjoltComputeSystemCreateCpu
+        // still exists and returns ZJOLT_RESULT_UNSUPPORTED — it removes five
+        // translation units and the shader wrappers they carry.
+        .cpu_compute = b.option(
+            bool,
+            "cpu_compute",
+            "Compile Jolt's CPU compute backend, which is what runs hair without a GPU",
+        ) orelse true,
     };
 
     if (options.object_layer_bits != 16 and options.object_layer_bits != 32) {
@@ -323,6 +354,12 @@ pub fn build(b: *std.Build) void {
         .files = &jolt_sources,
         .flags = cxx_flags,
     });
+    if (options.cpu_compute) {
+        lib.root_module.addCSourceFiles(.{
+            .files = &cpu_compute_sources,
+            .flags = cxx_flags,
+        });
+    }
     lib.root_module.addCSourceFiles(.{
         .files = &zjolt_ffi_sources,
         .flags = cxx_flags,
@@ -460,5 +497,14 @@ fn applyBuildMacros(module: *std.Build.Module, options: anytype) void {
     }
     if (options.debug_renderer) {
         module.addCMacro("JPH_DEBUG_RENDERER", "");
+    }
+    // Unlike the four above, this one changes no layout and is not folded into
+    // ZJOLT_CONFIG_ID — `ffi/zjolt.h` never reads it, because the declared
+    // surface does not move with the build. It gates whether Jolt's CPU compute
+    // translation units have any contents, and `zjoltComputeIsCpuSupported` is
+    // how a consumer asks. It is applied through the same function anyway, so
+    // that there stays exactly one place where zjolt's macros are decided.
+    if (options.cpu_compute) {
+        module.addCMacro("JPH_USE_CPU_COMPUTE", "");
     }
 }
