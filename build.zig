@@ -194,6 +194,7 @@ const public_headers = [_][]const u8{
     "ffi/zjolt_hair.h",
     "ffi/zjolt_transformed.h",
     "ffi/zjolt_scene.h",
+    "ffi/zjolt_math.h",
 };
 
 /// The zjolt C boundary. One translation unit per concern — deliberately not a
@@ -219,6 +220,7 @@ const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_ragdoll.cpp",
     "ffi/zjolt_transformed.cpp",
     "ffi/zjolt_scene.cpp",
+    "ffi/zjolt_math.cpp",
 };
 
 pub fn build(b: *std.Build) void {

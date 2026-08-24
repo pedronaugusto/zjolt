@@ -24,6 +24,7 @@ pub const debug = @import("c/debug.zig");
 pub const group = @import("c/group.zig");
 pub const hair = @import("c/hair.zig");
 pub const material = @import("c/material.zig");
+pub const math = @import("c/math.zig");
 pub const query = @import("c/query.zig");
 pub const ragdoll = @import("c/ragdoll.zig");
 pub const scene = @import("c/scene.zig");
@@ -46,6 +47,7 @@ pub const modules = .{
     group,
     hair,
     material,
+    math,
     query,
     ragdoll,
     scene,

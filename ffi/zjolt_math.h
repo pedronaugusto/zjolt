@@ -189,9 +189,10 @@ ZJOLT_API void zjoltQuatGetTwist(const ZJoltQuat *q, const ZJoltVec3 *axis,
 /// The fixed axis is the whole difference from zjoltQuatGetTwist, which takes
 /// the axis as a parameter: that call and this one agree only when the axis
 /// passed to it happens to be local X, and are different decompositions for
-/// any other axis. This fixed-X split is the one zjoltSwingTwistConstraintCreate's
-/// limits are expressed against (constraint.zig), because a constraint's
-/// twist axis is always its local X by construction.
+/// any other axis. This fixed-X split is the one
+/// zjoltConstraintCreateSwingTwist's limits are expressed against
+/// (zjolt_constraint.h), because a constraint's twist axis is always its
+/// local X by construction.
 ///
 /// Infallible: a 180-degree rotation about Y or Z — the one case with no
 /// unique twist — reports the identity twist and puts the whole rotation into
