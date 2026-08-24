@@ -217,7 +217,10 @@ pub const OverrideMassProperties = enum(c_int) {
 };
 
 pub const ShapeSubType = enum(c_int) {
-    other = 0,
+    /// Not a shape at all — what `zjoltShapeGetSubType` reports for a null
+    /// handle. Distinct from `user_defined`, which is a shape of a kind this
+    /// binding has no name for.
+    none = 0,
     sphere = 1,
     box = 2,
     capsule = 3,
@@ -236,6 +239,9 @@ pub const ShapeSubType = enum(c_int) {
     plane = 16,
     empty = 17,
     soft_body = 18,
+    /// One of the sixteen `User*` slots Jolt reserves for shape types
+    /// registered outside this library. Nothing here can construct one.
+    user_defined = 19,
 };
 
 pub const BackFaceMode = enum(c_int) {

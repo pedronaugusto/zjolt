@@ -4,13 +4,6 @@ Written down rather than remembered. Each entry says what is wrong and why it
 matters, because a list of tasks without reasons rots into a list of tasks
 nobody can evaluate.
 
-## Correctness
-
-- **`ZJOLT_SHAPE_SUB_TYPE_OTHER` still exists** even though every sub-type Jolt
-  defines is now nameable. It remains the answer for a NULL handle and for the
-  16 `User*` slots — so removing it needs a zero-valued "not a shape" first,
-  or `zjoltShapeGetSubType(NULL)` would report `SPHERE`.
-
 ## Coverage
 
 - **Behavioural tests are owed** for the subsystems added without them. The
@@ -39,3 +32,15 @@ nobody can evaluate.
   that fails the build for an unrelated reason is reported rather than counted.
 - **README numbers rot silently.** Test counts and entry-point counts are
   written by hand and nothing recomputes them.
+
+## Settled
+
+Kept here so the question is not re-opened; the reasoning lives next to the
+code, and this is the pointer to it.
+
+- **`ZJOLT_SHAPE_SUB_TYPE_OTHER` is gone, but a "kind I cannot name" value is
+  not.** It stood for two different facts. Both are now named: `NONE` is zero
+  and means the handle was NULL, and `USER_DEFINED` means a real shape from one
+  of Jolt's sixteen `User*` slots, registered outside this library. Collapsing
+  the second into the first would have `zjoltShapeGetSubType` answer "not a
+  shape" about a shape. See the enum's own comment in `ffi/zjolt_core.h`.
