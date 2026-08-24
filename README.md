@@ -27,9 +27,12 @@ system and no clock attached.
   reach has been turned into a returned error, with a test that fails if the
   guard is removed.
 
-Status: **in development, unreleased.** No version is cut yet, and the package
-is not API-stable — it is being grown into complete Jolt bindings, and naming
-and shape may change until it is.
+Status: **v0.1.0.** Every Jolt subsystem is bound and the surface is complete
+enough to build against. Still pre-1.0, so naming and shape can change between
+minor versions — but a change will be a change, not a silent one: the ABI
+cross-check makes any drift between the header and the Zig side a build
+failure, and there are no compatibility aliases anywhere, so there is exactly
+one spelling of everything.
 
 Working today: every Jolt subsystem, across 756 C entry points — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,

@@ -69,7 +69,7 @@ extern "C" {
 // actually cut; they are not decoration, they are folded into ZJOLT_CONFIG_ID
 // below, so a consumer built against a different header is refused at init.
 #define ZJOLT_VERSION_MAJOR 0
-#define ZJOLT_VERSION_MINOR 0
+#define ZJOLT_VERSION_MINOR 1
 #define ZJOLT_VERSION_PATCH 0
 
 /// Defined by the build when world positions are doubles. Must match the

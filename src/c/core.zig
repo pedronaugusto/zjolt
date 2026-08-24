@@ -29,7 +29,7 @@ pub const sub_shape_id_empty: SubShapeId = 0xffff_ffff;
 
 pub const version_major: u32 = 0;
 
-pub const version_minor: u32 = 0;
+pub const version_minor: u32 = 1;
 
 pub const version_patch: u32 = 0;
 
