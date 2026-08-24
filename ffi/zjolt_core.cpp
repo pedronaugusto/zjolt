@@ -305,10 +305,12 @@ void zjoltDeinit(void) {
   const int32_t live = g_live_handles.load(std::memory_order_relaxed);
   if (live > 0) {
     JPH::Trace(
-        "zjoltDeinit: %d handle(s) still alive (physics systems, job systems "
-        "or characters). Nothing was torn down, because restoring Jolt's "
-        "allocator now would make destroying them corrupt the heap. Destroy "
-        "them and call zjoltDeinit again.",
+        "zjoltDeinit: %d handle(s) still alive. Nothing was torn down, because "
+        "restoring Jolt's allocator now would make destroying them corrupt the "
+        "heap. Destroy them and call zjoltDeinit again. The kinds counted here "
+        "are physics systems, job systems, characters, character contact "
+        "listeners, character-vs-character collisions, debug renderers, "
+        "compute systems, hair, and vehicle constraints.",
         static_cast<int>(live));
     return;
   }

@@ -354,11 +354,18 @@ pub fn isInitialized() bool {
     return c.zjoltIsInitialized();
 }
 
-/// Physics systems, job systems and characters currently alive.
+/// Plain owning handles currently alive, across every kind there is: physics
+/// systems, job systems, characters, character contact listeners,
+/// character-vs-character collisions, debug renderers, compute systems, hair,
+/// and vehicle constraints.
 ///
 /// `deinit` refuses while this is non-zero, so a shutdown path can assert on
-/// it rather than discover the problem as heap corruption later. Shapes are
-/// not counted; Jolt reference counts those.
+/// it rather than discover the problem as heap corruption later. The full list
+/// matters for exactly that reason: a shutdown that released only the kinds it
+/// remembered has nothing else to go on.
+///
+/// Reference-counted objects — shapes, materials, group filters, constraints,
+/// ragdolls and the rest — are not counted; Jolt owns their counts.
 pub fn liveHandleCount() u32 {
     return c.zjoltLiveHandleCount();
 }
