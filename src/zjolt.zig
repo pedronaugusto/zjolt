@@ -47,6 +47,7 @@ const broadphase_mod = @import("broadphase.zig");
 const batch_mod = @import("batch.zig");
 const group_mod = @import("group.zig");
 const state_mod = @import("state.zig");
+const hair_mod = @import("hair.zig");
 
 //=============================================================================
 // Public surface
@@ -158,6 +159,27 @@ pub const GroundState = character_mod.GroundState;
 pub const BackFaceMode = character_mod.BackFaceMode;
 pub const CharacterUpdateSettings = character_mod.UpdateSettings;
 pub const defaultCharacterUpdateSettings = character_mod.defaultUpdateSettings;
+
+/// Hair, and the compute backend it runs on. There is no renderer here: the
+/// backend is either Jolt's CPU fallback, which this package compiles, or a
+/// table the host fills in over a device it already owns.
+pub const ComputeSystem = hair_mod.ComputeSystem;
+pub const ComputeBackend = hair_mod.ComputeBackend;
+pub const ComputeInterface = hair_mod.Interface;
+pub const ComputeBufferType = hair_mod.BufferType;
+pub const ComputeMapMode = hair_mod.MapMode;
+pub const ComputeBarrier = hair_mod.Barrier;
+pub const isCpuComputeSupported = hair_mod.isCpuSupported;
+
+pub const Hair = hair_mod.Hair;
+pub const Groom = hair_mod.Groom;
+pub const HairScalp = hair_mod.Scalp;
+pub const HairVertex = hair_mod.Vertex;
+pub const HairStrand = hair_mod.Strand;
+pub const HairGradient = hair_mod.Gradient;
+pub const HairSkinWeight = hair_mod.SkinWeight;
+pub const HairMaterial = hair_mod.Material;
+pub const defaultHairMaterial = hair_mod.defaultMaterial;
 
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
@@ -288,6 +310,7 @@ test {
     _ = batch_mod;
     _ = group_mod;
     _ = state_mod;
+    _ = hair_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
