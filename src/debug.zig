@@ -41,7 +41,11 @@ pub const ShapeColor = c.ShapeColor;
 /// longer; `entry.text_length` still carries the true length, so truncation
 /// is detectable rather than silent.
 pub fn textSlice(entry: *const Text) [:0]const u8 {
-    return std.mem.sliceTo(&entry.text, 0);
+    // Through a sentinel-typed pointer, so the result carries the sentinel.
+    // `sliceTo` on the array itself yields a plain slice, and the buffer is
+    // always terminated: Jolt's text is truncated to text_max_length - 1.
+    const text: [*:0]const u8 = @ptrCast(&entry.text);
+    return std.mem.sliceTo(text, 0);
 }
 
 pub const text_max_length = c.debug_text_max_length;

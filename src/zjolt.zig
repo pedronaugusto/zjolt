@@ -359,6 +359,10 @@ test {
     // with nulls, discovered by reflection rather than listed.
     _ = @import("misuse_sweep_test.zig");
 
+    // Zig analyses only what is reached, so a pub fn nobody calls is never
+    // type-checked. This walks every public declaration and forces it.
+    _ = @import("analysis_test.zig");
+
     // Test-only: this one @cImport-s the C header. Reached from a test block
     // and nowhere else, so a normal build never analyses it and the shipped
     // module stays translate-c-free.
