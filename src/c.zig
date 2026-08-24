@@ -914,3 +914,276 @@ pub extern fn zjoltBodyInvalidateContactCache(system: *PhysicsSystem, body: Body
 
 pub extern fn zjoltPhysicsSystemSaveState(system: *const PhysicsSystem, state: StateRecorderState, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 pub extern fn zjoltPhysicsSystemRestoreState(system: *PhysicsSystem, data: [*]const u8, size: usize) Result;
+
+//=============================================================================
+// Constraints
+//=============================================================================
+
+pub const Constraint = opaque {};
+pub const PathConstraintPath = opaque {};
+
+/// The body id that stands for "the world" when creating a constraint. Spelled
+/// as the invalid id because that is what Jolt's own fixed-to-world body
+/// carries, and because no real body can collide with the value.
+pub const body_id_world: BodyId = 0xffff_ffff;
+
+pub const six_dof_axis_count: u32 = 6;
+pub const six_dof_translation_axis_count: u32 = 3;
+
+pub const ConstraintSubType = enum(c_int) {
+    other = 0,
+    fixed = 1,
+    point = 2,
+    hinge = 3,
+    slider = 4,
+    distance = 5,
+    cone = 6,
+    swing_twist = 7,
+    six_dof = 8,
+    path = 9,
+    gear = 10,
+    rack_and_pinion = 11,
+    pulley = 12,
+};
+
+pub const ConstraintSpace = enum(c_int) {
+    local_to_body_com = 0,
+    world = 1,
+};
+
+pub const MotorState = enum(c_int) {
+    off = 0,
+    velocity = 1,
+    position = 2,
+    position_and_velocity = 3,
+};
+
+pub const SpringMode = enum(c_int) {
+    frequency_and_damping = 0,
+    stiffness_and_damping = 1,
+    mass_normalized_stiffness_and_damping = 2,
+};
+
+pub const SwingType = enum(c_int) {
+    cone = 0,
+    pyramid = 1,
+};
+
+pub const SixDofAxis = enum(c_int) {
+    translation_x = 0,
+    translation_y = 1,
+    translation_z = 2,
+    rotation_x = 3,
+    rotation_y = 4,
+    rotation_z = 5,
+};
+
+pub const PathRotationConstraintType = enum(c_int) {
+    free = 0,
+    constrain_around_tangent = 1,
+    constrain_around_normal = 2,
+    constrain_around_binormal = 3,
+    constrain_to_path = 4,
+    fully_constrained = 5,
+};
+
+pub const SpringSettings = extern struct {
+    mode: SpringMode = .frequency_and_damping,
+    frequency_or_stiffness: f32 = 0,
+    damping: f32 = 0,
+};
+
+pub const MotorSettings = extern struct {
+    spring: SpringSettings = .{},
+    min_force_limit: f32 = -std.math.floatMax(f32),
+    max_force_limit: f32 = std.math.floatMax(f32),
+    min_torque_limit: f32 = -std.math.floatMax(f32),
+    max_torque_limit: f32 = std.math.floatMax(f32),
+};
+
+pub const FixedConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    auto_detect_point: bool = false,
+    point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    axis_x1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    axis_y1: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    axis_x2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    axis_y2: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+};
+
+pub const PointConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+};
+
+pub const HingeConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    hinge_axis1: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    normal_axis1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    hinge_axis2: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    normal_axis2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    limits_min: f32 = -std.math.pi,
+    limits_max: f32 = std.math.pi,
+    limits_spring: SpringSettings = .{},
+    max_friction_torque: f32 = 0,
+    motor: MotorSettings = .{},
+};
+
+pub const SliderConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    auto_detect_point: bool = false,
+    point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    slider_axis1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    normal_axis1: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    slider_axis2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    normal_axis2: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    limits_min: f32 = -std.math.floatMax(f32),
+    limits_max: f32 = std.math.floatMax(f32),
+    limits_spring: SpringSettings = .{},
+    max_friction_force: f32 = 0,
+    motor: MotorSettings = .{},
+};
+
+pub const DistanceConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    min_distance: f32 = -1,
+    max_distance: f32 = -1,
+    limits_spring: SpringSettings = .{},
+};
+
+pub const ConeConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    twist_axis1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    twist_axis2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    half_cone_angle: f32 = 0,
+};
+
+pub const SwingTwistConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    position1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    twist_axis1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    plane_axis1: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    position2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    twist_axis2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    plane_axis2: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    swing_type: SwingType = .cone,
+    normal_half_cone_angle: f32 = 0,
+    plane_half_cone_angle: f32 = 0,
+    twist_min_angle: f32 = 0,
+    twist_max_angle: f32 = 0,
+    max_friction_torque: f32 = 0,
+    swing_motor: MotorSettings = .{},
+    twist_motor: MotorSettings = .{},
+};
+
+pub const SixDofConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    position1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    axis_x1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    axis_y1: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    position2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    axis_x2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    axis_y2: Vec3 = .{ .x = 0, .y = 1, .z = 0 },
+    swing_type: SwingType = .cone,
+    max_friction: [six_dof_axis_count]f32 = @splat(0),
+    limit_min: [six_dof_axis_count]f32 = @splat(-std.math.floatMax(f32)),
+    limit_max: [six_dof_axis_count]f32 = @splat(std.math.floatMax(f32)),
+    limits_spring: [six_dof_translation_axis_count]SpringSettings = @splat(.{}),
+    motor: [six_dof_axis_count]MotorSettings = @splat(.{}),
+};
+
+pub const GearConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    hinge_axis1: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    hinge_axis2: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    ratio: f32 = 1,
+};
+
+pub const RackAndPinionConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    hinge_axis: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    slider_axis: Vec3 = .{ .x = 1, .y = 0, .z = 0 },
+    ratio: f32 = 1,
+};
+
+pub const PulleyConstraintDesc = extern struct {
+    space: ConstraintSpace = .world,
+    body_point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    fixed_point1: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    body_point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    fixed_point2: RVec3 = .{ .x = 0, .y = 0, .z = 0 },
+    ratio: f32 = 1,
+    min_length: f32 = 0,
+    max_length: f32 = -1,
+};
+
+pub const PathPoint = extern struct {
+    position: Vec3,
+    tangent: Vec3,
+    normal: Vec3,
+};
+
+pub const PathConstraintDesc = extern struct {
+    path: ?*const PathConstraintPath = null,
+    path_position: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    path_rotation: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 },
+    path_fraction: f32 = 0,
+    max_friction_force: f32 = 0,
+    motor: MotorSettings = .{},
+    rotation_constraint_type: PathRotationConstraintType = .free,
+};
+
+pub extern fn zjoltPathConstraintPathCreateHermite(points: [*]const PathPoint, count: u32, is_looping: bool, out: **PathConstraintPath) Result;
+pub extern fn zjoltPathConstraintPathAddRef(path: *const PathConstraintPath) void;
+pub extern fn zjoltPathConstraintPathRelease(path: *const PathConstraintPath) void;
+pub extern fn zjoltPathConstraintPathGetRefCount(path: *const PathConstraintPath) u32;
+pub extern fn zjoltPathConstraintPathIsLooping(path: *const PathConstraintPath) bool;
+pub extern fn zjoltPathConstraintPathGetMaxFraction(path: *const PathConstraintPath) f32;
+pub extern fn zjoltPathConstraintPathGetClosestPoint(path: *const PathConstraintPath, position: *const Vec3, fraction_hint: f32, out_fraction: *f32) Result;
+pub extern fn zjoltPathConstraintPathGetPointOnPath(path: *const PathConstraintPath, fraction: f32, out_position: ?*Vec3, out_tangent: ?*Vec3, out_normal: ?*Vec3, out_binormal: ?*Vec3) Result;
+
+pub extern fn zjoltConstraintCreateFixed(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const FixedConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreatePoint(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const PointConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateHinge(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const HingeConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateSlider(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const SliderConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateDistance(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const DistanceConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateCone(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const ConeConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateSwingTwist(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const SwingTwistConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateSixDof(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const SixDofConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateGear(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const GearConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreateRackAndPinion(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const RackAndPinionConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreatePulley(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const PulleyConstraintDesc, out: **Constraint) Result;
+pub extern fn zjoltConstraintCreatePath(system: *PhysicsSystem, body1: BodyId, body2: BodyId, desc: *const PathConstraintDesc, out: **Constraint) Result;
+
+pub extern fn zjoltConstraintAddRef(constraint: *const Constraint) void;
+pub extern fn zjoltConstraintRelease(constraint: *const Constraint) void;
+pub extern fn zjoltConstraintGetRefCount(constraint: *const Constraint) u32;
+
+pub extern fn zjoltConstraintAdd(system: *PhysicsSystem, constraint: *Constraint) Result;
+pub extern fn zjoltConstraintRemove(system: *PhysicsSystem, constraint: *Constraint) Result;
+pub extern fn zjoltConstraintIsAdded(system: *const PhysicsSystem, constraint: *const Constraint) bool;
+pub extern fn zjoltPhysicsSystemGetNumConstraints(system: *const PhysicsSystem) u32;
+
+pub extern fn zjoltConstraintGetSubType(constraint: *const Constraint) ConstraintSubType;
+pub extern fn zjoltConstraintSetEnabled(constraint: *Constraint, enabled: bool) void;
+pub extern fn zjoltConstraintIsEnabled(constraint: *const Constraint) bool;
+pub extern fn zjoltConstraintIsActive(constraint: *const Constraint) bool;
+pub extern fn zjoltConstraintSetUserData(constraint: *Constraint, user_data: u64) void;
+pub extern fn zjoltConstraintGetUserData(constraint: *const Constraint) u64;
+pub extern fn zjoltConstraintSetPriority(constraint: *Constraint, priority: u32) void;
+pub extern fn zjoltConstraintGetPriority(constraint: *const Constraint) u32;
+pub extern fn zjoltConstraintSetNumVelocityStepsOverride(constraint: *Constraint, steps: u32) Result;
+pub extern fn zjoltConstraintGetNumVelocityStepsOverride(constraint: *const Constraint) u32;
+pub extern fn zjoltConstraintSetNumPositionStepsOverride(constraint: *Constraint, steps: u32) Result;
+pub extern fn zjoltConstraintGetNumPositionStepsOverride(constraint: *const Constraint) u32;
+pub extern fn zjoltConstraintGetBodies(constraint: *const Constraint, out_body1: ?*BodyId, out_body2: ?*BodyId) Result;
+pub extern fn zjoltConstraintResetWarmStart(constraint: *Constraint) void;
