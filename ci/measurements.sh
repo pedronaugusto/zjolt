@@ -66,10 +66,13 @@ printf 'C++ source lines (ffi/)               %s\n' \
 
 section "Guards"
 
-# One `try` per mutation. ci/run.sh names this count in a label, so it has to
-# be kept in step by hand — this is where to read the true one.
+# One `try` per ABI-drift mutation, one `expect` per other-guard mutation.
+# ci/run.sh names the total in a label, so it has to be kept in step by hand —
+# this is where to read the true one, and the check below says so if it drifts.
 printf 'ABI drift mutations                   %s\n' \
   "$(grep -c '^try ' ci/check-abi-drift.sh)"
+printf 'other-guard mutations                 %s\n' \
+  "$(grep -c '^expect ' ci/check-abi-drift.sh)"
 printf 'ci/run.sh checks (static)             %s\n' \
   "$(grep -cE "^ *run ['\"]" ci/run.sh)"
 printf 'ci/run.sh cross targets               %s\n' \
@@ -78,8 +81,9 @@ printf 'ci/run.sh cross targets               %s\n' \
 # The one number in ci/run.sh that is written into a label rather than
 # computed, so it is the one that can silently disagree with the script it
 # names.
-label=$(sed -n "s/.*abi drift (\([0-9]*\) mutations).*/\1/p" ci/run.sh)
-actual=$(grep -c '^try ' ci/check-abi-drift.sh)
+label=$(sed -n "s/.*guard mutations (\\([0-9]*\\)).*/\\1/p" ci/run.sh)
+actual=$(( $(grep -c '^try ' ci/check-abi-drift.sh) + \
+           $(grep -c '^expect ' ci/check-abi-drift.sh) ))
 if [ -n "$label" ] && [ "$label" != "$actual" ]; then
   printf "\n  ci/run.sh's label says %s mutations; check-abi-drift.sh has %s\n" \
     "$label" "$actual"
