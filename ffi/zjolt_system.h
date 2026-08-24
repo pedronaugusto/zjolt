@@ -236,6 +236,259 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
                                              ZJoltJobSystem *job_system,
                                              uint32_t *out_error);
 
+/// The ceiling this system was created with, which cannot grow. 0 if `system`
+/// is NULL.
+ZJOLT_API uint32_t zjoltPhysicsSystemGetMaxBodies(
+    const ZJoltPhysicsSystem *system);
+
+/// True if the two bodies were touching during the LAST step.
+///
+/// This reads the contact cache, so it answers a question about the step that
+/// has already run rather than about where the bodies are now — which is what
+/// a gameplay rule usually wants, and is far cheaper than an overlap query.
+/// Order does not matter. Do not call it during a step.
+ZJOLT_API bool zjoltPhysicsSystemWereBodiesInContact(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body1, ZJoltBodyId body2);
+
+//===----------------------------------------------------------------------===//
+// Simulation settings
+//
+// The constants of the solver, as one flat struct. This is Jolt's
+// PhysicsSettings verbatim — every field, spelled in this header's convention.
+//
+// There is no per-field setter, on purpose. Several of these interact (the two
+// iteration counts, the three sleep thresholds, the two body-pair cache
+// tolerances), and a caller holding the whole struct can see what else is in
+// play. Read, change what you mean, write it back.
+//
+// Everything here takes effect from the next step. None of it is saved by
+// zjoltPhysicsSystemSaveState: this is configuration, not state, and restoring
+// a world does not restore how it was tuned.
+//===----------------------------------------------------------------------===//
+
+typedef struct ZJoltPhysicsSettings {
+  /// Body pairs that may be in flight at once. Lower uses less memory and
+  /// stalls the narrow phase when a worker runs out of pairs to chew on. Must
+  /// be at least 1: it is a buffer length.
+  int32_t max_in_flight_body_pairs;
+  /// How many step listeners one job notifies before taking the next batch.
+  /// Must be at least 1 — a zero batch never advances the read index, and the
+  /// step never ends.
+  int32_t step_listeners_batch_size;
+  /// How many of those batches justify spawning another job. Must be at least
+  /// 1: it is a divisor. Raise it, or set it to INT32_MAX, to keep every
+  /// listener on one job when the listeners are not safe to run concurrently.
+  int32_t step_listener_batches_per_job;
+  /// Baumgarte stabilisation: the fraction of a position error corrected in
+  /// one step. 0 corrects none of it, 1 corrects all of it and adds energy.
+  float baumgarte;
+  /// Radius around a body within which speculative contacts are created (m).
+  /// Raising it catches faster bodies and starts producing ghost collisions,
+  /// because a speculative contact is placed from the closest points at
+  /// detection time and those need not be the closest points at impact.
+  float speculative_contact_distance;
+  /// How far bodies may sink into each other before the solver objects (m).
+  /// Zero is not the right answer: a little slop is what stops a resting stack
+  /// from vibrating.
+  float penetration_slop;
+  /// Fraction of its inner radius a body must move in one step before the
+  /// ZJOLT_MOTION_QUALITY_LINEAR_CAST quality actually sweeps.
+  float linear_cast_threshold;
+  /// Fraction of its inner radius a linear-cast body is still allowed to
+  /// penetrate another.
+  float linear_cast_max_penetration;
+  /// How far apart two points may be and still count as lying on the same
+  /// plane when a contact manifold is built (m).
+  float manifold_tolerance;
+  /// The most penetration one position-solver iteration will correct (m). A
+  /// cap, so a deeply overlapping pair is eased apart over several steps
+  /// instead of being launched.
+  float max_penetration_distance;
+  /// How far a body pair may move and still reuse the previous step's
+  /// collision result (m^2). @see use_body_pair_contact_cache
+  float body_pair_cache_max_delta_position_sq;
+  /// The rotation half of that same test, stored as cos(max angle / 2). Jolt's
+  /// default is two degrees.
+  float body_pair_cache_cos_max_delta_rotation_div2;
+  /// Largest angle between the normals of two sub-shape manifolds that still
+  /// lets them be merged into one, as a cosine.
+  float contact_normal_cos_max_delta_rotation;
+  /// How far a contact point may move between steps and still carry its
+  /// accumulated impulse into the next warm start (m^2).
+  float contact_point_preserve_lambda_max_dist_sq;
+  /// How close two vertices must be to count as the same one when the
+  /// internal-edge remover decides whether two triangles share an edge (m^2).
+  /// @see ZJoltBodyDesc::enhanced_internal_edge_removal
+  float internal_edge_removal_vertex_tolerance_sq;
+  /// Velocity solver iterations. Must be at least 2 for friction to work at
+  /// all: friction is applied from the previous iteration's non-penetration
+  /// impulse, and with one iteration there is no previous one. This is a
+  /// floor rather than a count — a constraint may ask for more.
+  uint32_t num_velocity_steps;
+  /// Position solver iterations. Zero is legal and means penetration is
+  /// resolved by the velocity solver alone.
+  uint32_t num_position_steps;
+  /// Below this closing speed a collision is inelastic whatever the bodies'
+  /// restitution says (m/s). Must not be negative; it is what lets a bouncy
+  /// ball eventually stop bouncing.
+  float min_velocity_for_restitution;
+  /// How long a body must hold still before it may sleep (s).
+  float time_before_sleep;
+  /// How still "still" is (m/s). Jolt tracks three points — the centre of mass
+  /// and the two bounding-box face centres furthest from it — and all three
+  /// must be slower than this. Must not be negative.
+  float point_velocity_sleep_threshold;
+  /// Turning this off makes the simulation faster and its results no longer
+  /// reproducible. zjoltPhysicsSystemSaveState, and any replay built on it,
+  /// assume it is on.
+  bool deterministic_simulation;
+  /// Warm start contacts and constraints from the previous step's impulses.
+  bool constraint_warm_start;
+  /// Skip the narrow phase for a body pair whose relative transform has not
+  /// moved past the two tolerances above. Worth knowing when a body's
+  /// collision group changes: the cached answer outlives the change until the
+  /// pair moves. @see zjoltBodyInvalidateContactCache
+  bool use_body_pair_contact_cache;
+  /// Merge manifolds with similar normals into one.
+  bool use_manifold_reduction;
+  /// Split large islands into batches that can be solved in parallel.
+  bool use_large_island_splitter;
+  /// Whether bodies may sleep at all. A body's own allow_sleeping is ANDed
+  /// with this.
+  bool allow_sleeping;
+  /// Collide only with the active edges of a triangle mesh. On is correct; off
+  /// collides with every edge, which is a debugging aid whose whole point is
+  /// that it produces the ghost collisions active edges exist to prevent.
+  bool check_active_edges;
+} ZJoltPhysicsSettings;
+
+/// Fills `settings` with Jolt's own defaults.
+///
+/// They are read out of a default-constructed PhysicsSettings rather than
+/// transcribed, so they cannot drift from the vendored library.
+ZJOLT_API void zjoltPhysicsSettingsInit(ZJoltPhysicsSettings *settings);
+
+/// Leaves `out` all-zero if `system` is NULL, which is not a valid settings
+/// struct — check the handle, do not check the result.
+ZJOLT_API void zjoltPhysicsSystemGetSettings(const ZJoltPhysicsSystem *system,
+                                             ZJoltPhysicsSettings *out);
+
+/// Applies every field at once, from the next step onwards.
+///
+/// Rejected rather than applied: a non-positive batch size, batches per job,
+/// or in-flight body pair count, a zero velocity iteration count, and a
+/// negative sleep threshold. Jolt asserts none of those. The first two are a
+/// divisor and a loop stride inside the step, so a zero there is a division by
+/// zero or a step that never finishes, discovered several frames from the call
+/// that caused it.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemSetSettings(
+    ZJoltPhysicsSystem *system, const ZJoltPhysicsSettings *settings);
+
+//===----------------------------------------------------------------------===//
+// Combine callbacks
+//
+// What friction and restitution a contact gets when the two bodies disagree.
+// Jolt's defaults are sqrt(f1 * f2) and max(r1, r2); a host with a material
+// table usually wants its own answer.
+//
+// These run on Jolt's job threads DURING a step, once per contact, under the
+// same rules as ZJoltContactListener: re-entrant, no calls back into the
+// system, and nothing may propagate out of them. A callback that unwinds — a
+// C++ exception, a Zig panic — leaves the solver's locks held and the NEXT
+// step deadlocks, with nothing to connect it to its cause.
+//===----------------------------------------------------------------------===//
+
+/// The pair being combined, and the two values to combine.
+///
+/// Both values are read from the bodies before the call, so the callback needs
+/// nothing from the system — which matters, because it must not touch it.
+typedef struct ZJoltCombineInfo {
+  ZJoltBodyId body1;
+  ZJoltSubShapeId sub_shape_id1;
+  uint64_t user_data1;
+  /// Body 1's own friction, or its restitution, depending on which callback
+  /// this is.
+  float value1;
+  ZJoltBodyId body2;
+  ZJoltSubShapeId sub_shape_id2;
+  uint64_t user_data2;
+  float value2;
+} ZJoltCombineInfo;
+
+/// Returns the combined value for one contact.
+typedef float (*ZJoltCombineFn)(void *user, const ZJoltCombineInfo *info);
+
+/// NULL restores Jolt's default, the geometric mean sqrt(f1 * f2).
+///
+/// Jolt's own hook is a bare function pointer with no user parameter, so the
+/// `user` pointer is carried in a fixed table of slots on this side. A system
+/// takes a slot the first time either combine callback is installed and gives
+/// it back when it is destroyed; there are ZJOLT_COMBINE_SLOT_COUNT of them,
+/// so that many systems may have one installed at a time. Past that this
+/// returns ZJOLT_RESULT_OUT_OF_MEMORY with a message saying so, rather than
+/// silently not installing.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemSetCombineFriction(
+    ZJoltPhysicsSystem *system, ZJoltCombineFn combine, void *user);
+
+/// NULL restores Jolt's default, max(r1, r2). @see
+/// zjoltPhysicsSystemSetCombineFriction for the slot rule.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemSetCombineRestitution(
+    ZJoltPhysicsSystem *system, ZJoltCombineFn combine, void *user);
+
+/// How many physics systems may have a combine callback installed at once.
+#define ZJOLT_COMBINE_SLOT_COUNT 64
+
+//===----------------------------------------------------------------------===//
+// Step listeners
+//
+// Called once per collision step, before that step's collision detection. This
+// is where a host applies its own forces — buoyancy, thrusters, wind — because
+// doing it here happens inside the sub-step loop, so a frame split into
+// several collision steps sees the force applied at each one rather than once
+// for the whole frame.
+//
+// Every body and constraint mutex is held for the duration, so a listener may
+// READ and WRITE bodies but must not add or remove them. Listeners may run
+// concurrently with each other; ZJoltPhysicsSettings::
+// step_listener_batches_per_job is how to stop that. Nothing may propagate out
+// of one — the note above ZJoltCombineFn applies here word for word.
+//
+// Jolt does NOT call step listeners when there are no active bodies, or when
+// the step's delta time is zero. A listener is not a frame tick.
+//===----------------------------------------------------------------------===//
+
+typedef struct ZJoltStepListenerContext {
+  /// Delta time of THIS collision step: the frame's delta time divided by the
+  /// collision step count.
+  float delta_time;
+  bool is_first_step;
+  bool is_last_step;
+} ZJoltStepListenerContext;
+
+typedef void (*ZJoltStepListenerFn)(void *user,
+                                    const ZJoltStepListenerContext *context);
+
+/// Adds a listener and yields a handle that identifies it for removal.
+///
+/// The handle belongs to the system: destroying the system destroys any
+/// listener still attached. That is why it is not counted by
+/// zjoltLiveHandleCount and cannot outlive the allocator it came from — the
+/// system is counted, and it has to go first. `user` must outlive the
+/// listener.
+///
+/// The same function pointer may be added more than once; each add yields its
+/// own handle and each must be removed separately. Jolt itself asserts on a
+/// listener added twice, which is why the handle is the identity here and the
+/// function pointer is not.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemAddStepListener(
+    ZJoltPhysicsSystem *system, ZJoltStepListenerFn listener, void *user,
+    ZJoltStepListener **out);
+
+/// Removes and destroys a listener. Reports ZJOLT_RESULT_INVALID_ARGUMENT if
+/// the handle does not belong to this system, where Jolt would assert.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemRemoveStepListener(
+    ZJoltPhysicsSystem *system, ZJoltStepListener *listener);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

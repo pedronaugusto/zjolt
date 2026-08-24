@@ -164,6 +164,10 @@ const public_headers = [_][]const u8{
     "ffi/zjolt_body.h",
     "ffi/zjolt_query.h",
     "ffi/zjolt_character.h",
+    "ffi/zjolt_broadphase.h",
+    "ffi/zjolt_batch.h",
+    "ffi/zjolt_group.h",
+    "ffi/zjolt_state.h",
 };
 
 /// The zjolt C boundary. One translation unit per concern — deliberately not a
@@ -176,6 +180,10 @@ const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_body.cpp",
     "ffi/zjolt_query.cpp",
     "ffi/zjolt_character.cpp",
+    "ffi/zjolt_broadphase.cpp",
+    "ffi/zjolt_batch.cpp",
+    "ffi/zjolt_group.cpp",
+    "ffi/zjolt_state.cpp",
     "ffi/zjolt_abi.cpp",
 };
 
