@@ -152,6 +152,19 @@ const jolt_sources = [_][]const u8{
     "libs/JoltPhysics/Jolt/TriangleSplitter/TriangleSplitterMean.cpp",
 };
 
+/// The public headers, installed for consumers. `ffi/zjolt.h` is the umbrella
+/// that includes the rest; `ffi/zjolt_internal.h` is deliberately absent,
+/// being implementation-private.
+const public_headers = [_][]const u8{
+    "ffi/zjolt.h",
+    "ffi/zjolt_core.h",
+    "ffi/zjolt_shape.h",
+    "ffi/zjolt_system.h",
+    "ffi/zjolt_body.h",
+    "ffi/zjolt_query.h",
+    "ffi/zjolt_character.h",
+};
+
 /// The zjolt C boundary. One translation unit per concern — deliberately not a
 /// single monolithic binding file.
 const zjolt_ffi_sources = [_][]const u8{
@@ -269,8 +282,12 @@ pub fn build(b: *std.Build) void {
     });
     lib.root_module.sanitize_c = if (options.sanitize_c) .full else .off;
 
-    // Consumers get the public header without reaching into the source tree.
-    lib.installHeader(b.path("ffi/zjolt.h"), "zjolt.h");
+    // Consumers get the public headers without reaching into the source tree.
+    // zjolt.h is the umbrella; the rest are its parts, split by concern because
+    // one header carrying the whole surface stopped being readable.
+    for (public_headers) |header| {
+        lib.installHeader(b.path(header), std.fs.path.basename(header));
+    }
 
     //=====================================================================
     // The Zig module.
