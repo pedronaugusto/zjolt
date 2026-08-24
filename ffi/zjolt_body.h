@@ -447,7 +447,7 @@ ZJOLT_API void zjoltBodyLockRead(const ZJoltPhysicsSystem *system,
                                  ZJoltBodyId body, ZJoltBodyLock *out_lock);
 ZJOLT_API void zjoltBodyLockReadRelease(ZJoltBodyLock *lock);
 
-/// Takes an exclusive lock. Required before any zjoltBodyMut* call.
+/// Takes an exclusive lock. Required before any zjoltBody*Locked writer.
 ZJOLT_API void zjoltBodyLockWrite(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                                   ZJoltBodyLock *out_lock);
 ZJOLT_API void zjoltBodyLockWriteRelease(ZJoltBodyLock *lock);
@@ -472,14 +472,14 @@ ZJOLT_API void zjoltBodyGetWorldBounds(const ZJoltBody *body, ZJoltAABox *out);
 
 /// Requires a write lock. Velocity changes made here bypass activation, so
 /// activate the body separately if it may be asleep.
-ZJOLT_API void zjoltBodyMutSetLinearVelocity(ZJoltBody *body,
+ZJOLT_API void zjoltBodySetLinearVelocityLocked(ZJoltBody *body,
                                              const ZJoltVec3 *velocity);
-ZJOLT_API void zjoltBodyMutSetAngularVelocity(ZJoltBody *body,
+ZJOLT_API void zjoltBodySetAngularVelocityLocked(ZJoltBody *body,
                                               const ZJoltVec3 *velocity);
-ZJOLT_API void zjoltBodyMutSetUserData(ZJoltBody *body, uint64_t user_data);
-ZJOLT_API void zjoltBodyMutSetFriction(ZJoltBody *body, float friction);
-ZJOLT_API void zjoltBodyMutSetRestitution(ZJoltBody *body, float restitution);
-ZJOLT_API void zjoltBodyMutAddImpulse(ZJoltBody *body,
+ZJOLT_API void zjoltBodySetUserDataLocked(ZJoltBody *body, uint64_t user_data);
+ZJOLT_API void zjoltBodySetFrictionLocked(ZJoltBody *body, float friction);
+ZJOLT_API void zjoltBodySetRestitutionLocked(ZJoltBody *body, float restitution);
+ZJOLT_API void zjoltBodyAddImpulseLocked(ZJoltBody *body,
                                       const ZJoltVec3 *impulse);
 
 #ifdef __cplusplus

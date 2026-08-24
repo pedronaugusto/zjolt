@@ -994,14 +994,14 @@ void zjoltBodyGetWorldBounds(const ZJoltBody *body, ZJoltAABox *out) {
 // because a static body has no motion properties to write through.
 //===----------------------------------------------------------------------===//
 
-void zjoltBodyMutSetLinearVelocity(ZJoltBody *body, const ZJoltVec3 *velocity) {
+void zjoltBodySetLinearVelocityLocked(ZJoltBody *body, const ZJoltVec3 *velocity) {
   if (body == nullptr || velocity == nullptr) return;
   JPH::Body *impl = zjolt::ToJolt(body);
   if (impl->IsStatic()) return;
   impl->SetLinearVelocity(zjolt::ToJolt(*velocity));
 }
 
-void zjoltBodyMutSetAngularVelocity(ZJoltBody *body,
+void zjoltBodySetAngularVelocityLocked(ZJoltBody *body,
                                     const ZJoltVec3 *velocity) {
   if (body == nullptr || velocity == nullptr) return;
   JPH::Body *impl = zjolt::ToJolt(body);
@@ -1009,22 +1009,22 @@ void zjoltBodyMutSetAngularVelocity(ZJoltBody *body,
   impl->SetAngularVelocity(zjolt::ToJolt(*velocity));
 }
 
-void zjoltBodyMutSetUserData(ZJoltBody *body, uint64_t user_data) {
+void zjoltBodySetUserDataLocked(ZJoltBody *body, uint64_t user_data) {
   if (body == nullptr) return;
   zjolt::ToJolt(body)->SetUserData(user_data);
 }
 
-void zjoltBodyMutSetFriction(ZJoltBody *body, float friction) {
+void zjoltBodySetFrictionLocked(ZJoltBody *body, float friction) {
   if (body == nullptr) return;
   zjolt::ToJolt(body)->SetFriction(friction);
 }
 
-void zjoltBodyMutSetRestitution(ZJoltBody *body, float restitution) {
+void zjoltBodySetRestitutionLocked(ZJoltBody *body, float restitution) {
   if (body == nullptr) return;
   zjolt::ToJolt(body)->SetRestitution(restitution);
 }
 
-void zjoltBodyMutAddImpulse(ZJoltBody *body, const ZJoltVec3 *impulse) {
+void zjoltBodyAddImpulseLocked(ZJoltBody *body, const ZJoltVec3 *impulse) {
   if (body == nullptr || impulse == nullptr) return;
   JPH::Body *impl = zjolt::ToJolt(body);
   if (impl->IsStatic() || impl->IsKinematic()) return;

@@ -239,14 +239,14 @@ pub extern fn zjoltBodyGetShapeLocked(body: *const Body) ?*const Shape;
 
 pub extern fn zjoltBodyGetWorldBounds(body: *const Body, out: *AABox) void;
 
-pub extern fn zjoltBodyMutSetLinearVelocity(body: *Body, velocity: *const Vec3) void;
+pub extern fn zjoltBodySetLinearVelocityLocked(body: *Body, velocity: *const Vec3) void;
 
-pub extern fn zjoltBodyMutSetAngularVelocity(body: *Body, velocity: *const Vec3) void;
+pub extern fn zjoltBodySetAngularVelocityLocked(body: *Body, velocity: *const Vec3) void;
 
-pub extern fn zjoltBodyMutSetUserData(body: *Body, user_data: u64) void;
+pub extern fn zjoltBodySetUserDataLocked(body: *Body, user_data: u64) void;
 
-pub extern fn zjoltBodyMutSetFriction(body: *Body, friction: f32) void;
+pub extern fn zjoltBodySetFrictionLocked(body: *Body, friction: f32) void;
 
-pub extern fn zjoltBodyMutSetRestitution(body: *Body, restitution: f32) void;
+pub extern fn zjoltBodySetRestitutionLocked(body: *Body, restitution: f32) void;
 
-pub extern fn zjoltBodyMutAddImpulse(body: *Body, impulse: *const Vec3) void;
+pub extern fn zjoltBodyAddImpulseLocked(body: *Body, impulse: *const Vec3) void;
