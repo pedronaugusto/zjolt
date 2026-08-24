@@ -421,12 +421,23 @@ typedef enum ZJoltOverrideMassProperties {
 /// Shape kinds this ABI can produce. Reported by zjoltShapeGetSubType, and
 /// meaningful after a restore to confirm what came back.
 ///
-/// Every kind Jolt itself defines is named here. OTHER is left for the two
-/// things that are not one of them: a NULL handle, and the sixteen `User*`
-/// slots Jolt reserves for shape types registered by C++ outside this library,
-/// whose meaning belongs to whoever registered them.
+/// Every kind Jolt itself defines is named here. The two values that are not
+/// one of them sit at either end and mean different things:
+///
+///   * NONE is not a shape at all — what zjoltShapeGetSubType reports for a
+///     NULL handle. It is zero so that zeroed storage reads as "nothing"
+///     rather than as SPHERE.
+///   * USER_DEFINED is a shape whose kind this ABI has no name for: one of the
+///     sixteen User1..UserConvex8 slots Jolt reserves for shape types
+///     registered by C++ outside this library, whose meaning belongs to
+///     whoever registered them. Nothing here can construct one, so it only
+///     ever appears on a shape that came in from such a registration.
+///
+/// They replace a single OTHER that stood for both, which left a caller unable
+/// to tell "I passed nothing" from "I passed something you do not know". Two
+/// facts, two values.
 typedef enum ZJoltShapeSubType {
-  ZJOLT_SHAPE_SUB_TYPE_OTHER = 0,
+  ZJOLT_SHAPE_SUB_TYPE_NONE = 0,
   ZJOLT_SHAPE_SUB_TYPE_SPHERE = 1,
   ZJOLT_SHAPE_SUB_TYPE_BOX = 2,
   ZJOLT_SHAPE_SUB_TYPE_CAPSULE = 3,
@@ -444,10 +455,11 @@ typedef enum ZJoltShapeSubType {
   ZJOLT_SHAPE_SUB_TYPE_HEIGHT_FIELD = 15,
   ZJOLT_SHAPE_SUB_TYPE_PLANE = 16,
   ZJOLT_SHAPE_SUB_TYPE_EMPTY = 17,
-  /// Jolt's soft-body shape. There is no constructor for it — soft bodies are
-  /// not exposed — but it is named so that a shape read back off a body always
-  /// has a name.
+  /// Jolt's soft-body shape, which Jolt builds itself when a soft body is
+  /// created. There is no shape constructor for one here, but it is named so
+  /// that a shape read back off a body always has a name.
   ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY = 18,
+  ZJOLT_SHAPE_SUB_TYPE_USER_DEFINED = 19,
 } ZJoltShapeSubType;
 
 typedef enum ZJoltBackFaceMode {
