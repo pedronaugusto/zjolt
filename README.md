@@ -19,7 +19,9 @@ system and no clock attached.
 - Drift between the C header and the Zig externs **fails the build**, not
   production: a test compares the two by reflection, with nothing listed by
   hand. Twelve kinds of deliberate drift are verified to fail it, including a
-  field swap that leaves every offset in the struct unchanged.
+  field swap that leaves every offset in the struct unchanged — and four more
+  mutations do the same for the other guards, each naming the test that has to
+  catch it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
   reach has been turned into a returned error, with a test that fails if the
@@ -323,8 +325,18 @@ that swap, a dropped parameter, a widened parameter, a renumbered enumerator, a
 narrowed enum tag, a moved mask bit, a drifted constant, an extern deleted from
 the Zig side, a field added to the header alone, a field's signedness flipped, a
 negative enumerator, and an extern replaced by a Zig helper wearing the same
-name — and asserts each is refused with a `zjolt ABI drift:` message. It runs
-under `ci/run.sh --full`.
+name — and asserts each is refused with a `zjolt ABI drift:` message.
+
+The same script mutates the other four guards, since a guard nothing tests is
+a guard nobody has checked: the entry-point preamble that turns a call made
+before `zjoltInit` into a result rather than a walk through an uninitialised
+allocator, the allocator seam, the callback error path that stashes a failure
+instead of unwinding across a Jolt callback, and the analysis sweep that
+forces Zig to look at wrappers nothing calls. Each of those declares the
+signal the build must produce, so a mutation that fails for an unrelated
+reason is reported as a wrong failure rather than counted as the guard doing
+its job — three of the four were miscounted on the first run and the check
+said so. Sixteen mutations, none missed. It runs under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
 types are compared only by size and alignment — a `float *` declared as `*i32`
