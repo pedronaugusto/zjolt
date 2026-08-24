@@ -852,52 +852,24 @@ void zjoltShapeGetStats(const ZJoltShape *shape, ZJoltShapeStats *out) {
 
 namespace {
 
-constexpr uint8_t kMagic[4] = {'Z', 'J', 'S', 'H'};
-constexpr uint32_t kFormatVersion = 1;
-constexpr size_t kHeaderSize = 32;
+/// The shared container from zjolt_internal.h, with this subsystem's own tag
+/// and four reserved bytes it does not yet use.
+constexpr zjolt::ContainerFormat kContainer = {
+    /*magic=*/{'Z', 'J', 'S', 'H'},
+    /*version=*/1,
+    /*extra_size=*/4,
+    /*too_short=*/"too short to be a saved shape",
+    /*wrong_magic=*/"not a shape saved by zjoltShapeSave",
+    /*bad_checksum=*/"the shape payload failed its checksum",
+};
 
-/// CRC-32 (the usual reflected polynomial), computed without a table. A shape
-/// is saved once and loaded once; the table is not worth the cache line.
-uint32_t Crc32(const uint8_t *data, size_t size) {
-  uint32_t crc = 0xffffffffu;
-  for (size_t i = 0; i < size; ++i) {
-    crc ^= data[i];
-    for (int bit = 0; bit < 8; ++bit) {
-      const uint32_t mask = -(crc & 1u);
-      crc = (crc >> 1) ^ (0xedb88320u & mask);
-    }
-  }
-  return ~crc;
-}
+constexpr size_t kHeaderSize = kContainer.HeaderSize();
 
-void WriteU32(uint8_t *out, uint32_t value) {
-  out[0] = static_cast<uint8_t>(value);
-  out[1] = static_cast<uint8_t>(value >> 8);
-  out[2] = static_cast<uint8_t>(value >> 16);
-  out[3] = static_cast<uint8_t>(value >> 24);
-}
-
-uint32_t ReadU32(const uint8_t *in) {
-  return static_cast<uint32_t>(in[0]) | (static_cast<uint32_t>(in[1]) << 8) |
-         (static_cast<uint32_t>(in[2]) << 16) |
-         (static_cast<uint32_t>(in[3]) << 24);
-}
-
-void WriteU64(uint8_t *out, uint64_t value) {
-  WriteU32(out, static_cast<uint32_t>(value));
-  WriteU32(out + 4, static_cast<uint32_t>(value >> 32));
-}
-
-uint64_t ReadU64(const uint8_t *in) {
-  return static_cast<uint64_t>(ReadU32(in)) |
-         (static_cast<uint64_t>(ReadU32(in + 4)) << 32);
-}
-
-uint32_t JoltVersionStamp() {
-  return (static_cast<uint32_t>(JPH_VERSION_MAJOR) << 16) |
-         (static_cast<uint32_t>(JPH_VERSION_MINOR) << 8) |
-         static_cast<uint32_t>(JPH_VERSION_PATCH);
-}
+/// The size the public header promises, checked against the one the container
+/// actually writes rather than kept in step by hand.
+static_assert(kHeaderSize == ZJOLT_SHAPE_HEADER_SIZE,
+              "ZJOLT_SHAPE_HEADER_SIZE no longer matches the header "
+              "zjoltShapeSave writes");
 
 }  // namespace
 
@@ -928,13 +900,8 @@ ZJoltResult zjoltShapeSave(const ZJoltShape *shape, void *buffer,
   if (count_only || capacity < *out_size || stream.IsFailed())
     return ZJOLT_RESULT_BUFFER_TOO_SMALL;
 
-  std::memcpy(bytes, kMagic, sizeof(kMagic));
-  WriteU32(bytes + 4, kFormatVersion);
-  WriteU32(bytes + 8, static_cast<uint32_t>(ZJOLT_CONFIG_ID));
-  WriteU32(bytes + 12, JoltVersionStamp());
-  WriteU64(bytes + 16, static_cast<uint64_t>(payload_size));
-  WriteU32(bytes + 24, Crc32(bytes + kHeaderSize, payload_size));
-  WriteU32(bytes + 28, 0);
+  zjolt::WriteContainerHeader(kContainer, bytes, payload_size,
+                              /*extra=*/nullptr);
   return ZJOLT_RESULT_OK;
 }
 
@@ -947,43 +914,12 @@ ZJoltResult zjoltShapeRestore(const void *data, size_t size,
                            "no data to restore a shape from");
   }
 
-  const uint8_t *bytes = static_cast<const uint8_t *>(data);
-  if (size < kHeaderSize) {
-    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
-                           "too short to be a saved shape");
-  }
-  if (std::memcmp(bytes, kMagic, sizeof(kMagic)) != 0) {
-    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
-                           "not a shape saved by zjoltShapeSave");
-  }
-  if (ReadU32(bytes + 4) != kFormatVersion) {
-    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
-                           "saved by a different zjolt container version");
-  }
-  if (ReadU32(bytes + 8) != static_cast<uint32_t>(ZJOLT_CONFIG_ID)) {
-    return zjolt::SetError(
-        ZJOLT_RESULT_BAD_FORMAT,
-        "saved by a zjolt built with different layout-affecting settings");
-  }
-  if (ReadU32(bytes + 12) != JoltVersionStamp()) {
-    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
-                           "saved against a different Jolt version");
-  }
+  zjolt::ContainerContents contents;
+  const ZJoltResult framed =
+      zjolt::ReadContainer(kContainer, data, size, &contents);
+  if (framed != ZJOLT_RESULT_OK) return framed;
 
-  const uint64_t payload_size = ReadU64(bytes + 16);
-  if (payload_size != static_cast<uint64_t>(size - kHeaderSize)) {
-    return zjolt::SetError(
-        ZJOLT_RESULT_BAD_FORMAT,
-        "the recorded payload length does not match the buffer");
-  }
-  if (ReadU32(bytes + 24) !=
-      Crc32(bytes + kHeaderSize, static_cast<size_t>(payload_size))) {
-    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
-                           "the shape payload failed its checksum");
-  }
-
-  zjolt::ConstStreamIn stream(bytes + kHeaderSize,
-                              static_cast<size_t>(payload_size));
+  zjolt::ConstStreamIn stream(contents.payload, contents.payload_size);
   JPH::Shape::IDToShapeMap shape_map;
   JPH::Shape::IDToMaterialMap material_map;
   JPH::Shape::ShapeResult result =

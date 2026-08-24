@@ -489,6 +489,123 @@ test "a truncated payload inside a well-formed container is still refused" {
     whole.release();
 }
 
+/// Asserts the last failure was the one the container reports for a wrong
+/// magic tag, and not one of the other checks in the same chain. The message
+/// is the only thing that separates them: every one of them is `BadFormat`.
+fn expectRefusedOnTag(expected: []const u8) !void {
+    try std.testing.expectEqualStrings(expected, zjolt.lastError());
+}
+
+test "one save/load pair's buffer is refused by another's, on the tag" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // Four save/load pairs share one framing, and each keeps a magic tag of
+    // its own. That is what the tag is for: the fields behind it line up
+    // between the pairs, so without it a scene buffer would clear a shape's
+    // header checks and hand Jolt a payload it has no business reading —
+    // which is a parse of the wrong thing, not a refusal.
+    //
+    // Every case below is asserted on the MESSAGE rather than only on
+    // `BadFormat`, because the length check and the checksum would also
+    // report `BadFormat`, and a container that refused on either of those
+    // would be refusing for a reason that does not generalise.
+    const box = try zjolt.Shape.initBox(zjolt.vec3(0.25, 0.5, 0.75), .{});
+    defer box.release();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = box,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+    try world.stepFor(0.25);
+
+    const shape_blob = try box.saveAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(shape_blob);
+
+    const scene_blob = blk: {
+        const scene = try zjolt.Scene.init();
+        defer scene.release();
+        _ = try scene.addBody(.{
+            .shape = box,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(1, 2, 3),
+        });
+        break :blk try scene.saveAlloc(std.testing.allocator);
+    };
+    defer std.testing.allocator.free(scene_blob);
+
+    const state = world.system.state();
+    const state_blob = try state.saveAlloc(std.testing.allocator, .all);
+    defer std.testing.allocator.free(state_blob);
+
+    const body_blob = blk: {
+        var lock = world.system.lockRead(ball);
+        defer lock.release();
+        const body = lock.body() orelse return error.TestUnexpectedResult;
+        break :blk try state.saveBodyStateAlloc(std.testing.allocator, body);
+    };
+    defer std.testing.allocator.free(body_blob);
+
+    // A shape is not a scene, and a scene is not a shape.
+    try std.testing.expectError(
+        zjolt.Error.BadFormat,
+        zjolt.Scene.restore(shape_blob),
+    );
+    try expectRefusedOnTag("not a scene saved by zjoltSceneSave");
+
+    try std.testing.expectError(
+        zjolt.Error.BadFormat,
+        zjolt.Shape.restore(scene_blob),
+    );
+    try expectRefusedOnTag("not a shape saved by zjoltShapeSave");
+
+    // A whole-world state is not one body's, and the position afterwards is
+    // what says Jolt never started reading: a payload it half-consumed would
+    // leave the ball somewhere else.
+    const before = bodies.getPosition(ball);
+    {
+        var lock = world.system.lockWrite(ball);
+        defer lock.release();
+        const body = lock.body() orelse return error.TestUnexpectedResult;
+        try std.testing.expectError(
+            zjolt.Error.BadFormat,
+            state.restoreBodyState(body, state_blob),
+        );
+    }
+    try expectRefusedOnTag(
+        "not a body state saved by zjoltPhysicsSystemSaveBodyStateLocked",
+    );
+
+    try std.testing.expectError(
+        zjolt.Error.BadFormat,
+        state.restore(body_blob),
+    );
+    try expectRefusedOnTag("not a state saved by zjoltPhysicsSystemSaveState");
+
+    const after = bodies.getPosition(ball);
+    try std.testing.expectEqual(before.x, after.x);
+    try std.testing.expectEqual(before.y, after.y);
+    try std.testing.expectEqual(before.z, after.z);
+
+    // ...and each buffer still loads through the pair that wrote it.
+    const shape_again = try zjolt.Shape.restore(shape_blob);
+    shape_again.release();
+    const scene_again = try zjolt.Scene.restore(scene_blob);
+    scene_again.release();
+    try state.restore(state_blob);
+    {
+        var lock = world.system.lockWrite(ball);
+        defer lock.release();
+        const body = lock.body() orelse return error.TestUnexpectedResult;
+        try state.restoreBodyState(body, body_blob);
+    }
+}
+
 //=============================================================================
 // Simulation
 //=============================================================================
