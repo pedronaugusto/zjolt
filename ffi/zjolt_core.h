@@ -108,6 +108,16 @@ ZJOLT_API uint32_t zjoltConfigId(void);
 
 //===----------------------------------------------------------------------===//
 // Results
+//
+// The declared surface does NOT depend on the build options. A feature that
+// was compiled out still has every function it would otherwise have, and they
+// return ZJOLT_RESULT_UNSUPPORTED. Omitting the declarations instead would
+// make the header describe a different API per configuration: it would break
+// the reflective ABI check (the header would declare what the library lacks),
+// break a consumer compiled against a different configuration than the
+// library, and turn a legible runtime error into a link failure. What is
+// enabled is answered by zjoltConfigId and zjoltAbiLayout, not by whether a
+// declaration exists.
 //===----------------------------------------------------------------------===//
 
 typedef enum ZJoltResult {
@@ -132,6 +142,9 @@ typedef enum ZJoltResult {
   /// The body id does not name a body in this system (it may have been
   /// destroyed).
   ZJOLT_RESULT_BODY_NOT_FOUND = 9,
+  /// The call names a feature this library was not built with. The function
+  /// exists in every build; whether it does anything is a build question.
+  ZJOLT_RESULT_UNSUPPORTED = 10,
 } ZJoltResult;
 
 /// Static, never-NULL description of a result code. Borrowed; do not free.

@@ -149,22 +149,6 @@ static_assert(sizeof(ZJoltBodyLock) >= 3 * sizeof(void *),
               "ZJoltBodyLock must hold a body pointer, a mutex and an "
               "interface pointer");
 
-/// One past the last enumerator of each C enum, for the exhaustiveness checks
-/// the Zig side performs. Kept next to the enums they count so that adding an
-/// enumerator without updating this is visible in one diff.
-constexpr uint32_t kResultCount =
-    static_cast<uint32_t>(ZJOLT_RESULT_BODY_NOT_FOUND) + 1u;
-constexpr uint32_t kMotionTypeCount =
-    static_cast<uint32_t>(ZJOLT_MOTION_TYPE_DYNAMIC) + 1u;
-constexpr uint32_t kGroundStateCount =
-    static_cast<uint32_t>(ZJOLT_GROUND_STATE_IN_AIR) + 1u;
-constexpr uint32_t kShapeSubTypeCount =
-    static_cast<uint32_t>(ZJOLT_SHAPE_SUB_TYPE_OFFSET_CENTER_OF_MASS) + 1u;
-constexpr uint32_t kValidateResultCount =
-    static_cast<uint32_t>(ZJOLT_VALIDATE_RESULT_REJECT_ALL_CONTACTS_FOR_THIS_BODY_PAIR) +
-    1u;
-
-
 uint32_t BuildFlags() {
   uint32_t flags = 0;
 #ifdef ZJOLT_DOUBLE_PRECISION
