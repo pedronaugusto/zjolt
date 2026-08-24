@@ -62,7 +62,7 @@ defer jobs.deinit();
 const system = try zjolt.PhysicsSystem.init(.{ .layers = zjolt.layersFromType(Layers) });
 defer system.deinit();
 
-const shape = try zjolt.Shape.initSphere(0.5, 0);
+const shape = try zjolt.Shape.initSphere(0.5, .{});
 defer shape.release();
 
 const ball = try system.bodies().createAndAdd(.{
@@ -461,8 +461,12 @@ measurement said so.
 
 Exposed today:
 
-- Shapes: box, sphere, capsule, convex hull, mesh, and the decorated shapes
+- Every shape kind Jolt can construct: the convex primitives (box, sphere,
+  capsule, cylinder, triangle, tapered capsule, tapered cylinder, convex hull),
+  mesh, height field, plane, empty, both compounds, and the decorated shapes
   (scaled, rotated-translated, offset-centre-of-mass)
+- A mutable compound whose children move, are added and are removed at run time
+- Physics materials, per triangle on a mesh and per quad on a height field
 - Binary shape save and restore, for a collision cook
 - A physics system with broad-phase and object layers and their filters
 - Bodies: create, destroy, add, remove, motion type, teleport, kinematic move,
@@ -480,7 +484,6 @@ Not exposed, in rough order of likely need:
 
 - Constraints (hinge, slider, six-DOF, and the rest)
 - Sensors as a first-class concept, rather than the `is_sensor` flag
-- `HeightFieldShape` and compound shapes
 - `StateRecorder`, for rollback and replay
 - A host job-system implementation, plugged into the existing seam
 - Vehicles, ragdolls, soft bodies

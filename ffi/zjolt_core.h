@@ -310,6 +310,12 @@ typedef struct ZJoltMassProperties {
   float inertia[9];
 } ZJoltMassProperties;
 
+/// An 8-bit-per-channel colour. Used only to tint debug drawing — nothing in
+/// the simulation reads one.
+typedef struct ZJoltColor {
+  uint8_t r, g, b, a;
+} ZJoltColor;
+
 /// Identifies a body within one physics system. Stable until the body is
 /// destroyed; ids are recycled with a generation counter, so a stale id is
 /// detected rather than aliasing a new body.
@@ -383,6 +389,11 @@ typedef enum ZJoltOverrideMassProperties {
 
 /// Shape kinds this ABI can produce. Reported by zjoltShapeGetSubType, and
 /// meaningful after a restore to confirm what came back.
+///
+/// Every kind Jolt itself defines is named here. OTHER is left for the two
+/// things that are not one of them: a NULL handle, and the sixteen `User*`
+/// slots Jolt reserves for shape types registered by C++ outside this library,
+/// whose meaning belongs to whoever registered them.
 typedef enum ZJoltShapeSubType {
   ZJOLT_SHAPE_SUB_TYPE_OTHER = 0,
   ZJOLT_SHAPE_SUB_TYPE_SPHERE = 1,
@@ -393,6 +404,19 @@ typedef enum ZJoltShapeSubType {
   ZJOLT_SHAPE_SUB_TYPE_SCALED = 6,
   ZJOLT_SHAPE_SUB_TYPE_ROTATED_TRANSLATED = 7,
   ZJOLT_SHAPE_SUB_TYPE_OFFSET_CENTER_OF_MASS = 8,
+  ZJOLT_SHAPE_SUB_TYPE_TRIANGLE = 9,
+  ZJOLT_SHAPE_SUB_TYPE_CYLINDER = 10,
+  ZJOLT_SHAPE_SUB_TYPE_TAPERED_CAPSULE = 11,
+  ZJOLT_SHAPE_SUB_TYPE_TAPERED_CYLINDER = 12,
+  ZJOLT_SHAPE_SUB_TYPE_STATIC_COMPOUND = 13,
+  ZJOLT_SHAPE_SUB_TYPE_MUTABLE_COMPOUND = 14,
+  ZJOLT_SHAPE_SUB_TYPE_HEIGHT_FIELD = 15,
+  ZJOLT_SHAPE_SUB_TYPE_PLANE = 16,
+  ZJOLT_SHAPE_SUB_TYPE_EMPTY = 17,
+  /// Jolt's soft-body shape. There is no constructor for it — soft bodies are
+  /// not exposed — but it is named so that a shape read back off a body always
+  /// has a name.
+  ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY = 18,
 } ZJoltShapeSubType;
 
 typedef enum ZJoltBackFaceMode {
@@ -433,9 +457,15 @@ typedef enum ZJoltUpdateError {
 // Opaque handles
 //===----------------------------------------------------------------------===//
 
-/// A collision shape. Immutable, reference counted, and shareable between
-/// bodies and between systems.
+/// A collision shape. Reference counted, and shareable between bodies and
+/// between systems. Immutable once built, with one deliberate exception: a
+/// mutable compound, whose children move at run time through the
+/// zjoltShapeMutableCompound* calls.
 typedef struct ZJoltShape ZJoltShape;
+
+/// The identity of a surface. Reference counted. See zjolt_material.h for what
+/// it is and — more usefully — what it is not.
+typedef struct ZJoltPhysicsMaterial ZJoltPhysicsMaterial;
 
 /// A world: bodies, a broad phase, and the step.
 typedef struct ZJoltPhysicsSystem ZJoltPhysicsSystem;

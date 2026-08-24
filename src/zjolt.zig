@@ -16,7 +16,7 @@
 //! });
 //! defer system.deinit();
 //!
-//! const shape = try zjolt.Shape.initSphere(0.5, 0);
+//! const shape = try zjolt.Shape.initSphere(0.5, .{});
 //! defer shape.release();
 //!
 //! const ball = try system.bodies().createAndAdd(.{
@@ -37,6 +37,7 @@ pub const c = @import("c.zig");
 const error_mod = @import("error.zig");
 const math_mod = @import("math.zig");
 const memory_mod = @import("memory.zig");
+const material_mod = @import("material.zig");
 const shape_mod = @import("shape.zig");
 const body_mod = @import("body.zig");
 const query_mod = @import("query.zig");
@@ -70,6 +71,16 @@ pub const gravity_earth = math_mod.gravity_earth;
 
 pub const Shape = shape_mod.Shape;
 pub const ShapeSubType = shape_mod.SubType;
+pub const MutableCompound = shape_mod.MutableCompound;
+pub const CompoundChild = shape_mod.CompoundChild;
+pub const compoundChild = shape_mod.compoundChild;
+pub const SubShapeId = c.SubShapeId;
+pub const sub_shape_id_empty = shape_mod.sub_shape_id_empty;
+pub const height_field_no_collision = shape_mod.height_field_no_collision;
+
+pub const PhysicsMaterial = material_mod.PhysicsMaterial;
+pub const Color = material_mod.Color;
+pub const color = material_mod.color;
 
 pub const BodyId = body_mod.BodyId;
 pub const invalid_body_id = body_mod.invalid_body_id;
@@ -241,6 +252,7 @@ test {
     _ = error_mod;
     _ = math_mod;
     _ = memory_mod;
+    _ = material_mod;
     _ = shape_mod;
     _ = body_mod;
     _ = query_mod;
