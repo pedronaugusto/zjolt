@@ -20,6 +20,7 @@
 #include "zjolt_broadphase.h"
 #include "zjolt_character.h"
 #include "zjolt_debug.h"
+#include "zjolt_constraint.h"
 #include "zjolt_group.h"
 #include "zjolt_hair.h"
 #include "zjolt_material.h"
