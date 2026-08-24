@@ -1,3 +1,16 @@
 .zig-cache/
 zig-out/
 .claude/
+
+# Build artefacts from ad-hoc compiler invocations. These carry absolute
+# paths from the machine that produced them, which is not something a public
+# repository should be handing out — and ci/check-abi-drift.sh leaves a .bak
+# behind if it is interrupted mid-mutation.
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.bak
