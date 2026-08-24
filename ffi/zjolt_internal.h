@@ -27,6 +27,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <type_traits>
 #include <new>
 #include <utility>
 
@@ -112,6 +113,45 @@ void Delete(T *object) {
   object->~T();
   FreeFor<T>(object);
 }
+
+/// Hands a freshly constructed reference-counted object to the caller.
+///
+/// This exists because the arithmetic is not what anyone expects. A fresh
+/// `JPH::RefTarget` starts at refcount **zero** (`Core/Reference.h:20,86`), not
+/// one, so the object a constructor just built is owned by nobody and the
+/// caller's reference is the first. Under-count and the next `Release` wraps
+/// the counter to `0xFFFFFFFF` and the object outlives its own frees;
+/// over-count and it never dies at all.
+///
+/// It is also not the same arithmetic as `Finish` in `zjolt_shape.cpp`, which
+/// also calls `AddRef` exactly once — there the count is already 1 and the
+/// call compensates for a `JPH::Ref` dropping at scope exit. Same call, two
+/// different reasons, and mixing them up is silent. Use this and the question
+/// does not come up.
+template <typename T>
+[[nodiscard]] inline T *Own(T *fresh) {
+  static_assert(std::is_base_of_v<JPH::RefTargetVirtual, T> ||
+                    std::is_convertible_v<T *, const JPH::RefTarget<T> *>,
+                "Own() is for reference-counted objects; a plain one is Delete()'d");
+  if (fresh == nullptr) return nullptr;
+  fresh->AddRef();
+  return fresh;
+}
+
+/// `Release` on a Jolt object routes `delete` through `JPH::Free` via
+/// `JPH_OVERRIDE_NEW_DELETE`, and which overload runs depends on
+/// `alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__`. `AllocateFor<T>` above
+/// branches on `alignof(T) > JPH_DEFAULT_ALLOCATE_ALIGNMENT` instead.
+///
+/// They are the same number today, and Jolt explicitly invites overriding its
+/// half. If the two ever disagree, a block from the aligned path reaches the
+/// unaligned free — which reads a header that is not there, on a heap that is
+/// still live. Nothing about that failure points back here, so it is pinned
+/// where the reason is written rather than left to be rediscovered.
+static_assert(JPH_DEFAULT_ALLOCATE_ALIGNMENT == __STDCPP_DEFAULT_NEW_ALIGNMENT__,
+              "Jolt's default allocation alignment no longer matches the one "
+              "operator new/delete uses, so AllocateFor<T> and Jolt's own "
+              "delete can pick different halves of the allocator");
 
 //===----------------------------------------------------------------------===//
 // Errors

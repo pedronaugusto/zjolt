@@ -4,6 +4,23 @@ How a new subsystem gets bound, written down so every one of them comes out
 the same shape. This is the contract a change has to satisfy; the *reasons*
 behind most of it are in `README.md` under Design, and are not repeated here.
 
+## Start with recon
+
+```sh
+tools/recon.sh HingeConstraint
+```
+
+Binding a C++ API is not transcription, and the facts that decide whether a
+binding is correct are not in the signatures. They are `JPH_ASSERT`
+preconditions inside method bodies, a base class whose reference count starts
+at zero, a private constructor, a getter that returns a default instead of
+failing. `tools/recon.sh` pulls exactly those out of a class, its `.cpp` and
+its declaration, with line numbers — a page instead of a file.
+
+It is a lead generator, not an oracle. Everything it prints is a real line
+worth opening, and it will not find a precondition nobody wrote down. Read the
+header too; read a shorter part of it.
+
 ## The five files a subsystem touches
 
 A subsystem is one concern — constraints, vehicles, ragdolls — and it gets:
@@ -71,12 +88,16 @@ negative sentinel, use a fixed-width constant instead of an enum.
 
 ### Reference counting
 
-A fresh `JPH::RefTarget` starts at **zero**, so a constructor that hands out a
-raw pointer calls `AddRef()` exactly once. Do not copy the arithmetic from
-`Finish` in `ffi/zjolt_shape.cpp` without reading it: there the count is
-already 1 and its `AddRef` compensates for a `Ref` dropping at scope exit.
-Same call, different reason. Under-counting wraps to `0xFFFFFFFF` and
-use-after-frees; over-counting shows up as leaked bytes in `tests/c_smoke.c`.
+**Use `zjolt::Own(fresh)`** to hand a newly constructed reference-counted
+object to the caller. The arithmetic is not what anyone expects — a fresh
+`JPH::RefTarget` starts at **zero**, not one, so the caller's reference is the
+first — and it is not the same arithmetic as `Finish` in `ffi/zjolt_shape.cpp`,
+which also calls `AddRef` once but to compensate for a `JPH::Ref` dropping at
+scope exit. Same call, two different reasons, and mixing them up is silent:
+under-counting wraps the counter to `0xFFFFFFFF` and the object outlives its
+own frees; over-counting shows up as leaked bytes in `tests/c_smoke.c`.
+
+`Own` is the answer to both, and using it means the question does not come up.
 
 ### Callbacks
 
