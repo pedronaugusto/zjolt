@@ -10,6 +10,9 @@
 
 #include "zjolt_core.h"
 
+// For ZJoltCollisionGroup, which ZJoltBodyDesc carries.
+#include "zjolt_group.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,11 +28,18 @@ typedef struct ZJoltBodyDesc {
   ZJoltVec3 angular_velocity;
   /// Required. A reference is taken for the lifetime of the body.
   const ZJoltShape *shape;
+  /// Which exceptions this body makes to layer-based collision. The default
+  /// zjoltBodyDescInit writes is "no group, no filter", which collides with
+  /// everything its object layer allows. A reference is taken on
+  /// `collision_group.filter` for the lifetime of the body, exactly as one is
+  /// on `shape`; the desc itself takes none.
+  ZJoltCollisionGroup collision_group;
   uint64_t user_data;
   ZJoltObjectLayer object_layer;
   ZJoltMotionType motion_type;
   ZJoltMotionQuality motion_quality;
-  ZJoltAllowedDofs allowed_dofs;
+  /// A mask of ZJoltAllowedDofs, not a single enumerator.
+  uint32_t allowed_dofs;
   ZJoltOverrideMassProperties override_mass_properties;
   /// Used when override_mass_properties is CALCULATE_INERTIA.
   float mass;

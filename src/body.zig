@@ -44,6 +44,12 @@ pub const BodyDesc = struct {
     angular_velocity: math.Vec3 = math.vec3_zero,
     user_data: u64 = 0,
 
+    /// Exceptions to layer-based collision, for bodies of the same kind that
+    /// must not fight each other — the limbs of one ragdoll, the wheels of
+    /// one vehicle. The default makes none. The body takes its own reference
+    /// on `collision_group.filter`, exactly as it does on `shape`.
+    collision_group: group_mod.CollisionGroup = .{},
+
     motion_type: MotionType = .dynamic,
     motion_quality: MotionQuality = .discrete,
     allowed_dofs: AllowedDofs = .all,
@@ -75,6 +81,7 @@ pub const BodyDesc = struct {
         // still gets a sensible value rather than whatever was on the stack.
         c.zjoltBodyDescInit(&out);
         out.shape = self.shape.handle;
+        out.collision_group = group_mod.toC(self.collision_group);
         out.object_layer = self.object_layer;
         out.position = self.position;
         out.rotation = self.rotation;

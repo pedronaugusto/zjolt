@@ -191,7 +191,7 @@ pub const Activation = enum(c_int) {
 /// name them. This is layout-identical — six bits at the bottom of a `c_int` —
 /// and lets a caller write `.{ .translation_z = false }` instead of an
 /// `@enumFromInt` of an OR.
-pub const AllowedDofs = packed struct(c_int) {
+pub const AllowedDofs = packed struct(u32) {
     translation_x: bool = true,
     translation_y: bool = true,
     translation_z: bool = true,
@@ -557,6 +557,7 @@ pub const BodyDesc = extern struct {
     linear_velocity: Vec3,
     angular_velocity: Vec3,
     shape: ?*const Shape,
+    collision_group: CollisionGroup,
     user_data: u64,
     object_layer: ObjectLayer,
     motion_type: MotionType,
@@ -1210,6 +1211,7 @@ pub const SoftBodyVertexAttributes = extern struct {
 
 pub const SoftBodyDesc = extern struct {
     shared_settings: ?*const SoftBodySharedSettings,
+    collision_group: CollisionGroup,
     position: RVec3,
     rotation: Quat,
     user_data: u64,

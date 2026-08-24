@@ -6,11 +6,6 @@ nobody can evaluate.
 
 ## Correctness
 
-- **`ZJoltBodyDesc` cannot carry a collision group.** `ZJoltGroupFilter`'s
-  concrete type is private to `ffi/zjolt_group.cpp`, so a body's group has to be
-  set after creation through `zjoltBodySetCollisionGroup`. That is a real
-  asymmetry with every other body property, and it applies to
-  `ZJoltSoftBodyDesc` too.
 - **Two spellings of one concept.** `ZJoltRagdollSwingType` and `ZJoltSwingType`
   both mirror `JPH::ESwingType`. They were added by separate changes and do not
   collide, but a caller should not have to know which one an entry point wants.
