@@ -421,6 +421,54 @@ pub const Constraint = struct {
         return out;
     }
 
+    /// The constraint's frame, as a transform from constraint space into body
+    /// 1's CENTRE-OF-MASS space. Compose with the body's centre-of-mass
+    /// transform to reach the world.
+    ///
+    /// This is the rotation the `*CS` accessors are measured against: a
+    /// swing-twist or six-DOF motor target is in constraint space, and this is
+    /// what relates it to a body's own frame.
+    ///
+    /// Two of Jolt's own caveats carry through. A kind that does not constrain
+    /// rotation — point, distance, pulley — does not track the original
+    /// rotation difference, so the rotation part is arbitrary rather than
+    /// meaningful. A gear or rack and pinion constrains no position, so its
+    /// translation column is zero rather than an attachment point.
+    ///
+    /// `error.InvalidArgument` for a vehicle constraint, which Jolt derives
+    /// from its constraint base directly and which has no such frame.
+    pub fn constraintToBody1Matrix(self: Constraint) err.Error!math.Mat44 {
+        var out: math.Mat44 = math.mat44_identity;
+        try err.check(c.zjoltConstraintGetConstraintToBody1Matrix(self.handle, &out));
+        return out;
+    }
+
+    /// As `constraintToBody1Matrix`, for body 2.
+    pub fn constraintToBody2Matrix(self: Constraint) err.Error!math.Mat44 {
+        var out: math.Mat44 = math.mat44_identity;
+        try err.check(c.zjoltConstraintGetConstraintToBody2Matrix(self.handle, &out));
+        return out;
+    }
+
+    /// How large Jolt draws this constraint through
+    /// `PhysicsSystem.drawConstraints` and friends. Metres; Jolt's default
+    /// is 1.
+    ///
+    /// `error.Unsupported` when this library was built without
+    /// `-Ddebug_renderer=true` — Jolt keeps the field behind that flag, so
+    /// there is nothing to set.
+    pub fn setDrawSize(self: Constraint, size: f32) err.Error!void {
+        try err.check(c.zjoltConstraintSetDrawSize(self.handle, size));
+    }
+
+    /// `error.Unsupported` without `-Ddebug_renderer=true`, as `setDrawSize`
+    /// is.
+    pub fn drawSize(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltConstraintGetDrawSize(self.handle, &out));
+        return out;
+    }
+
     /// Throws away the impulse carried over from last step. Do this after
     /// teleporting a body, so the solver does not push against a change it did
     /// not make.
@@ -478,6 +526,51 @@ pub const Constraint = struct {
     pub fn pointTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
         var out: math.Vec3 = undefined;
         try err.check(c.zjoltPointConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    /// The hinge's frame, read back in each body's CENTRE-OF-MASS space —
+    /// what Jolt resolved the descriptor to, not what a `.world` descriptor
+    /// was given.
+    ///
+    /// There is no setter for any of these, because Jolt has none: a hinge
+    /// derives its rest orientation from the frame once, at construction, and
+    /// never revisits it. Rebuild the constraint to move it.
+    pub fn hingeLocalSpacePoint1(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetLocalSpacePoint1(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeLocalSpacePoint2(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetLocalSpacePoint2(self.handle, &out));
+        return out;
+    }
+
+    /// The axis rotation is allowed about, on body 1.
+    pub fn hingeLocalSpaceHingeAxis1(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetLocalSpaceHingeAxis1(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeLocalSpaceHingeAxis2(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetLocalSpaceHingeAxis2(self.handle, &out));
+        return out;
+    }
+
+    /// The reference `hingeCurrentAngle` is measured from, on body 1.
+    pub fn hingeLocalSpaceNormalAxis1(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetLocalSpaceNormalAxis1(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeLocalSpaceNormalAxis2(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetLocalSpaceNormalAxis2(self.handle, &out));
         return out;
     }
 
@@ -589,6 +682,25 @@ pub const Constraint = struct {
         return out;
     }
 
+    /// The impulse that held the two bodies to the hinge AXIS — two numbers,
+    /// because a hinge removes exactly two rotational degrees of freedom.
+    ///
+    /// This is what a hinge being twisted out of plane is spending, and it is
+    /// not the same as `hingeTotalLambdaRotationLimits`, which is what a door
+    /// forced past its stop applies, nor `hingeTotalLambdaMotor`, which is the
+    /// motor holding its own target.
+    pub fn hingeTotalLambdaRotation(self: Constraint) err.Error![2]f32 {
+        var out: [2]f32 = .{ 0, 0 };
+        try err.check(c.zjoltHingeConstraintGetTotalLambdaRotation(self.handle, &out[0], &out[1]));
+        return out;
+    }
+
+    pub fn hingeTotalLambdaRotationLimits(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetTotalLambdaRotationLimits(self.handle, &out));
+        return out;
+    }
+
     pub fn hingeTotalLambdaMotor(self: Constraint) err.Error!f32 {
         var out: f32 = 0;
         try err.check(c.zjoltHingeConstraintGetTotalLambdaMotor(self.handle, &out));
@@ -682,6 +794,30 @@ pub const Constraint = struct {
         return out;
     }
 
+    /// The impulse that held the body onto the slider AXIS, one number per
+    /// perpendicular direction. Travel past a limit is
+    /// `sliderTotalLambdaPositionLimits` instead — this is what a slider being
+    /// bent sideways is spending.
+    pub fn sliderTotalLambdaPosition(self: Constraint) err.Error![2]f32 {
+        var out: [2]f32 = .{ 0, 0 };
+        try err.check(c.zjoltSliderConstraintGetTotalLambdaPosition(self.handle, &out[0], &out[1]));
+        return out;
+    }
+
+    pub fn sliderTotalLambdaPositionLimits(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetTotalLambdaPositionLimits(self.handle, &out));
+        return out;
+    }
+
+    /// The torque that kept the two bodies from rotating relative to each
+    /// other.
+    pub fn sliderTotalLambdaRotation(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSliderConstraintGetTotalLambdaRotation(self.handle, &out));
+        return out;
+    }
+
     pub fn sliderTotalLambdaMotor(self: Constraint) err.Error!f32 {
         var out: f32 = 0;
         try err.check(c.zjoltSliderConstraintGetTotalLambdaMotor(self.handle, &out));
@@ -749,6 +885,36 @@ pub const Constraint = struct {
     //-------------------------------------------------------------------------
     // Swing-twist
     //-------------------------------------------------------------------------
+
+    /// The attachment point on each body, in that body's centre-of-mass space.
+    pub fn swingTwistLocalSpacePosition1(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetLocalSpacePosition1(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistLocalSpacePosition2(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetLocalSpacePosition2(self.handle, &out));
+        return out;
+    }
+
+    /// The rotation from constraint space into body 1's centre-of-mass space.
+    ///
+    /// This is the conversion the constraint-space targets are named after:
+    /// `swingTwistTargetOrientation` reads back in CONSTRAINT space, and
+    /// composing it with these two puts it into a body's own frame.
+    pub fn swingTwistConstraintToBody1(self: Constraint) err.Error!math.Quat {
+        var out: math.Quat = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetConstraintToBody1(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistConstraintToBody2(self: Constraint) err.Error!math.Quat {
+        var out: math.Quat = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetConstraintToBody2(self.handle, &out));
+        return out;
+    }
 
     pub fn swingTwistSetNormalHalfConeAngle(self: Constraint, angle: f32) err.Error!void {
         try err.check(c.zjoltSwingTwistConstraintSetNormalHalfConeAngle(self.handle, angle));
@@ -838,8 +1004,25 @@ pub const Constraint = struct {
     }
 
     /// Radians per second, in CONSTRAINT space: x is twist, y and z are swing.
+    ///
+    /// Setting a target while the motor is off is not an error and does
+    /// nothing visible: the value is kept and starts driving when
+    /// `swingTwistSetSwingMotorState` or `swingTwistSetTwistMotorState` turns
+    /// the motor on. Writing a target every frame to a motor left off is the
+    /// usual reason a joint "ignores" it.
     pub fn swingTwistSetTargetAngularVelocity(self: Constraint, velocity: math.Vec3) err.Error!void {
         try err.check(c.zjoltSwingTwistConstraintSetTargetAngularVelocity(self.handle, &velocity));
+    }
+
+    /// The same target expressed in BODY 2's space; stored as the
+    /// constraint-space one, so `swingTwistTargetAngularVelocity` is the
+    /// getter and it returns the CONVERTED value, not what was passed here.
+    ///
+    /// An angular velocity taken from a body's own motion is in body space,
+    /// and handing it to the constraint-space setter instead rotates it by the
+    /// constraint frame.
+    pub fn swingTwistSetTargetAngularVelocityBodySpace(self: Constraint, velocity: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(self.handle, &velocity));
     }
 
     pub fn swingTwistTargetAngularVelocity(self: Constraint) err.Error!math.Vec3 {
@@ -852,6 +1035,17 @@ pub const Constraint = struct {
     /// differ from what was written.
     pub fn swingTwistSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
         try err.check(c.zjoltSwingTwistConstraintSetTargetOrientation(self.handle, &orientation));
+    }
+
+    /// The same target given as the rotation of body 2 RELATIVE TO BODY 1 —
+    /// the `q` in `world_rotation2 = world_rotation1 * q`. That is the shape a
+    /// pose already comes in, so this is the call an animation-driven ragdoll
+    /// wants; the constraint-space one needs the frame composed in by hand.
+    ///
+    /// Clamped identically, and it reads back through
+    /// `swingTwistTargetOrientation` in constraint space.
+    pub fn swingTwistSetTargetOrientationBodySpace(self: Constraint, orientation: math.Quat) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTargetOrientationBodySpace(self.handle, &orientation));
     }
 
     pub fn swingTwistTargetOrientation(self: Constraint) err.Error!math.Quat {
@@ -870,6 +1064,31 @@ pub const Constraint = struct {
     pub fn swingTwistTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
         var out: math.Vec3 = undefined;
         try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    /// The torque each LIMIT applied over the last step. Zero while the joint
+    /// sits inside its cone and inside its twist range, so a non-zero value is
+    /// the signal that something is forcing the joint past a limit — which is
+    /// what a ragdoll bone that should break or go limp watches.
+    ///
+    /// Distinct from `swingTwistTotalLambdaMotor`, which is what the motors
+    /// are spending to hold their own targets.
+    pub fn swingTwistTotalLambdaTwist(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaTwist(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistTotalLambdaSwingY(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaSwingY(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistTotalLambdaSwingZ(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaSwingZ(self.handle, &out));
         return out;
     }
 
@@ -992,6 +1211,18 @@ pub const Constraint = struct {
 
     pub fn sixDofSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
         try err.check(c.zjoltSixDofConstraintSetTargetOrientation(self.handle, &orientation));
+    }
+
+    /// The same target given as the rotation of body 2 relative to body 1, as
+    /// `swingTwistSetTargetOrientationBodySpace` is; it reads back through
+    /// `sixDofTargetOrientation` in constraint space.
+    ///
+    /// Worth knowing on this constraint specifically: its TRANSLATION motors
+    /// work in body 1's constraint space and its ROTATION motors in body 2's.
+    /// That asymmetry applies to the constraint-space calls; this one takes
+    /// body space and converts.
+    pub fn sixDofSetTargetOrientationBodySpace(self: Constraint, orientation: math.Quat) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetTargetOrientationBodySpace(self.handle, &orientation));
     }
 
     pub fn sixDofTargetOrientation(self: Constraint) err.Error!math.Quat {
@@ -1184,6 +1415,39 @@ pub const Constraint = struct {
     pub fn pathMaxFrictionForce(self: Constraint) err.Error!f32 {
         var out: f32 = 0;
         try err.check(c.zjoltPathConstraintGetMaxFrictionForce(self.handle, &out));
+        return out;
+    }
+
+    /// The impulse that held body 2 ON the path, one number per direction
+    /// perpendicular to the tangent.
+    pub fn pathTotalLambdaPosition(self: Constraint) err.Error![2]f32 {
+        var out: [2]f32 = .{ 0, 0 };
+        try err.check(c.zjoltPathConstraintGetTotalLambdaPosition(self.handle, &out[0], &out[1]));
+        return out;
+    }
+
+    /// The impulse that stopped body 2 running off the end of a non-looping
+    /// path. Always zero on a looping one, which has no end to stop at.
+    pub fn pathTotalLambdaPositionLimits(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPathConstraintGetTotalLambdaPositionLimits(self.handle, &out));
+        return out;
+    }
+
+    /// The torque the rotation constraint applied, in the two shapes it takes.
+    /// The hinge pair is what the `constrain_around_*` rotation types use and
+    /// the three-component one is what `constrain_to_path` and
+    /// `fully_constrained` use; whichever the constraint is not using reads
+    /// zero, so both are safe to sample without branching on the type.
+    pub fn pathTotalLambdaRotationHinge(self: Constraint) err.Error![2]f32 {
+        var out: [2]f32 = .{ 0, 0 };
+        try err.check(c.zjoltPathConstraintGetTotalLambdaRotationHinge(self.handle, &out[0], &out[1]));
+        return out;
+    }
+
+    pub fn pathTotalLambdaRotation(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltPathConstraintGetTotalLambdaRotation(self.handle, &out));
         return out;
     }
 

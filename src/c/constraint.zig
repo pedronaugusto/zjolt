@@ -12,6 +12,7 @@ const core = @import("core.zig");
 // having to know which header a shared primitive came from.
 pub const BodyId = core.BodyId;
 pub const PhysicsSystem = core.PhysicsSystem;
+pub const Mat44 = core.Mat44;
 pub const Quat = core.Quat;
 pub const RVec3 = core.RVec3;
 pub const Result = core.Result;
@@ -323,6 +324,14 @@ pub extern fn zjoltConstraintGetNumPositionStepsOverride(constraint: *const Cons
 
 pub extern fn zjoltConstraintGetBodies(constraint: *const Constraint, out_body1: ?*BodyId, out_body2: ?*BodyId) Result;
 
+pub extern fn zjoltConstraintGetConstraintToBody1Matrix(constraint: *const Constraint, out: *Mat44) Result;
+
+pub extern fn zjoltConstraintGetConstraintToBody2Matrix(constraint: *const Constraint, out: *Mat44) Result;
+
+pub extern fn zjoltConstraintSetDrawSize(constraint: *Constraint, size: f32) Result;
+
+pub extern fn zjoltConstraintGetDrawSize(constraint: *const Constraint, out: *f32) Result;
+
 pub extern fn zjoltConstraintResetWarmStart(constraint: *Constraint) void;
 
 pub extern fn zjoltFixedConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
@@ -338,6 +347,18 @@ pub extern fn zjoltPointConstraintGetLocalSpacePoint1(constraint: *const Constra
 pub extern fn zjoltPointConstraintGetLocalSpacePoint2(constraint: *const Constraint, out: *Vec3) Result;
 
 pub extern fn zjoltPointConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetLocalSpacePoint1(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetLocalSpacePoint2(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetLocalSpaceHingeAxis1(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetLocalSpaceHingeAxis2(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetLocalSpaceNormalAxis1(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetLocalSpaceNormalAxis2(constraint: *const Constraint, out: *Vec3) Result;
 
 pub extern fn zjoltHingeConstraintGetCurrentAngle(constraint: *const Constraint, out: *f32) Result;
 
@@ -375,6 +396,10 @@ pub extern fn zjoltHingeConstraintGetMaxFrictionTorque(constraint: *const Constr
 
 pub extern fn zjoltHingeConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
 
+pub extern fn zjoltHingeConstraintGetTotalLambdaRotation(constraint: *const Constraint, out_x: ?*f32, out_y: ?*f32) Result;
+
+pub extern fn zjoltHingeConstraintGetTotalLambdaRotationLimits(constraint: *const Constraint, out: *f32) Result;
+
 pub extern fn zjoltHingeConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;
 
 pub extern fn zjoltSliderConstraintGetCurrentPosition(constraint: *const Constraint, out: *f32) Result;
@@ -409,6 +434,12 @@ pub extern fn zjoltSliderConstraintSetMaxFrictionForce(constraint: *Constraint, 
 
 pub extern fn zjoltSliderConstraintGetMaxFrictionForce(constraint: *const Constraint, out: *f32) Result;
 
+pub extern fn zjoltSliderConstraintGetTotalLambdaPosition(constraint: *const Constraint, out_x: ?*f32, out_y: ?*f32) Result;
+
+pub extern fn zjoltSliderConstraintGetTotalLambdaPositionLimits(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltSliderConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *Vec3) Result;
+
 pub extern fn zjoltSliderConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;
 
 pub extern fn zjoltDistanceConstraintSetDistance(constraint: *Constraint, min: f32, max: f32) Result;
@@ -428,6 +459,14 @@ pub extern fn zjoltConeConstraintGetCosHalfConeAngle(constraint: *const Constrai
 pub extern fn zjoltConeConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
 
 pub extern fn zjoltConeConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetLocalSpacePosition1(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetLocalSpacePosition2(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetConstraintToBody1(constraint: *const Constraint, out: *Quat) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetConstraintToBody2(constraint: *const Constraint, out: *Quat) Result;
 
 pub extern fn zjoltSwingTwistConstraintSetNormalHalfConeAngle(constraint: *Constraint, angle: f32) Result;
 
@@ -465,13 +504,23 @@ pub extern fn zjoltSwingTwistConstraintSetTargetAngularVelocity(constraint: *Con
 
 pub extern fn zjoltSwingTwistConstraintGetTargetAngularVelocity(constraint: *const Constraint, out: *Vec3) Result;
 
+pub extern fn zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(constraint: *Constraint, angular_velocity: *const Vec3) Result;
+
 pub extern fn zjoltSwingTwistConstraintSetTargetOrientation(constraint: *Constraint, orientation: *const Quat) Result;
+
+pub extern fn zjoltSwingTwistConstraintSetTargetOrientationBodySpace(constraint: *Constraint, orientation: *const Quat) Result;
 
 pub extern fn zjoltSwingTwistConstraintGetTargetOrientation(constraint: *const Constraint, out: *Quat) Result;
 
 pub extern fn zjoltSwingTwistConstraintGetRotationInConstraintSpace(constraint: *const Constraint, out: *Quat) Result;
 
 pub extern fn zjoltSwingTwistConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetTotalLambdaTwist(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetTotalLambdaSwingY(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltSwingTwistConstraintGetTotalLambdaSwingZ(constraint: *const Constraint, out: *f32) Result;
 
 pub extern fn zjoltSwingTwistConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *Vec3) Result;
 
@@ -516,6 +565,8 @@ pub extern fn zjoltSixDofConstraintGetTargetPosition(constraint: *const Constrai
 pub extern fn zjoltSixDofConstraintSetTargetOrientation(constraint: *Constraint, orientation: *const Quat) Result;
 
 pub extern fn zjoltSixDofConstraintGetTargetOrientation(constraint: *const Constraint, out: *Quat) Result;
+
+pub extern fn zjoltSixDofConstraintSetTargetOrientationBodySpace(constraint: *Constraint, orientation: *const Quat) Result;
 
 pub extern fn zjoltSixDofConstraintGetRotationInConstraintSpace(constraint: *const Constraint, out: *Quat) Result;
 
@@ -568,5 +619,13 @@ pub extern fn zjoltPathConstraintGetTargetPathFraction(constraint: *const Constr
 pub extern fn zjoltPathConstraintSetMaxFrictionForce(constraint: *Constraint, force: f32) Result;
 
 pub extern fn zjoltPathConstraintGetMaxFrictionForce(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltPathConstraintGetTotalLambdaPosition(constraint: *const Constraint, out_x: ?*f32, out_y: ?*f32) Result;
+
+pub extern fn zjoltPathConstraintGetTotalLambdaPositionLimits(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltPathConstraintGetTotalLambdaRotationHinge(constraint: *const Constraint, out_x: ?*f32, out_y: ?*f32) Result;
+
+pub extern fn zjoltPathConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *Vec3) Result;
 
 pub extern fn zjoltPathConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;

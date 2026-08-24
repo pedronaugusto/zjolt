@@ -1431,6 +1431,299 @@ int main(void) {
   }
 
   //-------------------------------------------------------------------------
+  // Constraint frames and limit impulses
+  //
+  // The same scenarios the Zig suite runs, driven through the header. Two of
+  // these shapes are exactly what the ABI cross-check cannot see: a
+  // ZJoltMat44 out-parameter, whose sixteen floats it compares only by total
+  // size, and the PAIR getters, which take two independently nullable
+  // `float *` and would pass its check declared as almost anything.
+  //-------------------------------------------------------------------------
+
+  {
+    /* Well clear of the floor: this block is about the joints, not contacts. */
+    const ZJoltReal kY = (ZJoltReal)20.0;
+
+    ZJoltBodyDesc arm_desc;
+    zjoltBodyDescInit(&arm_desc);
+    arm_desc.shape = box;
+    arm_desc.motion_type = ZJOLT_MOTION_TYPE_DYNAMIC;
+    arm_desc.object_layer = LAYER_MOVING;
+    arm_desc.position.y = kY;
+
+    ZJoltBodyId arm_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltBodyCreateAndAdd(system, &arm_desc, ZJOLT_ACTIVATION_ACTIVATE,
+                                   &arm_id));
+
+    /* A frame nobody defaults to: turn about +Z, measure from +Y. */
+    ZJoltHingeConstraintDesc hinge_desc;
+    memset(&hinge_desc, 0, sizeof(hinge_desc));
+    hinge_desc.space = ZJOLT_CONSTRAINT_SPACE_WORLD;
+    hinge_desc.point1.y = kY;
+    hinge_desc.point2.y = kY;
+    hinge_desc.hinge_axis1.z = 1.0f;
+    hinge_desc.normal_axis1.y = 1.0f;
+    hinge_desc.hinge_axis2.z = 1.0f;
+    hinge_desc.normal_axis2.y = 1.0f;
+    hinge_desc.limits_min = -0.4f;
+    hinge_desc.limits_max = 0.4f;
+
+    ZJoltConstraint *hinge = NULL;
+    CHECK_OK(zjoltConstraintCreateHinge(system, ZJOLT_BODY_ID_WORLD, arm_id,
+                                        &hinge_desc, &hinge));
+    CHECK_OK(zjoltConstraintAdd(system, hinge));
+
+    /* The descriptor was in world space; these come back in centre-of-mass
+       space, which for this body puts the same frame at the origin. */
+    ZJoltVec3 axis = {0.0f, 0.0f, 0.0f};
+    CHECK_OK(zjoltHingeConstraintGetLocalSpaceHingeAxis2(hinge, &axis));
+    CHECK_NEAR(axis.z, 1.0f, 1e-4f);
+    CHECK_NEAR(axis.x, 0.0f, 1e-4f);
+    CHECK_OK(zjoltHingeConstraintGetLocalSpaceNormalAxis2(hinge, &axis));
+    CHECK_NEAR(axis.y, 1.0f, 1e-4f);
+
+    ZJoltVec3 point = {1.0f, 1.0f, 1.0f};
+    CHECK_OK(zjoltHingeConstraintGetLocalSpacePoint2(hinge, &point));
+    CHECK_NEAR(point.y, 0.0f, 1e-4f);
+
+    /* Body 1 is the world body, whose centre of mass is the origin, so the
+       same frame sits at the anchor there instead. */
+    CHECK_OK(zjoltHingeConstraintGetLocalSpacePoint1(hinge, &point));
+    CHECK_NEAR(point.y, (float)kY, 1e-3f);
+    CHECK_OK(zjoltHingeConstraintGetLocalSpaceHingeAxis1(hinge, &axis));
+    CHECK_NEAR(axis.z, 1.0f, 1e-4f);
+    CHECK_OK(zjoltHingeConstraintGetLocalSpaceNormalAxis1(hinge, &axis));
+    CHECK_NEAR(axis.y, 1.0f, 1e-4f);
+
+    /* Sixteen floats, column-major: hinge axis, normal axis, their cross,
+       then the attachment point. */
+    ZJoltMat44 frame;
+    memset(&frame, 0, sizeof(frame));
+    CHECK_OK(zjoltConstraintGetConstraintToBody2Matrix(hinge, &frame));
+    CHECK_NEAR(frame.m[2], 1.0f, 1e-4f);   /* column 0 is +Z */
+    CHECK_NEAR(frame.m[5], 1.0f, 1e-4f);   /* column 1 is +Y */
+    CHECK_NEAR(frame.m[8], -1.0f, 1e-4f);  /* column 2 is their cross */
+    CHECK_NEAR(frame.m[13], 0.0f, 1e-4f);  /* column 3 is the point */
+    CHECK_NEAR(frame.m[15], 1.0f, 1e-4f);
+
+    CHECK_OK(zjoltConstraintGetConstraintToBody1Matrix(hinge, &frame));
+    CHECK_NEAR(frame.m[13], (float)kY, 1e-3f);
+
+    /* Declared in every build; honest about the one it cannot serve. */
+    float draw_size = -1.0f;
+    const ZJoltResult draw_result = zjoltConstraintGetDrawSize(hinge, &draw_size);
+    if (draw_result == ZJOLT_RESULT_OK) {
+      CHECK_OK(zjoltConstraintSetDrawSize(hinge, 2.5f));
+      CHECK_OK(zjoltConstraintGetDrawSize(hinge, &draw_size));
+      CHECK_NEAR(draw_size, 2.5f, 1e-4f);
+    } else {
+      CHECK(draw_result == ZJOLT_RESULT_UNSUPPORTED,
+            "draw size without the debug renderer is UNSUPPORTED, not %s",
+            zjoltResultName(draw_result));
+    }
+
+    /* Nothing has pushed the hinge into its limit yet. */
+    float limit_lambda = -1.0f;
+    CHECK_OK(zjoltHingeConstraintGetTotalLambdaRotationLimits(hinge,
+                                                              &limit_lambda));
+    CHECK_NEAR(limit_lambda, 0.0f, 1e-5f);
+
+    /* Both halves of a pair getter, and each half on its own: a C host may
+       ask for one number and not the other. */
+    float lambda_x = -1.0f;
+    float lambda_y = -1.0f;
+    CHECK_OK(zjoltHingeConstraintGetTotalLambdaRotation(hinge, &lambda_x,
+                                                        &lambda_y));
+    CHECK_OK(zjoltHingeConstraintGetTotalLambdaRotation(hinge, NULL, &lambda_y));
+    CHECK_OK(zjoltHingeConstraintGetTotalLambdaRotation(hinge, &lambda_x, NULL));
+    CHECK_OK(zjoltHingeConstraintGetTotalLambdaRotation(hinge, NULL, NULL));
+
+    /* Drive it about the hinge axis, where only the limit can stop it. */
+    const ZJoltVec3 spin = {0.0f, 0.0f, 5.0f};
+    for (int i = 0; i < 60; ++i) {
+      zjoltBodySetAngularVelocity(system, arm_id, &spin);
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+
+    float angle = 0.0f;
+    CHECK_OK(zjoltHingeConstraintGetCurrentAngle(hinge, &angle));
+    CHECK_NEAR(angle, 0.4f, 0.1f);
+    CHECK_OK(zjoltHingeConstraintGetTotalLambdaRotationLimits(hinge,
+                                                              &limit_lambda));
+    CHECK(fabsf(limit_lambda) > 0.0f,
+          "the hinge limit applied an impulse (%f)", (double)limit_lambda);
+
+    /* A hinge accessor on the wrong kind is refused, not reinterpreted. */
+    ZJoltPointConstraintDesc point_desc;
+    memset(&point_desc, 0, sizeof(point_desc));
+    point_desc.space = ZJOLT_CONSTRAINT_SPACE_WORLD;
+    point_desc.point1.y = kY;
+    point_desc.point2.y = kY;
+    ZJoltConstraint *ball_joint = NULL;
+    CHECK_OK(zjoltConstraintCreatePoint(system, ZJOLT_BODY_ID_WORLD, arm_id,
+                                        &point_desc, &ball_joint));
+    CHECK(zjoltHingeConstraintGetLocalSpaceHingeAxis1(ball_joint, &axis) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a hinge accessor on a point constraint is refused");
+    /* ...but the frame matrix is a TwoBodyConstraint accessor, so it works on
+       every kind this ABI can create. */
+    CHECK_OK(zjoltConstraintGetConstraintToBody1Matrix(ball_joint, &frame));
+    zjoltConstraintRelease(ball_joint);
+
+    CHECK_OK(zjoltConstraintRemove(system, hinge));
+    zjoltConstraintRelease(hinge);
+
+    /* --- A swing-twist, with a frame that is NOT the body frame, so body
+       space and constraint space cannot be confused for each other. --- */
+
+    ZJoltSwingTwistConstraintDesc st_desc;
+    memset(&st_desc, 0, sizeof(st_desc));
+    st_desc.space = ZJOLT_CONSTRAINT_SPACE_WORLD;
+    st_desc.position1.y = kY;
+    st_desc.position2.y = kY;
+    st_desc.twist_axis1.z = 1.0f;
+    st_desc.plane_axis1.x = 1.0f;
+    st_desc.twist_axis2.z = 1.0f;
+    st_desc.plane_axis2.x = 1.0f;
+    st_desc.swing_type = ZJOLT_SWING_TYPE_CONE;
+    st_desc.normal_half_cone_angle = 1.0f;
+    st_desc.plane_half_cone_angle = 1.0f;
+    st_desc.twist_min_angle = -0.3f;
+    st_desc.twist_max_angle = 0.3f;
+
+    ZJoltConstraint *joint = NULL;
+    CHECK_OK(zjoltConstraintCreateSwingTwist(system, ZJOLT_BODY_ID_WORLD, arm_id,
+                                             &st_desc, &joint));
+    CHECK_OK(zjoltConstraintAdd(system, joint));
+
+    ZJoltQuat to_body1 = {0.0f, 0.0f, 0.0f, 1.0f};
+    ZJoltQuat to_body2 = {0.0f, 0.0f, 0.0f, 1.0f};
+    CHECK_OK(zjoltSwingTwistConstraintGetConstraintToBody1(joint, &to_body1));
+    CHECK_OK(zjoltSwingTwistConstraintGetConstraintToBody2(joint, &to_body2));
+    CHECK(fabsf(to_body1.w) < 0.99f,
+          "the constraint frame really is rotated (w = %f)", (double)to_body1.w);
+
+    ZJoltVec3 st_point = {1.0f, 1.0f, 1.0f};
+    CHECK_OK(zjoltSwingTwistConstraintGetLocalSpacePosition2(joint, &st_point));
+    CHECK_NEAR(st_point.y, 0.0f, 1e-4f);
+    CHECK_OK(zjoltSwingTwistConstraintGetLocalSpacePosition1(joint, &st_point));
+    CHECK_NEAR(st_point.y, (float)kY, 1e-3f);
+
+    /* Body space in, constraint space stored: the getter cannot echo what
+       went in, which is the whole reason the two calls both exist. */
+    const ZJoltVec3 body_space = {0.0f, 0.0f, 2.0f};
+    CHECK_OK(zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(
+        joint, &body_space));
+    ZJoltVec3 stored = {0.0f, 0.0f, 0.0f};
+    CHECK_OK(zjoltSwingTwistConstraintGetTargetAngularVelocity(joint, &stored));
+    CHECK_NEAR(stored.x, 2.0f, 1e-3f);
+    CHECK_NEAR(stored.z, 0.0f, 1e-3f);
+
+    CHECK_OK(zjoltSwingTwistConstraintSetTargetAngularVelocity(joint,
+                                                               &body_space));
+    CHECK_OK(zjoltSwingTwistConstraintGetTargetAngularVelocity(joint, &stored));
+    CHECK_NEAR(stored.z, 2.0f, 1e-3f);
+    CHECK_NEAR(stored.x, 0.0f, 1e-3f);
+
+    /* A body-space target orientation is converted through the frame too. */
+    const ZJoltQuat identity_target = {0.0f, 0.0f, 0.0f, 1.0f};
+    CHECK_OK(zjoltSwingTwistConstraintSetTargetOrientationBodySpace(
+        joint, &identity_target));
+    /* The six-DOF twin of that call narrows on its own kind, so it refuses a
+       swing-twist rather than casting to the wrong type and writing through
+       it. */
+    CHECK(zjoltSixDofConstraintSetTargetOrientationBodySpace(
+              joint, &identity_target) == ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a six-DOF setter on a swing-twist is refused");
+
+    /* Twist it past its limit; only the twist part should have to push. */
+    const ZJoltVec3 twist_spin = {0.0f, 0.0f, 6.0f};
+    for (int i = 0; i < 60; ++i) {
+      zjoltBodySetAngularVelocity(system, arm_id, &twist_spin);
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+
+    float twist_lambda = 0.0f;
+    float swing_y_lambda = -1.0f;
+    float swing_z_lambda = -1.0f;
+    CHECK_OK(zjoltSwingTwistConstraintGetTotalLambdaTwist(joint, &twist_lambda));
+    CHECK_OK(zjoltSwingTwistConstraintGetTotalLambdaSwingY(joint,
+                                                           &swing_y_lambda));
+    CHECK_OK(zjoltSwingTwistConstraintGetTotalLambdaSwingZ(joint,
+                                                           &swing_z_lambda));
+    CHECK(fabsf(twist_lambda) > 0.0f, "the twist limit applied an impulse");
+    CHECK_NEAR(swing_y_lambda, 0.0f, 1e-5f);
+    CHECK_NEAR(swing_z_lambda, 0.0f, 1e-5f);
+
+    CHECK_OK(zjoltConstraintRemove(system, joint));
+    zjoltConstraintRelease(joint);
+
+    /* --- A slider, and the difference between its axis impulse and its limit
+       impulse. --- */
+
+    ZJoltSliderConstraintDesc slider_desc;
+    memset(&slider_desc, 0, sizeof(slider_desc));
+    slider_desc.space = ZJOLT_CONSTRAINT_SPACE_WORLD;
+    slider_desc.point1.y = kY;
+    slider_desc.point2.y = kY;
+    slider_desc.slider_axis1.x = 1.0f;
+    slider_desc.normal_axis1.y = 1.0f;
+    slider_desc.slider_axis2.x = 1.0f;
+    slider_desc.normal_axis2.y = 1.0f;
+    slider_desc.limits_min = -0.5f;
+    slider_desc.limits_max = 0.5f;
+
+    ZJoltConstraint *slider = NULL;
+    CHECK_OK(zjoltConstraintCreateSlider(system, ZJOLT_BODY_ID_WORLD, arm_id,
+                                         &slider_desc, &slider));
+    CHECK_OK(zjoltConstraintAdd(system, slider));
+
+    const ZJoltVec3 stop = {0.0f, 0.0f, 0.0f};
+    zjoltBodySetAngularVelocity(system, arm_id, &stop);
+    zjoltBodySetLinearVelocity(system, arm_id, &stop);
+    for (int i = 0; i < 18; ++i) {
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+
+    /* Gravity pulls across the slider axis, so the AXIS pair is carrying the
+       weight while the LIMIT part has applied nothing. */
+    float held_x = 0.0f;
+    float held_y = 0.0f;
+    CHECK_OK(zjoltSliderConstraintGetTotalLambdaPosition(slider, &held_x,
+                                                         &held_y));
+    CHECK(fabsf(held_x) + fabsf(held_y) > 0.0f,
+          "the slider axis constraint is carrying the weight");
+
+    float slider_limit_lambda = -1.0f;
+    CHECK_OK(zjoltSliderConstraintGetTotalLambdaPositionLimits(
+        slider, &slider_limit_lambda));
+    CHECK_NEAR(slider_limit_lambda, 0.0f, 1e-5f);
+
+    ZJoltVec3 slider_rotation_lambda = {-1.0f, -1.0f, -1.0f};
+    CHECK_OK(zjoltSliderConstraintGetTotalLambdaRotation(
+        slider, &slider_rotation_lambda));
+
+    const ZJoltVec3 push = {4.0f, 0.0f, 0.0f};
+    for (int i = 0; i < 60; ++i) {
+      zjoltBodySetLinearVelocity(system, arm_id, &push);
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    }
+
+    float travel = 0.0f;
+    CHECK_OK(zjoltSliderConstraintGetCurrentPosition(slider, &travel));
+    CHECK_NEAR(travel, 0.5f, 0.05f);
+    CHECK_OK(zjoltSliderConstraintGetTotalLambdaPositionLimits(
+        slider, &slider_limit_lambda));
+    CHECK(fabsf(slider_limit_lambda) > 0.0f,
+          "the slider limit stopped it (%f)", (double)slider_limit_lambda);
+
+    CHECK_OK(zjoltConstraintRemove(system, slider));
+    zjoltConstraintRelease(slider);
+
+    zjoltBodyDestroy(system, arm_id);
+  }
+
+  //-------------------------------------------------------------------------
   // Teardown
   //-------------------------------------------------------------------------
 

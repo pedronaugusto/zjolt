@@ -671,6 +671,42 @@ ZJOLT_API ZJoltResult zjoltConstraintGetBodies(const ZJoltConstraint *constraint
                                                ZJoltBodyId *out_body1,
                                                ZJoltBodyId *out_body2);
 
+/// The constraint's own frame, as a transform from constraint space into the
+/// body's CENTRE-OF-MASS space — not its origin space. Compose with the body's
+/// centre-of-mass transform to get to the world.
+///
+/// This is the only frame accessor every kind has, and it is what turns a
+/// constraint-space quantity into a body-space one: the target orientations
+/// and angular velocities the swing-twist and six-DOF motors take are in
+/// constraint space, and this is the rotation that relates the two.
+///
+/// Two caveats, both Jolt's and both in its own comments. A kind that does not
+/// constrain rotation — point, distance, pulley, and the cone about its twist
+/// axis — does not track the original rotation difference, so the rotation
+/// part of what comes back is arbitrary rather than wrong-but-meaningful. And
+/// a gear or rack and pinion constrains no position at all, so its translation
+/// column is zero rather than an attachment point.
+///
+/// The one handle this refuses is a vehicle constraint, reachable through
+/// zjoltVehicleConstraintAsConstraint: Jolt derives that one from Constraint
+/// directly rather than from TwoBodyConstraint, and it has no such frame.
+ZJOLT_API ZJoltResult zjoltConstraintGetConstraintToBody1Matrix(
+    const ZJoltConstraint *constraint, ZJoltMat44 *out);
+ZJOLT_API ZJoltResult zjoltConstraintGetConstraintToBody2Matrix(
+    const ZJoltConstraint *constraint, ZJoltMat44 *out);
+
+/// How large Jolt draws this constraint through
+/// zjoltPhysicsSystemDrawConstraints and friends. Metres; Jolt's default is 1.
+///
+/// Both report ZJOLT_RESULT_UNSUPPORTED when this library was built without
+/// -Ddebug_renderer=true, because Jolt keeps the field itself behind that
+/// flag. The declaration is here either way — a header whose contents move
+/// with a build option is one that cannot be checked.
+ZJOLT_API ZJoltResult zjoltConstraintSetDrawSize(ZJoltConstraint *constraint,
+                                                 float size);
+ZJOLT_API ZJoltResult zjoltConstraintGetDrawSize(
+    const ZJoltConstraint *constraint, float *out);
+
 /// Throws away the impulse carried over from last step. Do this after
 /// teleporting a body, so the solver does not push against a change it did
 /// not make.
@@ -726,6 +762,32 @@ ZJOLT_API ZJoltResult zjoltPointConstraintGetTotalLambdaPosition(
 //===----------------------------------------------------------------------===//
 // Hinge
 //===----------------------------------------------------------------------===//
+
+/// The hinge's frame, read back in each body's CENTRE-OF-MASS space — the
+/// same space the descriptor's LOCAL_TO_BODY_COM takes, and not what a WORLD
+/// descriptor was given. Whichever space it was built in, this is what Jolt
+/// resolved it to.
+///
+/// There is no setter for any of these. Jolt has none: a hinge recomputes its
+/// rest orientation from the frame at construction and never revisits it, so
+/// moving one axis afterwards would leave the zero angle pointing somewhere
+/// the constraint no longer believes in. Rebuild the constraint instead.
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpacePoint1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpacePoint2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The axis rotation is allowed about, on each body.
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpaceHingeAxis1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpaceHingeAxis2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The reference the hinge angle is measured from, on each body.
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpaceNormalAxis1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpaceNormalAxis2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
 
 /// Radians, measured from where the two normal axes align.
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetCurrentAngle(
@@ -801,6 +863,20 @@ ZJOLT_API ZJoltResult zjoltHingeConstraintGetMaxFrictionTorque(
 
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaPosition(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The impulse that held the two bodies to the hinge AXIS — two numbers,
+/// because a hinge takes away exactly two rotational degrees of freedom.
+/// Either out-parameter may be NULL.
+///
+/// This is the one to watch for a hinge that should snap sideways. It is
+/// separate from the LIMITS impulse below, which is what a door being forced
+/// past its stop applies, and from the MOTOR impulse, which is what the motor
+/// itself is spending.
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaRotationLimits(
+    const ZJoltConstraint *constraint, float *out);
+
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, float *out);
 
@@ -853,6 +929,19 @@ ZJOLT_API ZJoltResult zjoltSliderConstraintSetMaxFrictionForce(
 ZJOLT_API ZJoltResult zjoltSliderConstraintGetMaxFrictionForce(
     const ZJoltConstraint *constraint, float *out);
 
+/// The impulse that held the body onto the slider AXIS — two numbers, one per
+/// direction perpendicular to it. Either out-parameter may be NULL. This is
+/// what a slider being bent sideways is spending; travel past a limit shows up
+/// in zjoltSliderConstraintGetTotalLambdaPositionLimits instead.
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetTotalLambdaPositionLimits(
+    const ZJoltConstraint *constraint, float *out);
+
+/// The torque that kept the two bodies from rotating relative to each other.
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
 ZJOLT_API ZJoltResult zjoltSliderConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, float *out);
 
@@ -900,6 +989,23 @@ ZJOLT_API ZJoltResult zjoltConeConstraintGetTotalLambdaRotation(
 // Swing-twist
 //===----------------------------------------------------------------------===//
 
+/// The attachment point on each body, in that body's CENTRE-OF-MASS space.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetLocalSpacePosition1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetLocalSpacePosition2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The rotation from constraint space into each body's centre-of-mass space.
+///
+/// This is the conversion the `*CS` accessors are named after and the reason
+/// the `*BodySpace` setters below exist: a target read out of
+/// zjoltSwingTwistConstraintGetTargetOrientation is in CONSTRAINT space, and
+/// composing it with these is what puts it back in a body's own frame.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetConstraintToBody1(
+    const ZJoltConstraint *constraint, ZJoltQuat *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetConstraintToBody2(
+    const ZJoltConstraint *constraint, ZJoltQuat *out);
+
 /// Radians, in [0, pi]. The swing limit is symmetric about the twist axis.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetNormalHalfConeAngle(
     ZJoltConstraint *constraint, float angle);
@@ -946,10 +1052,27 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetMaxFrictionTorque(
     const ZJoltConstraint *constraint, float *out);
 
 /// Radians per second, in CONSTRAINT space: x is twist, y and z are swing.
+///
+/// Setting a target while the motor is OFF is not an error and does nothing:
+/// the value is stored and takes effect when
+/// zjoltSwingTwistConstraintSetSwingMotorState or ...TwistMotorState turns the
+/// motor on. Setting it every frame on an off motor is a silent no-op, which
+/// is the usual way this looks like the motor is broken.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetAngularVelocity(
     ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity);
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTargetAngularVelocity(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The same target expressed in BODY 2's own space, converted through the
+/// constraint frame and stored as the constraint-space one above — so the
+/// getter for both is zjoltSwingTwistConstraintGetTargetAngularVelocity, and
+/// what it returns is the converted value, not what was passed here.
+///
+/// Which one a caller wants is not a matter of taste: an angular velocity
+/// derived from a body's own motion is in body space, and passing it to the
+/// constraint-space setter rotates it by the constraint frame's error.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(
+    ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity);
 
 /// The target for a position motor, in constraint space. Jolt CLAMPS it to the
 /// current swing and twist limits, so reading it back may differ.
@@ -958,6 +1081,17 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetOrientation(
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTargetOrientation(
     const ZJoltConstraint *constraint, ZJoltQuat *out);
 
+/// The same target given as the rotation of body 2 RELATIVE TO BODY 1 — that
+/// is, the `q` in `world_rotation2 = world_rotation1 * q`. This is the shape a
+/// pose comes in: an animated ragdoll knows each bone's rotation relative to
+/// its parent, and this is the call that takes it without the caller having to
+/// compose the constraint frame in by hand.
+///
+/// It reduces to the constraint-space setter and is clamped identically, so
+/// the getter for both is zjoltSwingTwistConstraintGetTargetOrientation.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetOrientationBodySpace(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation);
+
 /// Where the joint actually is, as a rotation in constraint space. This is
 /// what to compare a target against.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetRotationInConstraintSpace(
@@ -965,6 +1099,22 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetRotationInConstraintSpace(
 
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaPosition(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The torque each LIMIT applied over the last step, one per limited axis.
+/// Zero while the joint is inside its cone and inside its twist range — these
+/// only become non-zero when something is pushing the joint past a limit,
+/// which is exactly the signal a ragdoll uses to decide a bone has been forced
+/// and should break or go limp.
+///
+/// Distinct from zjoltSwingTwistConstraintGetTotalLambdaMotor, which is what
+/// the motors are spending to hold their own targets.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaTwist(
+    const ZJoltConstraint *constraint, float *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaSwingY(
+    const ZJoltConstraint *constraint, float *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaSwingZ(
+    const ZJoltConstraint *constraint, float *out);
+
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
 
@@ -1050,6 +1200,17 @@ ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetOrientation(
     ZJoltConstraint *constraint, const ZJoltQuat *orientation);
 ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTargetOrientation(
     const ZJoltConstraint *constraint, ZJoltQuat *out);
+
+/// The same target given as the rotation of body 2 RELATIVE TO BODY 1, as
+/// zjoltSwingTwistConstraintSetTargetOrientationBodySpace is. Reduces to the
+/// constraint-space setter above, so that is where it reads back from.
+///
+/// Note the asymmetry Jolt documents on this constraint and nowhere else: its
+/// TRANSLATION motors work in body 1's constraint space and its ROTATION
+/// motors in body 2's. That applies to the constraint-space accessors; this
+/// call takes body space and does the conversion itself.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetOrientationBodySpace(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation);
 
 ZJOLT_API ZJoltResult zjoltSixDofConstraintGetRotationInConstraintSpace(
     const ZJoltConstraint *constraint, ZJoltQuat *out);
@@ -1172,6 +1333,27 @@ ZJOLT_API ZJoltResult zjoltPathConstraintSetMaxFrictionForce(
     ZJoltConstraint *constraint, float force);
 ZJOLT_API ZJoltResult zjoltPathConstraintGetMaxFrictionForce(
     const ZJoltConstraint *constraint, float *out);
+
+/// The impulse that held body 2 ON the path — two numbers, one per direction
+/// perpendicular to the tangent. Either out-parameter may be NULL.
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y);
+
+/// The impulse that stopped body 2 running off the end of a non-looping path.
+/// Always zero on a looping one, which has no end to stop at.
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaPositionLimits(
+    const ZJoltConstraint *constraint, float *out);
+
+/// The torque the rotation constraint applied, in the two shapes it takes:
+/// the hinge part is what CONSTRAIN_AROUND_TANGENT, ...NORMAL and ...BINORMAL
+/// use, and the three-component one is what CONSTRAIN_TO_PATH and
+/// FULLY_CONSTRAINED use. Whichever the constraint is not using reads zero, so
+/// both are safe to sample without branching on the rotation type. Either
+/// out-parameter of the hinge pair may be NULL.
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaRotationHinge(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y);
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
 
 ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, float *out);
