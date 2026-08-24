@@ -47,6 +47,7 @@ const broadphase_mod = @import("broadphase.zig");
 const batch_mod = @import("batch.zig");
 const group_mod = @import("group.zig");
 const state_mod = @import("state.zig");
+const softbody_mod = @import("softbody.zig");
 
 //=============================================================================
 // Public surface
@@ -139,6 +140,25 @@ pub const max_sub_groups = group_mod.max_sub_groups;
 
 pub const State = state_mod.State;
 pub const StateRecorderState = state_mod.RecorderState;
+
+pub const SoftBodySharedSettings = softbody_mod.SharedSettings;
+pub const SoftBodyDesc = softbody_mod.Desc;
+pub const SoftBodyVertex = softbody_mod.Vertex;
+pub const SoftBodyFace = softbody_mod.Face;
+pub const SoftBodyEdge = softbody_mod.Edge;
+pub const SoftBodyVolumeConstraint = softbody_mod.VolumeConstraint;
+pub const SoftBodyInvBind = softbody_mod.InvBind;
+pub const SoftBodySkinWeight = softbody_mod.SkinWeight;
+pub const SoftBodySkinned = softbody_mod.Skinned;
+pub const SoftBodyVertexAttributes = softbody_mod.VertexAttributes;
+pub const SoftBodyVertexState = softbody_mod.VertexState;
+pub const SoftBodyBendType = softbody_mod.BendType;
+pub const SoftBodyLraType = softbody_mod.LraType;
+pub const defaultSoftBodyVertexAttributes = softbody_mod.defaultVertexAttributes;
+pub const createSoftBody = softbody_mod.create;
+pub const createAndAddSoftBody = softbody_mod.createAndAdd;
+pub const countSoftBodyVertexStates = softbody_mod.countVertexStates;
+pub const getSoftBodyVertexStates = softbody_mod.getVertexStates;
 
 pub const Queries = query_mod.Queries;
 pub const QueryFilters = query_mod.Filters;
@@ -288,6 +308,7 @@ test {
     _ = batch_mod;
     _ = group_mod;
     _ = state_mod;
+    _ = softbody_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
