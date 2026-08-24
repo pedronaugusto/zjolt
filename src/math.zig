@@ -72,18 +72,6 @@ pub fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
 
 /// A rotation of `radians` about a unit axis.
 ///
-/// `axis` is trusted, not checked: this is plain arithmetic with no call into
-/// the C library, so it works before `zjolt.init` and never fails, but a
-/// non-unit `axis` silently produces a non-unit `Quat` rather than being
-/// refused. `quatRotation` is the checked equivalent — it calls through
-/// Jolt's own `Quat::sRotation`, which this reimplements, and reports
-/// `error.InvalidArgument` for a non-unit axis instead.
-pub fn quatFromAxisAngle(axis: Vec3, radians: f32) Quat {
-    const half = radians * 0.5;
-    const s = @sin(half);
-    return .{ .x = axis.x * s, .y = axis.y * s, .z = axis.z * s, .w = @cos(half) };
-}
-
 /// Widens a direction to a position. Lossless in a float build, and an
 /// explicit widening in a double-precision one.
 pub fn toRVec3(v: Vec3) RVec3 {
@@ -151,17 +139,20 @@ pub fn quatNormalize(q: Quat) Quat {
     return out;
 }
 
-/// A right-handed rotation of `radians` about `axis`, CHECKED against Jolt's
-/// own `Quat::sRotation` precondition: `error.InvalidArgument` when `axis` is
-/// not unit length, rather than `quatFromAxisAngle`'s silent wrong answer.
-/// Calls through the C library, so requires `zjolt.init` first.
-pub fn quatRotation(axis: Vec3, radians: f32) err.Error!Quat {
+/// A right-handed rotation of `radians` about `axis`.
+///
+/// `error.InvalidArgument` when `axis` is not unit length — Jolt's
+/// `Quat::sRotation` asserts that, and an un-normalised axis otherwise
+/// produces an un-normalised quaternion that goes on to trip an assertion
+/// somewhere far from the call that made it. Goes through the C library, so
+/// `zjolt.init` must have run.
+pub fn quatFromAxisAngle(axis: Vec3, radians: f32) err.Error!Quat {
     var out: Quat = quat_identity;
     try err.check(c_math.zjoltQuatFromAxisAngle(&axis, radians, &out));
     return out;
 }
 
-/// The axis and angle `quatRotation` would have to be given to reconstruct
+/// The axis and angle `quatFromAxisAngle` would have to be given to reconstruct
 /// `q`. `angle` is always in `[0, pi]`. `error.InvalidArgument` when `q` is
 /// not unit length.
 pub fn quatGetAxisAngle(q: Quat) err.Error!struct { axis: Vec3, angle: f32 } {
@@ -206,7 +197,7 @@ pub fn quatGetPerpendicular(q: Quat) Quat {
 }
 
 /// The signed angle `q` rotates around `axis`, which MUST be unit length —
-/// see `ffi/zjolt_math.h`; unlike `quatRotation`'s axis this is not checked.
+/// see `ffi/zjolt_math.h`; unlike `quatFromAxisAngle`'s axis this is not checked.
 pub fn quatGetRotationAngle(q: Quat, axis: Vec3) f32 {
     return c_math.zjoltQuatGetRotationAngle(&q, &axis);
 }
@@ -269,7 +260,7 @@ pub fn rvec3Lerp(a: RVec3, b: RVec3, t: f32) RVec3 {
 //
 // `Mat44` and `RMat44` (see `ffi/zjolt_math.h` for the ZJoltMat44 versus
 // ZJoltRMat44 distinction this mirrors exactly). Every "Rotation" function
-// checks its quaternion the same way `quatRotation` does.
+// checks its quaternion the same way `quatFromAxisAngle` does.
 //=============================================================================
 
 /// Builds a transform: `rotation` in the upper 3x3, `translation` in the
@@ -370,19 +361,27 @@ test "identity constants are what their names claim" {
 }
 
 test "an axis-angle rotation is unit length" {
-    const q = quatFromAxisAngle(vec3(0, 1, 0), std.math.pi / 2.0);
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const q = try quatFromAxisAngle(vec3(0, 1, 0), std.math.pi / 2.0);
     const length = @sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
     try std.testing.expectApproxEqAbs(@as(f32, 1), length, 1e-6);
 }
 
 test "a swing-twist decomposition recomposes to the original rotation" {
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
     // An axis with no zero component and an angle nowhere near a multiple of
     // pi, so neither GetSwingTwist's degenerate branch (a 180-degree turn
     // about Y or Z) nor a trivially-identity twist is exercised by accident.
     const raw = vec3(0.3, 0.7, -0.2);
     const len = @sqrt(raw.x * raw.x + raw.y * raw.y + raw.z * raw.z);
     const axis = vec3(raw.x / len, raw.y / len, raw.z / len);
-    const q = quatFromAxisAngle(axis, 1.1);
+    const q = try quatFromAxisAngle(axis, 1.1);
 
     const parts = quatGetSwingTwist(q);
     const recomposed = quatMultiply(parts.swing, parts.twist);
@@ -400,8 +399,8 @@ test "quaternion multiply matches applying two rotations in sequence to a vector
 
     // rhs applied first, then lhs: the Hamilton product order this module
     // documents on quatMultiply.
-    const rhs = quatFromAxisAngle(vec3(0, 0, 1), std.math.pi / 2.0);
-    const lhs = quatFromAxisAngle(vec3(0, 1, 0), std.math.pi / 2.0);
+    const rhs = try quatFromAxisAngle(vec3(0, 0, 1), std.math.pi / 2.0);
+    const lhs = try quatFromAxisAngle(vec3(0, 1, 0), std.math.pi / 2.0);
     const composed = quatMultiply(lhs, rhs);
 
     const v = vec3(1, 0, 0);
@@ -425,14 +424,14 @@ test "euler angles round-trip through quatFromEulerAngles and quatGetEulerAngles
     try std.testing.expectApproxEqAbs(angles.z, back.z, 1e-4);
 }
 
-test "quatRotation refuses a non-unit axis and rotates correctly with a unit one" {
+test "quatFromAxisAngle refuses a non-unit axis and rotates correctly with a unit one" {
     const zjolt = @import("zjolt.zig");
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    try std.testing.expectError(err.Error.InvalidArgument, quatRotation(vec3(2, 0, 0), 1.0));
+    try std.testing.expectError(err.Error.InvalidArgument, quatFromAxisAngle(vec3(2, 0, 0), 1.0));
 
-    const q = try quatRotation(vec3(0, 1, 0), std.math.pi / 2.0);
+    const q = try quatFromAxisAngle(vec3(0, 1, 0), std.math.pi / 2.0);
     const rotated = try quatRotateVector(q, vec3(1, 0, 0));
     try std.testing.expectApproxEqAbs(@as(f32, 0), rotated.x, 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 0), rotated.y, 1e-5);
@@ -444,7 +443,7 @@ test "mat44 composes with its rigid inverse to the identity and carries its tran
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    const rotation = try quatRotation(vec3(0, 1, 0), 0.6);
+    const rotation = try quatFromAxisAngle(vec3(0, 1, 0), 0.6);
     const translation = vec3(1, 2, 3);
     const m = try mat44FromRotationTranslation(rotation, translation);
 
@@ -466,7 +465,7 @@ test "rmat44 transforms a point and its rigid inverse undoes it" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    const rotation = try quatRotation(vec3(1, 0, 0), 0.4);
+    const rotation = try quatFromAxisAngle(vec3(1, 0, 0), 0.4);
     const translation = rvec3(5, -2, 100);
     const m = try rmat44FromRotationTranslation(rotation, translation);
     const inv = rmat44InverseRotationTranslation(m);
@@ -481,8 +480,12 @@ test "rmat44 transforms a point and its rigid inverse undoes it" {
 }
 
 test "lerp matches its endpoints and slerp stays unit length" {
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
     const a = quat_identity;
-    const b = quatFromAxisAngle(vec3(0, 0, 1), std.math.pi / 2.0);
+    const b = try quatFromAxisAngle(vec3(0, 0, 1), std.math.pi / 2.0);
 
     const lerp_start = quatLerp(a, b, 0.0);
     const lerp_end = quatLerp(a, b, 1.0);

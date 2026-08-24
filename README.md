@@ -31,7 +31,7 @@ Status: **in development, unreleased.** No version is cut yet, and the package
 is not API-stable — it is being grown into complete Jolt bindings, and naming
 and shape may change until it is.
 
-Working today: every Jolt subsystem, across 677 C entry points — shapes,
+Working today: every Jolt subsystem, across 756 C entry points — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,
 ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 [Scope](#scope) for what that covers and what is deliberately left out.
@@ -105,6 +105,61 @@ New surface follows one recipe, written down in [BINDING.md](BINDING.md): which
 five files a subsystem touches, the naming the ABI cross-check pairs on, the
 entry-point guard, reference counting, and the rule that nothing may unwind out
 of a callback.
+
+## Coming from Jolt
+
+Every entry point is named after the Jolt method it calls, so the C++ you
+already know maps mechanically:
+
+    JPH::BodyInterface::GetLinearVelocity   ->  zjoltBodyGetLinearVelocity
+    JPH::Shape::GetSubType                  ->  zjoltShapeGetSubType
+    JPH::HingeConstraint::SetTargetAngle    ->  zjoltHingeConstraintSetTargetAngle
+    JPH::CharacterVirtual::ExtendedUpdate   ->  zjoltCharacterUpdate
+
+The rule is `zjolt` + the type + the method, and it is enforced rather than
+merely intended: `src/abi_check.zig` pairs the two sides of the ABI by name
+with no hand-written list, so a name that breaks the convention is a build
+failure. Two deliberate departures from a literal transliteration:
+
+- **The interface is dropped where Jolt has only one.** `BodyInterface`'s
+  methods are `zjoltBody*`, not `zjoltBodyInterface*`, because there is nothing
+  else a body method could go through. `PhysicsSystem` keeps its name because
+  its methods are about the system rather than about a body.
+- **Overloads become distinct names**, since C has none. Jolt's locking and
+  non-locking pairs are spelled with a `Locked` suffix on the form that
+  requires you to already hold the lock: `zjoltBodyGetLinearVelocity` takes the
+  lock for you, `zjoltBodyGetLinearVelocityLocked` does not.
+
+The Zig wrapper drops the prefix and the type, because the receiver supplies
+both: `system.bodies().getLinearVelocity(body)`. Anything it does not wrap is
+reachable through `zjolt.c`, one namespace per header — `zjolt.c.body`,
+`zjolt.c.constraint`, `zjolt.c.query` — and those raw declarations are
+first-class rather than a fallback.
+
+### Where this differs from joltc
+
+[joltc](https://github.com/amerkoleci/joltc) is the C API most other Jolt
+bindings build on, and it is a reasonable thing to compare against. The
+difference that matters is not spelling:
+
+|  | joltc | zjolt |
+|---|---|---|
+| entry points returning a result | none | 352 of 756 |
+| entry points returning `void` | 728 | 242 |
+| build-configuration handshake | none | `zjoltAbiLayout` + config id |
+| public headers | 1 | 20, one per subsystem |
+
+joltc reports failure implicitly: a bad argument trips a Jolt assertion in a
+build that has them and does nothing in a build that does not. This package
+turns every Jolt precondition an ordinary caller can reach into a returned
+result, and refuses at `zjoltInit` a library whose layout-affecting build
+settings differ from the caller's — because `ZJoltReal` and `ZJoltObjectLayer`
+change width with those settings, and nothing else would notice.
+
+What joltc does better is machine-readability: `JPH_PhysicsSystem_Create`
+separates type from method with an underscore, which suits automatic binding
+generators. `zjoltPhysicsSystemCreate` does not, and that is a real trade for
+matching the camelCase convention Vulkan and the Zig side use.
 
 ## Design
 
@@ -491,7 +546,7 @@ measurement said so.
 
 ## Scope
 
-Every Jolt subsystem is bound. 677 C entry points across 18 headers, each one
+Every Jolt subsystem is bound. 756 C entry points across 20 headers, each one
 mirrored by a Zig wrapper that a reflective cross-check pairs at build time.
 
 - **Shapes** — every kind Jolt can construct: the convex primitives (box,
