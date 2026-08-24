@@ -123,13 +123,23 @@ created under memory pressure will abort inside Jolt. That is not fixable from
 outside, and the practical reading is the usual one for a game: run where an
 allocation failure is not survivable anyway, and size `max_bodies` up front.
 
-**`Mat44::sRotation` asserts its quaternion is unit length** (`Mat44.inl:87`),
-and a body's rotation reaches it on every step and every query placement. A
-rotation integrated over a few thousand frames drifts off the unit sphere long
-before it looks wrong, so this aborts a build with asserts on for a reason the
-caller cannot see. Worked around by renormalising every caller-supplied
-rotation as it crosses the boundary (`zjolt::ToJoltRotation`); one that cannot
-be normalised — all zeroes, or carrying a NaN — becomes the identity.
+**`Mat44::sRotation` asserts its quaternion is unit length** (`Mat44.inl:87`).
+That is a documented precondition rather than a failing, and it is listed here
+because of what this package chose to do about it, not because Jolt is wrong.
+
+A body's rotation reaches that assertion on every step and every query
+placement, and a rotation integrated over a few thousand frames drifts off the
+unit sphere long before it looks wrong — so the assertion fires for a reason
+the caller cannot see, in a build where they were not looking. zjolt therefore
+renormalises every caller-supplied rotation as it crosses the boundary
+(`zjolt::ToJoltRotation`), and turns one that cannot be normalised — all
+zeroes, or carrying a NaN — into the identity.
+
+That is a trade, and worth naming: it hides a caller's drift bug rather than
+reporting it. The alternative, refusing a non-unit rotation with
+ZJOLT_RESULT_INVALID_ARGUMENT, would make every caller renormalise on a
+schedule they have to work out for themselves, and drift is not a mistake so
+much as an inevitability. Absorbing it is the same call most engines make.
 
 **`PhysicsSystem::Update` asserts on the error code it is about to return.**
 `JPH_ASSERT(errors == EPhysicsUpdateError::None, ...)` sits one line above
