@@ -46,7 +46,7 @@ test "a distance constraint holds two bodies at a fixed separation under gravity
         .min_distance = 3,
         .max_distance = 3,
     });
-    defer rod.deinit();
+    defer rod.release();
     try rod.addTo(world.system);
 
     const dt: f32 = 1.0 / 60.0;
@@ -104,7 +104,7 @@ test "a slider permits translation along one axis only" {
         .slider_axis2 = zjolt.vec3(1, 0, 0),
         .normal_axis2 = zjolt.vec3(0, 1, 0),
     });
-    defer slider.deinit();
+    defer slider.release();
     try slider.addTo(world.system);
     try std.testing.expectEqual(zjolt.ConstraintSubType.slider, slider.subType());
 
@@ -168,7 +168,7 @@ test "a position motor drives a hinge toward its target angle" {
         .hinge_axis2 = zjolt.vec3(0, 1, 0),
         .normal_axis2 = zjolt.vec3(1, 0, 0),
     });
-    defer hinge.deinit();
+    defer hinge.release();
     try hinge.addTo(world.system);
 
     try std.testing.expectApproxEqAbs(@as(f32, 0), try hinge.hingeCurrentAngle(), 1e-4);
@@ -258,7 +258,7 @@ test "a hinge's limits outside [-pi, 0] / [0, pi] are refused, not asserted" {
         .hinge_axis2 = zjolt.vec3(0, 1, 0),
         .normal_axis2 = zjolt.vec3(1, 0, 0),
     });
-    defer hinge.deinit();
+    defer hinge.release();
 
     // min must be in [-pi, 0]; this min is positive.
     try std.testing.expectError(

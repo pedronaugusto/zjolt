@@ -22,7 +22,7 @@
 //!     .limits_min = -std.math.pi / 2.0,
 //!     .limits_max = 0,
 //! });
-//! defer hinge.deinit();
+//! defer hinge.release();
 //! try hinge.addTo(system);
 //! ```
 //!
@@ -116,12 +116,6 @@ pub const Path = struct {
 
     pub fn release(self: Path) void {
         c.zjoltPathConstraintPathRelease(self.handle);
-    }
-
-    /// Alias for `release`, so a path reads like every other handle at a
-    /// `defer`.
-    pub fn deinit(self: Path) void {
-        self.release();
     }
 
     pub fn refCount(self: Path) u32 {
@@ -326,14 +320,11 @@ pub const Constraint = struct {
         c.zjoltConstraintAddRef(self.handle);
     }
 
+    /// Drops one reference. A constraint still in a system survives this —
+    /// the system holds its own — so this is the right call at a `defer`
+    /// beside the `init` that made it, whether or not `addTo` was called.
     pub fn release(self: Constraint) void {
         c.zjoltConstraintRelease(self.handle);
-    }
-
-    /// Alias for `release`. A constraint still in a system survives this: the
-    /// system holds its own reference.
-    pub fn deinit(self: Constraint) void {
-        self.release();
     }
 
     pub fn refCount(self: Constraint) u32 {
@@ -1277,7 +1268,7 @@ test "a hinge constrains a body to rotation about its axis" {
         .hinge_axis2 = zjolt.vec3(0, 1, 0),
         .normal_axis2 = zjolt.vec3(1, 0, 0),
     });
-    defer hinge.deinit();
+    defer hinge.release();
 
     try std.testing.expectEqual(SubType.hinge, hinge.subType());
     try std.testing.expectEqual(@as(u32, 0), count(system));

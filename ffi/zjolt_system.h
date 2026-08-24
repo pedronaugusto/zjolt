@@ -252,7 +252,6 @@ typedef struct ZJoltBodyStats {
   uint32_t num_active_bodies_dynamic;
   uint32_t num_bodies_kinematic;
   uint32_t num_active_bodies_kinematic;
-  /// Always 0 through this ABI — there is no constructor for a soft body yet.
   uint32_t num_soft_bodies;
   uint32_t num_active_soft_bodies;
 } ZJoltBodyStats;

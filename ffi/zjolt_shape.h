@@ -620,6 +620,13 @@ ZJOLT_API ZJoltResult zjoltShapeHeightFieldGetSubShapeCoordinates(
 /// ZJOLT_RESULT_INVALID_ARGUMENT instead of reaching the assert with asserts
 /// compiled out. `stride` is in samples, not bytes, and must be at least
 /// `size_x`; `out_heights` must hold `size_y * stride` entries.
+///
+/// The bound here is `x + size_x <= sample_count`, and it is deliberately
+/// NOT the bound Jolt's own HeightFieldShape::GetMaterials uses, which is a
+/// strict `<`. The two read different grids: heights are per SAMPLE, and
+/// materials are per QUAD, of which there is one fewer in each direction.
+/// Whoever binds bulk material read-back must derive its bound from the quad
+/// count rather than copying this one.
 ZJOLT_API ZJoltResult zjoltShapeHeightFieldGetHeights(
     const ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
     uint32_t size_y, float *out_heights, uint32_t stride);

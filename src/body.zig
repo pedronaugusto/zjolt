@@ -182,8 +182,9 @@ pub const BodyInterface = struct {
         c.zjoltBodyResetSleepTimer(self.handle, body);
     }
 
-    /// There is no constructor for a soft body yet, so this only ever reads
-    /// `.rigid_body` through this wrapper.
+    /// Which kind of body this is: rigid, or a soft body made through
+    /// `SoftBody.init`. Worth asking before reaching for anything in
+    /// `softbody.zig` with an id that came from a query or a contact.
     pub fn getBodyType(self: BodyInterface, body: BodyId) BodyType {
         return c.zjoltBodyGetBodyType(self.handle, body);
     }
