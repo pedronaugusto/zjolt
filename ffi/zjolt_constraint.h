@@ -781,6 +781,15 @@ ZJOLT_API ZJoltResult zjoltHingeConstraintGetTargetAngle(
 
 /// The same target given as an orientation of body 2 relative to body 1,
 /// which is projected onto the hinge axis and then clamped as above.
+///
+/// No getter, and this is a recorded decision, not an oversight:
+/// SetTargetOrientationBS does not keep `orientation` anywhere — it derives
+/// an angle from it and hands that to SetTargetAngle, which overwrites the
+/// same mTargetAngle a direct call would. Once that happens the quaternion is
+/// gone; Jolt has nothing left to read it back from. Read
+/// zjoltHingeConstraintGetTargetAngle instead, which is exactly what this
+/// call itself reduces to. Reconstructing an orientation from that angle, if
+/// the caller needs one, is on the caller — Jolt never had it to give back.
 ZJOLT_API ZJoltResult zjoltHingeConstraintSetTargetOrientation(
     ZJoltConstraint *constraint, const ZJoltQuat *orientation);
 
@@ -978,6 +987,11 @@ ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTranslationLimits(
 ZJOLT_API ZJoltResult zjoltSixDofConstraintSetRotationLimits(
     ZJoltConstraint *constraint, const ZJoltVec3 *min, const ZJoltVec3 *max);
 
+/// The reader for both zjoltSixDofConstraintSetTranslationLimits and
+/// zjoltSixDofConstraintSetRotationLimits: pass whichever axis one of them
+/// touched and this returns exactly what Jolt kept for it — its own
+/// sanitising included, so a rotation limit may come back clamped or made
+/// symmetric as documented on the setter above.
 ZJOLT_API ZJoltResult zjoltSixDofConstraintGetLimits(
     const ZJoltConstraint *constraint, ZJoltSixDofAxis axis, float *out_min,
     float *out_max);

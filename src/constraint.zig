@@ -564,6 +564,11 @@ pub const Constraint = struct {
 
     /// The same target as an orientation of body 2 relative to body 1,
     /// projected onto the hinge axis and clamped as above.
+    ///
+    /// No getter, deliberately: Jolt reduces `orientation` to an angle and
+    /// keeps only that — the same state a direct call to `hingeSetTargetAngle`
+    /// would leave — so there is no quaternion left anywhere to read back.
+    /// Use `hingeTargetAngle` for what this call actually stores.
     pub fn hingeSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
         try err.check(c.zjoltHingeConstraintSetTargetOrientation(self.handle, &orientation));
     }
@@ -891,6 +896,9 @@ pub const Constraint = struct {
         try err.check(c.zjoltSixDofConstraintSetRotationLimits(self.handle, &min, &max));
     }
 
+    /// The reader for both `sixDofSetTranslationLimits` and
+    /// `sixDofSetRotationLimits`: whichever last touched `axis`, this returns
+    /// exactly what Jolt kept for it, sanitising included.
     pub fn sixDofLimits(self: Constraint, axis: SixDofAxis) err.Error!struct { min: f32, max: f32 } {
         var min: f32 = 0;
         var max: f32 = 0;
@@ -1192,13 +1200,14 @@ pub fn count(system: system_mod.PhysicsSystem) u32 {
 }
 
 //=============================================================================
-// The behavioural test
+// The behavioural tests
 //
-// One test, and it asserts the thing the subsystem exists to do: a hinge
-// takes five degrees of freedom away and leaves one. Everything else in this
-// module is covered mechanically — `misuse_sweep_test.zig` calls every entry
-// point with nulls and before init, and `abi_check.zig` pairs every
-// declaration here against the header.
+// A hinge takes five degrees of freedom away and leaves one; a six-DOF joint
+// reports back, axis by axis, exactly the limits it was told to keep. Not one
+// test per entry point — everything else in this module is covered
+// mechanically: `misuse_sweep_test.zig` calls every entry point with nulls
+// and before init, and `abi_check.zig` pairs every declaration here against
+// the header.
 //=============================================================================
 
 const zjolt = @import("zjolt.zig");
@@ -1305,4 +1314,52 @@ test "a hinge constrains a body to rotation about its axis" {
     try hinge.removeFrom(system);
     try std.testing.expect(!hinge.isAddedTo(system));
     try std.testing.expectEqual(@as(u32, 0), count(system));
+}
+
+test "a six-DOF constraint reports back the limits it was told to keep" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const system = try zjolt.PhysicsSystem.init(.{
+        .layers = zjolt.layersFromType(TestLayers),
+        .max_bodies = 64,
+    });
+    defer system.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.5, 0.5), .{});
+    defer shape.release();
+
+    const body = try system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = TestLayers.moving,
+        .motion_type = .dynamic,
+        .position = zjolt.rvec3(0, 0, 0),
+    }, .activate);
+
+    // Never added to a system: GetLimitsMin/GetLimitsMax read stored state,
+    // not solved state, so nothing here depends on stepping.
+    var joint = try Constraint.initSixDof(system, world_body, body, .{});
+    defer joint.release();
+
+    try joint.sixDofSetTranslationLimits(zjolt.vec3(-1.0, -2.0, -3.0), zjolt.vec3(1.0, 2.0, 3.0));
+
+    // Comfortably inside [-pi, pi] and, for the default CONE swing, already
+    // symmetric on Y and Z — chosen so Jolt's own sanitising in
+    // UpdateRotationLimits leaves them untouched, which is the point: what
+    // comes back should be what was asked for, not merely "something".
+    try joint.sixDofSetRotationLimits(zjolt.vec3(-0.5, -0.3, -0.3), zjolt.vec3(0.5, 0.3, 0.3));
+
+    const expected = [_]struct { axis: SixDofAxis, min: f32, max: f32 }{
+        .{ .axis = .translation_x, .min = -1.0, .max = 1.0 },
+        .{ .axis = .translation_y, .min = -2.0, .max = 2.0 },
+        .{ .axis = .translation_z, .min = -3.0, .max = 3.0 },
+        .{ .axis = .rotation_x, .min = -0.5, .max = 0.5 },
+        .{ .axis = .rotation_y, .min = -0.3, .max = 0.3 },
+        .{ .axis = .rotation_z, .min = -0.3, .max = 0.3 },
+    };
+    for (expected) |case| {
+        const limits = try joint.sixDofLimits(case.axis);
+        try std.testing.expectApproxEqAbs(case.min, limits.min, 1.0e-5);
+        try std.testing.expectApproxEqAbs(case.max, limits.max, 1.0e-5);
+    }
 }
