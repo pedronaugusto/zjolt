@@ -281,9 +281,14 @@ test "the library reports the build the wrapper was compiled for" {
 }
 
 test "version reporting is wired up" {
+    // Against the mirrored constants rather than literals: abi_check.zig
+    // already ties those to the header's ZJOLT_VERSION_* macros, so this
+    // completes the chain library -> Zig mirror -> header without a third
+    // copy of the number that would need editing when a version is cut.
     const v = version();
-    try std.testing.expectEqual(@as(u8, 0), v.major);
-    try std.testing.expectEqual(@as(u8, 1), v.minor);
+    try std.testing.expectEqual(@as(u8, @intCast(c.version_major)), v.major);
+    try std.testing.expectEqual(@as(u8, @intCast(c.version_minor)), v.minor);
+    try std.testing.expectEqual(@as(u8, @intCast(c.version_patch)), v.patch);
 
     const jolt = joltVersion();
     try std.testing.expectEqual(@as(u8, 5), jolt.major);

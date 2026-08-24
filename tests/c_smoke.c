@@ -292,7 +292,10 @@ int main(void) {
 
   CHECK_OK(zjoltInit(&init));
   CHECK(zjoltIsInitialized(), "should be initialized");
-  CHECK(zjoltVersion() == ((0u << 16) | (1u << 8) | 0u), "version 0.1.0");
+  CHECK(zjoltVersion() == (((uint32_t)ZJOLT_VERSION_MAJOR << 16) |
+                           ((uint32_t)ZJOLT_VERSION_MINOR << 8) |
+                           (uint32_t)ZJOLT_VERSION_PATCH),
+        "library version disagrees with the header it was built from");
   CHECK((zjoltJoltVersion() >> 16) == 5u, "Jolt major version 5");
   CHECK(g_total_allocations > 0, "the allocator seam is not being used");
 
