@@ -187,6 +187,35 @@ one place this package narrows an upstream API rather than forwarding it, and
 the narrowing is what makes the sanitizer's finding unreachable instead of
 suppressed.
 
+**`SoftBodyMotionProperties::SetVertexRadius` asserts on the wrong value.**
+The whole body is `JPH_ASSERT(mVertexRadius >= 0.0f); mVertexRadius =
+inVertexRadius;` (`SoftBodyMotionProperties.h:102`) — it checks the value it is
+about to *overwrite*, not the one being set. So a negative radius is accepted
+silently and blamed on the next caller, or on nobody at all if the radius is
+set once. `SoftBodyCreationSettings::mVertexRadius` reaches the same setter
+through `Initialize`, so a soft body can be born with one.
+
+Checked here on the incoming value instead, at both doors —
+`zjoltSoftBodyCreate` and `zjoltSoftBodySetVertexRadius` — which is what that
+assert was plainly written to mean.
+
+**A soft body's iteration count is a divisor nothing checks.**
+`InitializeUpdateContext` computes `mSubStepDeltaTime = inDeltaTime /
+mNumIterations` (`SoftBodyMotionProperties.cpp:953`) with no assert and no
+guard, so a `SoftBodyCreationSettings::mNumIterations` of zero makes every
+sub-step infinite and the body leaves for the origin on its first step. Refused
+at the boundary rather than forwarded.
+
+**Nothing between a soft body's constraint indices and Jolt's vertex array.**
+`SoftBodySharedSettings` takes faces, edges, volume constraints and skinned
+constraints as bare vertex indices, and every consumer of them — the solver,
+`GetVolumeTimesSix`, `SkinVertices` — indexes `mVertices` with them directly.
+`AddFace`'s only assert is that the three indices are pairwise distinct, and
+`JPH::Array::operator[]` (`Array.h:566`) asserts in a debug build and reads past
+the end of the array in a release one. `ffi/zjolt_softbody.cpp` validates each
+batch against the vertex count before appending any of it, which is the last
+point at which the index is still known to have come from outside.
+
 ## Re-vendoring procedure
 
 `ci/verify-vendor.sh` fetches the pinned commit and diffs it against `libs/`,
