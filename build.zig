@@ -166,6 +166,7 @@ const public_headers = [_][]const u8{
     "ffi/zjolt_character.h",
     "ffi/zjolt_broadphase.h",
     "ffi/zjolt_batch.h",
+    "ffi/zjolt_debug.h",
     "ffi/zjolt_group.h",
     "ffi/zjolt_state.h",
     "ffi/zjolt_softbody.h",
@@ -184,6 +185,7 @@ const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_character.cpp",
     "ffi/zjolt_broadphase.cpp",
     "ffi/zjolt_batch.cpp",
+    "ffi/zjolt_debug.cpp",
     "ffi/zjolt_group.cpp",
     "ffi/zjolt_state.cpp",
     "ffi/zjolt_softbody.cpp",
@@ -238,6 +240,22 @@ pub fn build(b: *std.Build) void {
             bool,
             "cross_platform_deterministic",
             "Trade speed for bit-identical results across platforms (JPH_CROSS_PLATFORM_DETERMINISTIC)",
+        ) orelse false,
+        // Off by default: JPH_DEBUG_RENDERER pulls DebugRenderer.cpp,
+        // DebugRendererSimple.cpp and every shape's Draw() out of the empty
+        // translation unit they otherwise compile to, which is code most
+        // consumers never call.
+        //
+        // The declared C surface in ffi/zjolt_debug.h does not move with this
+        // flag — every entry point exists either way and reports
+        // ZJOLT_RESULT_UNSUPPORTED when it is off — so this is the one
+        // build-affecting option that is not also folded into ZJOLT_CONFIG_ID
+        // in zjolt_core.h: nothing it changes is observable through the
+        // header a consumer compiles against.
+        .debug_renderer = b.option(
+            bool,
+            "debug_renderer",
+            "Build Jolt's debug-draw geometry collection (JPH_DEBUG_RENDERER)",
         ) orelse false,
     };
 
@@ -437,5 +455,8 @@ fn applyBuildMacros(module: *std.Build.Module, options: anytype) void {
     if (options.object_layer_bits == 32) {
         module.addCMacro("JPH_OBJECT_LAYER_BITS", "32");
         module.addCMacro("ZJOLT_OBJECT_LAYER_BITS", "32");
+    }
+    if (options.debug_renderer) {
+        module.addCMacro("JPH_DEBUG_RENDERER", "");
     }
 }

@@ -49,6 +49,7 @@ const group_mod = @import("group.zig");
 const state_mod = @import("state.zig");
 const softbody_mod = @import("softbody.zig");
 const vehicle_mod = @import("vehicle.zig");
+const debug_mod = @import("debug.zig");
 
 //=============================================================================
 // Public surface
@@ -162,6 +163,15 @@ pub const createSoftBody = softbody_mod.create;
 pub const createAndAddSoftBody = softbody_mod.createAndAdd;
 pub const countSoftBodyVertexStates = softbody_mod.countVertexStates;
 pub const getSoftBodyVertexStates = softbody_mod.getVertexStates;
+pub const DebugRenderer = debug_mod.Renderer;
+pub const DebugLine = debug_mod.Line;
+pub const DebugTriangle = debug_mod.Triangle;
+pub const DebugText = debug_mod.Text;
+pub const DebugDrawBodiesSettings = debug_mod.DrawBodiesSettings;
+pub const ShapeColor = debug_mod.ShapeColor;
+pub const defaultDrawBodiesSettings = debug_mod.defaultDrawBodiesSettings;
+pub const debugTextSlice = debug_mod.textSlice;
+pub const debug_text_max_length = debug_mod.text_max_length;
 
 pub const Queries = query_mod.Queries;
 pub const QueryFilters = query_mod.Filters;
@@ -334,6 +344,7 @@ test {
     _ = group_mod;
     _ = state_mod;
     _ = softbody_mod;
+    _ = debug_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI

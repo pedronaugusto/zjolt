@@ -19,6 +19,7 @@
 #include "zjolt_body.h"
 #include "zjolt_broadphase.h"
 #include "zjolt_character.h"
+#include "zjolt_debug.h"
 #include "zjolt_group.h"
 #include "zjolt_material.h"
 #include "zjolt_query.h"
