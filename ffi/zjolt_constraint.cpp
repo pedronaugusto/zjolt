@@ -533,7 +533,83 @@ bool BodiesBelongTo(const ZJoltPhysicsSystem *system,
   return true;
 }
 
+
+/// A six-DOF axis, checked to be one.
+///
+/// SixDOFConstraint indexes `mLimitMin`, `mMaxFriction`, `mMotorSettings` and
+/// friends with the enumerator directly and has no bounds check of its own, so
+/// a value outside the enum is an out-of-bounds access rather than an
+/// assertion. `translations_only` covers the narrower case: soft limits exist
+/// for the translation axes and Jolt asserts on the rest.
+ZJoltResult CheckSixDofAxis(ZJoltSixDofAxis axis, bool translations_only,
+                            JPH::SixDOFConstraintSettings::EAxis *out) {
+  const int value = static_cast<int>(axis);
+  const int limit = translations_only
+                        ? ZJOLT_SIX_DOF_TRANSLATION_AXIS_COUNT
+                        : ZJOLT_SIX_DOF_AXIS_COUNT;
+  if (value < 0 || value >= limit) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        translations_only
+            ? "axis must be one of the three translation axes; Jolt has no "
+              "soft rotation limits"
+            : "axis is not a ZJoltSixDofAxis");
+  }
+  *out = static_cast<JPH::SixDOFConstraintSettings::EAxis>(value);
+  return ZJOLT_RESULT_OK;
+}
+
+/// One of the auxiliary constraints a gear or rack and pinion is told about.
+///
+/// NULL is allowed and means "none": both of those joints check for it and
+/// fall back to matching velocities only. What is not allowed is a constraint
+/// of the wrong kind. SolvePositionConstraint casts to the kind it expects and
+/// asserts `false, "Unsupported"` otherwise, which fires during a step rather
+/// than at the call that was wrong.
+ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
+                           JPH::EConstraintSubType expected, const char *what,
+                           const JPH::Constraint **out) {
+  if (auxiliary == nullptr) {
+    *out = nullptr;
+    return ZJOLT_RESULT_OK;
+  }
+  const JPH::Constraint *jolt = zjolt::ToJolt(auxiliary);
+  if (jolt->GetSubType() != expected)
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, what);
+  *out = jolt;
+  return ZJOLT_RESULT_OK;
+}
+
 }  // namespace
+
+//===----------------------------------------------------------------------===//
+// Narrowing, as macros
+//
+// Both have to return from the CALLER, which a function cannot do, and between
+// them they open nearly every entry point below. A per-kind check that can be
+// half-written is one that eventually will be.
+//===----------------------------------------------------------------------===//
+
+/// Refuses a NULL handle and a handle of the wrong kind in one step, and binds
+/// the narrowed pointer to VAR.
+#define ZJOLT_NARROW(TYPE, SUBTYPE, VAR)                                \
+  JPH::TYPE *VAR = nullptr;                                             \
+  do {                                                                  \
+    const ZJoltResult zjolt_narrowed_ =                                 \
+        Narrow<JPH::TYPE>(constraint, JPH::EConstraintSubType::SUBTYPE, \
+                          "constraint is not a " #TYPE, &VAR);          \
+    if (zjolt_narrowed_ != ZJOLT_RESULT_OK) return zjolt_narrowed_;     \
+  } while (false)
+
+/// The same, plus the axis argument every six-DOF accessor carries.
+#define ZJOLT_SIX_DOF(VAR, AXIS_VAR, TRANSLATIONS_ONLY)                 \
+  ZJOLT_NARROW(SixDOFConstraint, SixDOF, VAR);                          \
+  JPH::SixDOFConstraintSettings::EAxis AXIS_VAR;                        \
+  do {                                                                  \
+    const ZJoltResult zjolt_axis_ =                                     \
+        CheckSixDofAxis(axis, TRANSLATIONS_ONLY, &AXIS_VAR);            \
+    if (zjolt_axis_ != ZJOLT_RESULT_OK) return zjolt_axis_;             \
+  } while (false)
 
 extern "C" {
 
@@ -1491,20 +1567,8 @@ ZJoltResult zjoltConstraintCreatePath(ZJoltPhysicsSystem *system,
 // Per-kind state
 //
 // Every accessor below opens the same way: ZJOLT_ENTER with its outputs, then
-// ZJOLT_NARROW, which refuses a NULL handle and a handle of the wrong kind in
-// one step. Spelled as a macro because it has to return from the caller, and
-// because a per-kind check that can be half-written is one that eventually
-// will be.
+// ZJOLT_NARROW, or ZJOLT_SIX_DOF where an axis argument needs checking too.
 //===----------------------------------------------------------------------===//
-
-#define ZJOLT_NARROW(TYPE, SUBTYPE, VAR)                                  \
-  JPH::TYPE *VAR = nullptr;                                               \
-  do {                                                                    \
-    const ZJoltResult zjolt_narrowed_ =                                   \
-        Narrow<JPH::TYPE>(constraint, JPH::EConstraintSubType::SUBTYPE,   \
-                          "constraint is not a " #TYPE, &VAR);            \
-    if (zjolt_narrowed_ != ZJOLT_RESULT_OK) return zjolt_narrowed_;       \
-  } while (false)
 
 //===----------------------------------------------------------------------===//
 // Fixed
@@ -2370,39 +2434,6 @@ ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaMotor(
 // Six degrees of freedom
 //===----------------------------------------------------------------------===//
 
-namespace {
-
-/// A six-DOF axis, checked to be one.
-///
-/// SixDOFConstraint indexes `mLimitMin`, `mMaxFriction`, `mMotorSettings` and
-/// friends with the enumerator directly and has no bounds check of its own, so
-/// a value outside the enum is an out-of-bounds access rather than an
-/// assertion. `translations_only` covers the narrower case: soft limits exist
-/// for translation axes and Jolt asserts on the rest.
-ZJoltResult CheckSixDofAxis(ZJoltSixDofAxis axis, bool translations_only,
-                            JPH::SixDOFConstraintSettings::EAxis *out) {
-  const int value = static_cast<int>(axis);
-  const int limit = translations_only
-                        ? ZJOLT_SIX_DOF_TRANSLATION_AXIS_COUNT
-                        : ZJOLT_SIX_DOF_AXIS_COUNT;
-  if (value < 0 || value >= limit) {
-    return zjolt::SetError(
-        ZJOLT_RESULT_INVALID_ARGUMENT,
-        translations_only
-            ? "axis must be one of the three translation axes; Jolt has no "
-              "soft rotation limits"
-            : "axis is not a ZJoltSixDofAxis");
-  }
-  *out = static_cast<JPH::SixDOFConstraintSettings::EAxis>(value);
-  return ZJOLT_RESULT_OK;
-}
-
-}  // namespace
-
-/// Narrows to a six-DOF constraint and validates its axis argument in one
-/// step, because every entry point below needs exactly both.
-#define ZJOLT_SIX_DOF(VAR, AXIS_VAR, TRANSLATIONS_ONLY)                     ZJOLT_NARROW(SixDOFConstraint, SixDOF, VAR);                              JPH::SixDOFConstraintSettings::EAxis AXIS_VAR;                            do {                                                                        const ZJoltResult zjolt_axis_ =                                               CheckSixDofAxis(axis, TRANSLATIONS_ONLY, &AXIS_VAR);                  if (zjolt_axis_ != ZJOLT_RESULT_OK) return zjolt_axis_;                 } while (false)
-
 ZJoltResult zjoltSixDofConstraintSetTranslationLimits(
     ZJoltConstraint *constraint, const ZJoltVec3 *min, const ZJoltVec3 *max) {
   ZJOLT_ENTER();
@@ -2693,31 +2724,6 @@ ZJoltResult zjoltSixDofConstraintGetTotalLambdaMotorRotation(
 //===----------------------------------------------------------------------===//
 // Gear and rack and pinion
 //===----------------------------------------------------------------------===//
-
-namespace {
-
-/// One of the auxiliary constraints a gear or rack and pinion is told about.
-///
-/// NULL is allowed and means "none": both of these joints check for it and
-/// fall back to matching velocities only. What is not allowed is a constraint
-/// of the wrong kind — `SolvePositionConstraint` casts to the kind it expects
-/// and asserts `false, "Unsupported"` otherwise, which fires during a step
-/// rather than here.
-ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
-                           JPH::EConstraintSubType expected, const char *what,
-                           const JPH::Constraint **out) {
-  if (auxiliary == nullptr) {
-    *out = nullptr;
-    return ZJOLT_RESULT_OK;
-  }
-  const JPH::Constraint *jolt = zjolt::ToJolt(auxiliary);
-  if (jolt->GetSubType() != expected)
-    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, what);
-  *out = jolt;
-  return ZJOLT_RESULT_OK;
-}
-
-}  // namespace
 
 ZJoltResult zjoltGearConstraintSetConstraints(ZJoltConstraint *constraint,
                                               ZJoltConstraint *gear1,
