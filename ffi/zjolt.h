@@ -26,5 +26,6 @@
 #include "zjolt_softbody.h"
 #include "zjolt_state.h"
 #include "zjolt_system.h"
+#include "zjolt_vehicle.h"
 
 #endif  // ZJOLT_H_
