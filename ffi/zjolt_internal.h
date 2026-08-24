@@ -19,7 +19,9 @@
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
+#include <Jolt/Physics/Collision/CollisionGroup.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Collision/ObjectLayer.h>
 #include <Jolt/Physics/Collision/PhysicsMaterial.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
@@ -50,8 +52,8 @@
 // every dereference happens after converting back to the Jolt type. This is
 // the same guarantee any opaque `typedef struct Foo Foo;` C API relies on.
 //
-// The handles zjolt allocates itself (physics system, job system, character)
-// are real structs, defined at the bottom of this header.
+// The handles zjolt allocates itself (physics system, job system, character,
+// group filter) are real structs, defined at the bottom of this header.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -355,6 +357,53 @@ inline void WriteQuat(ZJoltQuat *out, JPH::QuatArg q) {
   if (out != nullptr) *out = ToC(q);
 }
 
+/// Jolt's Mat44 is four SIMD columns; the ABI's is sixteen floats in the same
+/// column-major order, so the crossing is a transpose-free copy.
+inline ZJoltMat44 ToC(JPH::Mat44Arg m) {
+  ZJoltMat44 out{};
+  for (JPH::uint col = 0; col < 4; ++col) {
+    const JPH::Vec4 column = m.GetColumn4(col);
+    out.m[4 * col + 0] = column.GetX();
+    out.m[4 * col + 1] = column.GetY();
+    out.m[4 * col + 2] = column.GetZ();
+    out.m[4 * col + 3] = column.GetW();
+  }
+  return out;
+}
+
+/// Named apart from ToC(Mat44Arg) for the same reason ToCR(RVec3Arg) is named
+/// apart from ToC(Vec3Arg): in a float build JPH::RMat44 and JPH::Mat44 are
+/// the SAME type, so the two would collide on return type alone.
+///
+/// The translation column is read through GetTranslation rather than
+/// GetColumn4(3), because JPH::DMat44 keeps it as a DVec3 and asserts on
+/// GetColumn4(3) (DMat44.h:115). Its fourth element is therefore written as 1
+/// rather than read back — which is what a rigid transform carries, and every
+/// RMat44 that crosses this boundary is one.
+inline ZJoltRMat44 ToCR(JPH::RMat44Arg m) {
+  ZJoltRMat44 out{};
+  for (JPH::uint col = 0; col < 3; ++col) {
+    const JPH::Vec4 column = m.GetColumn4(col);
+    out.m[4 * col + 0] = static_cast<ZJoltReal>(column.GetX());
+    out.m[4 * col + 1] = static_cast<ZJoltReal>(column.GetY());
+    out.m[4 * col + 2] = static_cast<ZJoltReal>(column.GetZ());
+    out.m[4 * col + 3] = static_cast<ZJoltReal>(column.GetW());
+  }
+  const JPH::RVec3 translation = m.GetTranslation();
+  out.m[12] = static_cast<ZJoltReal>(translation.GetX());
+  out.m[13] = static_cast<ZJoltReal>(translation.GetY());
+  out.m[14] = static_cast<ZJoltReal>(translation.GetZ());
+  out.m[15] = static_cast<ZJoltReal>(1);
+  return out;
+}
+
+inline void WriteMat44(ZJoltMat44 *out, JPH::Mat44Arg m) {
+  if (out != nullptr) *out = ToC(m);
+}
+inline void WriteRMat44(ZJoltRMat44 *out, JPH::RMat44Arg m) {
+  if (out != nullptr) *out = ToCR(m);
+}
+
 //===----------------------------------------------------------------------===//
 // Query filter adapters
 //
@@ -572,6 +621,62 @@ class ConstStreamIn final : public JPH::StreamIn {
 //===----------------------------------------------------------------------===//
 // Handle types zjolt owns (global namespace — they must match the C tag names)
 //===----------------------------------------------------------------------===//
+
+/// A collision group filter.
+///
+/// A thin subclass of JPH::GroupFilter that HOLDS a GroupFilterTable rather
+/// than being one, for a reason worth writing down: JPH::GroupFilterTable is
+/// `final`, and it keeps its sub-group count private with no accessor. Every
+/// one of its mutators indexes a bit table through GetBit, which asserts
+/// `sub_group1 != sub_group2` and `sub_group2 < mNumSubGroups`
+/// (GroupFilterTable.h:46,52) and, in a build without asserts, indexes out of
+/// bounds instead. Turning those into returned errors means knowing the count,
+/// and the only way to know it is to keep it.
+///
+/// Forwarding CanCollide to the contained table is exact rather than
+/// approximate. The table's rules compare the two bodies' filter POINTERS, and
+/// both bodies point at this wrapper, so the comparison means what it meant.
+///
+/// Declared here rather than in zjolt_group.cpp because a body desc carries a
+/// ZJoltCollisionGroup, so the translation units that build a body out of one
+/// need the complete type to hand Jolt.
+///
+/// Reference counted by Jolt: GroupFilter derives from RefTarget<GroupFilter>,
+/// so AddRef and Release are its own, and Release is what destroys it —
+/// through the operator delete GroupFilter inherits from
+/// JPH_DECLARE_RTTI_HELPER, which routes to Jolt's allocator and therefore to
+/// the host's.
+struct ZJoltGroupFilter final : public JPH::GroupFilter {
+  explicit ZJoltGroupFilter(JPH::uint sub_groups)
+      : table(sub_groups), num_sub_groups(sub_groups) {}
+
+  bool CanCollide(const JPH::CollisionGroup &group1,
+                  const JPH::CollisionGroup &group2) const override {
+    return table.CanCollide(group1, group2);
+  }
+
+  JPH::GroupFilterTable table;
+  JPH::uint num_sub_groups;
+};
+
+namespace zjolt {
+
+/// A body's collision group, made into Jolt's.
+///
+/// A NULL `group` — and a NULL filter inside one — is the default-constructed
+/// CollisionGroup, which already means "no group, no filter". One place rather
+/// than one per translation unit: a body desc, a soft-body desc, a ragdoll
+/// part and zjoltBodySetCollisionGroup all hand Jolt the same three fields.
+inline JPH::CollisionGroup ToJolt(const ZJoltCollisionGroup *group) {
+  JPH::CollisionGroup out;
+  if (group == nullptr) return out;
+  out.SetGroupFilter(group->filter);
+  out.SetGroupID(group->group_id);
+  out.SetSubGroupID(group->sub_group_id);
+  return out;
+}
+
+}  // namespace zjolt
 
 /// Wraps whichever JPH::JobSystem implementation the host asked for.
 ///

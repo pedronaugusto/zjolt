@@ -117,6 +117,18 @@ pub const RVec3 = extern struct {
     z: Real,
 };
 
+/// Four columns of four floats, column-major: column `c`'s row `r` is
+/// `m[4 * c + r]`.
+pub const Mat44 = extern struct {
+    m: [16]f32,
+};
+
+/// `Mat44` with `Real` elements, the way `RVec3` is `Vec3` with `Real`
+/// elements. Its width follows `-Ddouble_precision`.
+pub const RMat44 = extern struct {
+    m: [16]Real,
+};
+
 pub const AABox = extern struct {
     min: Vec3,
     max: Vec3,
@@ -179,7 +191,7 @@ pub const Activation = enum(c_int) {
 /// name them. This is layout-identical — six bits at the bottom of a `c_int` —
 /// and lets a caller write `.{ .translation_z = false }` instead of an
 /// `@enumFromInt` of an OR.
-pub const AllowedDofs = packed struct(c_int) {
+pub const AllowedDofs = packed struct(u32) {
     translation_x: bool = true,
     translation_y: bool = true,
     translation_z: bool = true,
@@ -205,7 +217,10 @@ pub const OverrideMassProperties = enum(c_int) {
 };
 
 pub const ShapeSubType = enum(c_int) {
-    other = 0,
+    /// Not a shape at all — what `zjoltShapeGetSubType` reports for a null
+    /// handle. Distinct from `user_defined`, which is a shape of a kind this
+    /// binding has no name for.
+    none = 0,
     sphere = 1,
     box = 2,
     capsule = 3,
@@ -224,6 +239,9 @@ pub const ShapeSubType = enum(c_int) {
     plane = 16,
     empty = 17,
     soft_body = 18,
+    /// One of the sixteen `User*` slots Jolt reserves for shape types
+    /// registered outside this library. Nothing here can construct one.
+    user_defined = 19,
 };
 
 pub const BackFaceMode = enum(c_int) {
@@ -545,6 +563,7 @@ pub const BodyDesc = extern struct {
     linear_velocity: Vec3,
     angular_velocity: Vec3,
     shape: ?*const Shape,
+    collision_group: CollisionGroup,
     user_data: u64,
     object_layer: ObjectLayer,
     motion_type: MotionType,
@@ -812,6 +831,9 @@ pub extern fn zjoltBodyGetMotionQuality(system: *const PhysicsSystem, body: Body
 pub extern fn zjoltBodySetPositionAndRotation(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 pub extern fn zjoltBodyGetPositionAndRotation(system: *const PhysicsSystem, body: BodyId, out_position: ?*RVec3, out_rotation: ?*Quat) void;
 pub extern fn zjoltBodyGetCenterOfMassPosition(system: *const PhysicsSystem, body: BodyId, out: *RVec3) void;
+pub extern fn zjoltBodyGetWorldTransform(system: *const PhysicsSystem, body: BodyId, out: *RMat44) void;
+pub extern fn zjoltBodyGetCenterOfMassTransform(system: *const PhysicsSystem, body: BodyId, out: *RMat44) void;
+pub extern fn zjoltBodyGetInverseInertia(system: *const PhysicsSystem, body: BodyId, out: *Mat44) Result;
 pub extern fn zjoltBodySetPositionAndRotationWhenChanged(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 pub extern fn zjoltBodyMoveKinematic(system: *PhysicsSystem, body: BodyId, target_position: *const RVec3, target_rotation: ?*const Quat, delta_time: f32) void;
 pub extern fn zjoltBodySetPositionRotationAndVelocity(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, linear_velocity: *const Vec3, angular_velocity: *const Vec3) void;
@@ -1195,6 +1217,7 @@ pub const SoftBodyVertexAttributes = extern struct {
 
 pub const SoftBodyDesc = extern struct {
     shared_settings: ?*const SoftBodySharedSettings,
+    collision_group: CollisionGroup,
     position: RVec3,
     rotation: Quat,
     user_data: u64,
@@ -1514,11 +1537,6 @@ pub const SkeletonPose = opaque {};
 pub const RagdollSettings = opaque {};
 pub const Ragdoll = opaque {};
 
-pub const RagdollSwingType = enum(c_int) {
-    cone = 0,
-    pyramid = 1,
-};
-
 //=============================================================================
 // Constraints
 //=============================================================================
@@ -1580,7 +1598,7 @@ pub const RagdollConstraintDesc = extern struct {
     position2: RVec3,
     twist_axis2: Vec3,
     plane_axis2: Vec3,
-    swing_type: RagdollSwingType,
+    swing_type: SwingType,
     normal_half_cone_angle: f32,
     plane_half_cone_angle: f32,
     twist_min_angle: f32,

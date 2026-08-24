@@ -353,6 +353,7 @@ ZJoltResult BuildSoftBodyCreationSettings(const ZJoltSoftBodyDesc &desc,
   }
 
   out->mSettings = zjolt::ToJolt(desc.shared_settings);
+  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mPosition = zjolt::ToJoltR(desc.position);
   out->mRotation = zjolt::ToJoltRotation(desc.rotation);
   out->mUserData = desc.user_data;
@@ -383,6 +384,11 @@ void zjoltSoftBodyDescInit(ZJoltSoftBodyDesc *desc) {
 
   *desc = ZJoltSoftBodyDesc{};
   desc->shared_settings = nullptr;
+  // Not all-zero: "no group" is ZJOLT_COLLISION_GROUP_INVALID, and 0 is a
+  // perfectly good group id.
+  desc->collision_group.filter = nullptr;
+  desc->collision_group.group_id = defaults.mCollisionGroup.GetGroupID();
+  desc->collision_group.sub_group_id = defaults.mCollisionGroup.GetSubGroupID();
   desc->position = zjolt::ToCR(defaults.mPosition);
   desc->rotation = zjolt::ToC(defaults.mRotation);
   desc->user_data = defaults.mUserData;

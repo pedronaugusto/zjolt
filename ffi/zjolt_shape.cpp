@@ -93,15 +93,14 @@ ZJoltShapeSubType ToCSubType(JPH::EShapeSubType sub_type) {
     case JPH::EShapeSubType::SoftBody:
       return ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY;
     default:
-      // Every shape kind Jolt itself defines is now named above, so this arm
-      // no longer stands for "a kind we did not get round to". What is left is
-      // the sixteen User1..UserConvex8 slots the enum reserves for shape types
-      // registered by C++ outside this library — unconstructible from here and
-      // unnameable from here, because their meaning belongs to whoever
-      // registered them. That is also why the arm cannot simply go away: it is
-      // what the entry point below returns for a NULL handle, and without it a
-      // null shape would report SPHERE.
-      return ZJOLT_SHAPE_SUB_TYPE_OTHER;
+      // Every shape kind Jolt itself defines is named above, so what is left
+      // here is the sixteen User1..UserConvex8 slots the enum reserves for
+      // shape types registered by C++ outside this library — unconstructible
+      // from here and unnameable from here, because their meaning belongs to
+      // whoever registered them. It is deliberately NOT the same value a NULL
+      // handle reports: this arm says "a shape, of a kind I cannot name", and
+      // ZJOLT_SHAPE_SUB_TYPE_NONE says "not a shape".
+      return ZJOLT_SHAPE_SUB_TYPE_USER_DEFINED;
   }
 }
 
@@ -709,7 +708,7 @@ uint32_t zjoltShapeGetRefCount(const ZJoltShape *shape) {
 }
 
 ZJoltShapeSubType zjoltShapeGetSubType(const ZJoltShape *shape) {
-  if (shape == nullptr) return ZJOLT_SHAPE_SUB_TYPE_OTHER;
+  if (shape == nullptr) return ZJOLT_SHAPE_SUB_TYPE_NONE;
   return ToCSubType(zjolt::ToJolt(shape)->GetSubType());
 }
 

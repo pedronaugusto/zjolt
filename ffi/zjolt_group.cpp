@@ -1,48 +1,14 @@
 //===----------------------------------------------------------------------===//
 // zjolt — collision groups.
 //
-// The handle is a thin subclass of JPH::GroupFilter that HOLDS a
-// GroupFilterTable rather than being one, for a reason worth writing down:
-// JPH::GroupFilterTable is `final`, and it keeps its sub-group count private
-// with no accessor. Every one of its mutators indexes a bit table through
-// GetBit, which asserts `sub_group1 != sub_group2` and
-// `sub_group2 < mNumSubGroups` (`GroupFilterTable.h:46,52`) and, in a build
-// without asserts, indexes out of bounds instead. Turning those into returned
-// errors means knowing the count, and the only way to know it is to keep it.
-//
-// Forwarding CanCollide to the contained table is exact rather than
-// approximate. The table's rules compare the two bodies' filter POINTERS, and
-// both bodies point at this wrapper, so the comparison means what it meant.
+// The handle itself — a thin subclass of JPH::GroupFilter that HOLDS a
+// GroupFilterTable rather than being one, and why — is declared in
+// zjolt_internal.h. It lives there rather than here because a ZJoltBodyDesc
+// carries a ZJoltCollisionGroup, so the translation units that build a body
+// need the complete type too.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
-
-#include <Jolt/Physics/Collision/CollisionGroup.h>
-#include <Jolt/Physics/Collision/GroupFilterTable.h>
-
-//===----------------------------------------------------------------------===//
-// The handle
-//
-// Global namespace, because the C header names it as an opaque handle and the
-// tag has to match. Reference counted by Jolt: GroupFilter derives from
-// RefTarget<GroupFilter>, so AddRef and Release are its own, and Release is
-// what destroys it — through the operator delete GroupFilter inherits from
-// JPH_DECLARE_RTTI_HELPER, which routes to Jolt's allocator and therefore to
-// the host's.
-//===----------------------------------------------------------------------===//
-
-struct ZJoltGroupFilter final : public JPH::GroupFilter {
-  explicit ZJoltGroupFilter(JPH::uint sub_groups)
-      : table(sub_groups), num_sub_groups(sub_groups) {}
-
-  bool CanCollide(const JPH::CollisionGroup &group1,
-                  const JPH::CollisionGroup &group2) const override {
-    return table.CanCollide(group1, group2);
-  }
-
-  JPH::GroupFilterTable table;
-  JPH::uint num_sub_groups;
-};
 
 namespace {
 
@@ -170,14 +136,9 @@ void zjoltBodySetCollisionGroup(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                                 const ZJoltCollisionGroup *group) {
   if (system == nullptr) return;
 
-  // A default-constructed CollisionGroup already means "no group, no filter",
-  // which is what a NULL `group` asks for.
-  JPH::CollisionGroup jolt;
-  if (group != nullptr) {
-    jolt.SetGroupFilter(group->filter);
-    jolt.SetGroupID(group->group_id);
-    jolt.SetSubGroupID(group->sub_group_id);
-  }
+  // A NULL `group` converts to the default-constructed CollisionGroup, which
+  // already means "no group, no filter".
+  const JPH::CollisionGroup jolt = zjolt::ToJolt(group);
   // Takes a body write lock and does nothing if the id is stale, so this is
   // safe to call with an id that has gone.
   system->system.GetBodyInterface().SetCollisionGroup(zjolt::ToJolt(body),

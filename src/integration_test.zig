@@ -532,6 +532,87 @@ test "a dynamic body falls under gravity and comes to rest on the floor" {
     try std.testing.expectEqual(@as(u32, 0), try world.system.countActiveBodies());
 }
 
+test "the transform matrices place the body, its centre of mass, and its inertia" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const sphere = try zjolt.Shape.initSphere(0.5, .{});
+    defer sphere.release();
+
+    // A centre of mass a metre up the shape's own +Y, so the two transforms
+    // below cannot come out equal by accident.
+    const offset = try zjolt.Shape.initOffsetCenterOfMass(sphere, zjolt.vec3(0, 1, 0));
+    defer offset.release();
+
+    const bodies = world.system.bodies();
+    const quarter_turn = zjolt.quatFromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 2.0);
+    const ball = try bodies.createAndAdd(.{
+        .shape = offset,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(2, 6, -3),
+        .rotation = quarter_turn,
+    }, .dont_activate);
+
+    // Column-major: the translation is the fourth column, elements 12..15.
+    const transform = bodies.getWorldTransform(ball);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 2), transform.m[12], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 6), transform.m[13], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, -3), transform.m[14], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 1), transform.m[15], 1e-4);
+
+    // A quarter turn about +Y sends the x axis to -z, so column 0 — elements
+    // 0..3 — is (0, 0, -1, 0). Reading it row-major would find 0 here and the
+    // translation somewhere else entirely.
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 0), transform.m[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 0), transform.m[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, -1), transform.m[2], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 0), transform.m[3], 1e-4);
+
+    // The centre-of-mass transform agrees with the accessor that reports the
+    // same point as a position, and sits the offset above the shape's origin.
+    const com_transform = bodies.getCenterOfMassTransform(ball);
+    const com = bodies.getCenterOfMassPosition(ball);
+    try std.testing.expectApproxEqAbs(com.x, com_transform.m[12], 1e-4);
+    try std.testing.expectApproxEqAbs(com.y, com_transform.m[13], 1e-4);
+    try std.testing.expectApproxEqAbs(com.z, com_transform.m[14], 1e-4);
+    try std.testing.expectApproxEqAbs(
+        transform.m[13] + 1,
+        com_transform.m[13],
+        1e-4,
+    );
+
+    // A plain sphere, whose inertia is the same about every axis, so its
+    // inverse is a scaled identity whatever the body's rotation. The offset
+    // centre of mass above would not be: displacing the mass adds a
+    // parallel-axis term to two of the three axes.
+    const plain = try bodies.createAndAdd(.{
+        .shape = sphere,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(-4, 6, 0),
+        .rotation = quarter_turn,
+    }, .dont_activate);
+
+    const inverse_inertia = try bodies.getInverseInertia(plain);
+    try std.testing.expect(inverse_inertia.m[0] > 0);
+    try std.testing.expectApproxEqRel(inverse_inertia.m[0], inverse_inertia.m[5], 1e-3);
+    try std.testing.expectApproxEqRel(inverse_inertia.m[0], inverse_inertia.m[10], 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), inverse_inertia.m[1], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), inverse_inertia.m[4], 1e-4);
+
+    // Only a dynamic body has one, and only a live id names a body.
+    try std.testing.expectError(
+        error.InvalidArgument,
+        bodies.getInverseInertia(world.floor),
+    );
+    try std.testing.expectError(
+        error.BodyNotFound,
+        bodies.getInverseInertia(zjolt.invalid_body_id),
+    );
+}
+
 test "the same inputs step to the same state twice" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();

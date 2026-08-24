@@ -211,7 +211,10 @@ pub const SkeletonPose = struct {
 
 /// Which swing shape a `RagdollConstraintDesc` uses. Cone limits are
 /// symmetric around zero; a pyramid supports asymmetric ones.
-pub const SwingType = c.RagdollSwingType;
+///
+/// The same type `Constraint` uses — there is one swing type, not one per
+/// subsystem.
+pub const SwingType = c.SwingType;
 
 /// The swing-twist constraint attaching one part to its parent, in WORLD
 /// space — the same space as the parts' `body.position`/`body.rotation`.

@@ -10,8 +10,13 @@
 //   *Create        allocate through the installed allocator and yield a handle
 //                  the caller owns.
 //   *Destroy       accept NULL and are safe to call once.
-//   Shapes         are reference counted: zjoltShapeAddRef / zjoltShapeRelease.
-//                  Everything else is a plain owning handle.
+//   Handles        are either reference counted, released with *AddRef and
+//                  *Release, or plain owning ones freed with *Destroy. Which
+//                  kind a type is is written on the type; there is no single
+//                  rule that covers all of them. Shapes, materials, group
+//                  filters, constraints, path constraint paths, soft-body
+//                  shared settings, skeletons, ragdoll settings and ragdolls
+//                  are the reference-counted ones today.
 //   Query results  borrow nothing; every out-parameter is caller-owned storage.
 //   Callbacks      receive pointers valid only for the duration of the call.
 //
@@ -258,11 +263,18 @@ ZJOLT_API void zjoltDeinit(void);
 
 ZJOLT_API bool zjoltIsInitialized(void);
 
-/// Physics systems, job systems and characters currently alive.
+/// Plain owning handles currently alive, across every kind there is:
+/// physics systems, job systems, characters (both kinds), character contact
+/// listeners, character-vs-character collisions, debug renderers, compute
+/// systems, hair, and vehicle constraints.
 ///
-/// Shapes are not counted: Jolt reference counts them, and their count changes
-/// inside calls zjolt does not mediate, so a number kept here would be wrong
-/// rather than merely absent. Release your shapes anyway — they are freed
+/// The full list matters because zjoltDeinit REFUSES while this is non-zero.
+/// A host that has released only the kinds it remembers has no other way to
+/// find what is holding the library up.
+///
+/// Reference-counted objects are not counted: Jolt owns their counts, which
+/// change inside calls zjolt does not mediate, so a number kept here would be
+/// wrong rather than merely absent. Release them anyway — they are freed
 /// through the installed allocator too.
 ZJOLT_API uint32_t zjoltLiveHandleCount(void);
 
@@ -284,6 +296,17 @@ typedef struct ZJoltQuat {
   float x, y, z, w;
 } ZJoltQuat;
 
+/// A 4x4 matrix in Jolt's own layout: four COLUMNS of four floats each, so
+/// column c's row r is `m[4 * c + r]`. Column-major, NOT row-major — the same
+/// layout ZJoltSoftBodyInvBind::matrix already uses.
+///
+/// Carries a transform (rotation in the first three columns, translation in
+/// the fourth) or a 3x3 tensor padded out to 4x4, which is how Jolt stores an
+/// inertia matrix.
+typedef struct ZJoltMat44 {
+  float m[16];
+} ZJoltMat44;
+
 /// Scalar type of a world-space position. `double` when the library was built
 /// with double precision, otherwise `float`.
 #ifdef ZJOLT_DOUBLE_PRECISION
@@ -298,6 +321,21 @@ typedef float ZJoltReal;
 typedef struct ZJoltRVec3 {
   ZJoltReal x, y, z;
 } ZJoltRVec3;
+
+/// A world-space transform: ZJoltMat44 with ZJoltReal elements, exactly as
+/// ZJoltRVec3 is ZJoltVec3 with ZJoltReal elements. Its width therefore
+/// follows ZJOLT_DOUBLE_PRECISION, which is already folded into
+/// ZJOLT_CONFIG_ID above — a consumer that disagrees about that setting
+/// disagrees about the size of this struct, and zjoltInit refuses it.
+///
+/// Jolt's own double-precision matrix keeps the rotation part in single
+/// precision and widens only the translation column (DMat44). This does not
+/// mirror that split: the twelve rotation entries are exact float values
+/// widened to ZJoltReal, so one element type describes the whole matrix and a
+/// consumer does not have to model two.
+typedef struct ZJoltRMat44 {
+  ZJoltReal m[16];
+} ZJoltRMat44;
 
 typedef struct ZJoltAABox {
   ZJoltVec3 min;
@@ -370,6 +408,11 @@ typedef enum ZJoltActivation {
 
 /// Degrees of freedom a body is allowed, as a bit mask. Use
 /// ZJOLT_ALLOWED_DOFS_ALL unless constraining to a plane.
+///
+/// Like every other bit mask here, it CROSSES as a uint32_t and this enum only
+/// names the bits. A field or parameter typed as the enum itself would hold a
+/// value that is not one of its enumerators the moment two bits are combined,
+/// which is what the fields carrying this used to do.
 typedef enum ZJoltAllowedDofs {
   ZJOLT_ALLOWED_DOFS_TRANSLATION_X = 1 << 0,
   ZJOLT_ALLOWED_DOFS_TRANSLATION_Y = 1 << 1,
@@ -390,12 +433,23 @@ typedef enum ZJoltOverrideMassProperties {
 /// Shape kinds this ABI can produce. Reported by zjoltShapeGetSubType, and
 /// meaningful after a restore to confirm what came back.
 ///
-/// Every kind Jolt itself defines is named here. OTHER is left for the two
-/// things that are not one of them: a NULL handle, and the sixteen `User*`
-/// slots Jolt reserves for shape types registered by C++ outside this library,
-/// whose meaning belongs to whoever registered them.
+/// Every kind Jolt itself defines is named here. The two values that are not
+/// one of them sit at either end and mean different things:
+///
+///   * NONE is not a shape at all — what zjoltShapeGetSubType reports for a
+///     NULL handle. It is zero so that zeroed storage reads as "nothing"
+///     rather than as SPHERE.
+///   * USER_DEFINED is a shape whose kind this ABI has no name for: one of the
+///     sixteen User1..UserConvex8 slots Jolt reserves for shape types
+///     registered by C++ outside this library, whose meaning belongs to
+///     whoever registered them. Nothing here can construct one, so it only
+///     ever appears on a shape that came in from such a registration.
+///
+/// They replace a single OTHER that stood for both, which left a caller unable
+/// to tell "I passed nothing" from "I passed something you do not know". Two
+/// facts, two values.
 typedef enum ZJoltShapeSubType {
-  ZJOLT_SHAPE_SUB_TYPE_OTHER = 0,
+  ZJOLT_SHAPE_SUB_TYPE_NONE = 0,
   ZJOLT_SHAPE_SUB_TYPE_SPHERE = 1,
   ZJOLT_SHAPE_SUB_TYPE_BOX = 2,
   ZJOLT_SHAPE_SUB_TYPE_CAPSULE = 3,
@@ -413,10 +467,11 @@ typedef enum ZJoltShapeSubType {
   ZJOLT_SHAPE_SUB_TYPE_HEIGHT_FIELD = 15,
   ZJOLT_SHAPE_SUB_TYPE_PLANE = 16,
   ZJOLT_SHAPE_SUB_TYPE_EMPTY = 17,
-  /// Jolt's soft-body shape. There is no constructor for it — soft bodies are
-  /// not exposed — but it is named so that a shape read back off a body always
-  /// has a name.
+  /// Jolt's soft-body shape, which Jolt builds itself when a soft body is
+  /// created. There is no shape constructor for one here, but it is named so
+  /// that a shape read back off a body always has a name.
   ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY = 18,
+  ZJOLT_SHAPE_SUB_TYPE_USER_DEFINED = 19,
 } ZJoltShapeSubType;
 
 typedef enum ZJoltBackFaceMode {

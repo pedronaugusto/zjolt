@@ -10,6 +10,9 @@
 
 #include "zjolt_core.h"
 
+// For ZJoltCollisionGroup, which ZJoltBodyDesc carries.
+#include "zjolt_group.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,11 +28,18 @@ typedef struct ZJoltBodyDesc {
   ZJoltVec3 angular_velocity;
   /// Required. A reference is taken for the lifetime of the body.
   const ZJoltShape *shape;
+  /// Which exceptions this body makes to layer-based collision. The default
+  /// zjoltBodyDescInit writes is "no group, no filter", which collides with
+  /// everything its object layer allows. A reference is taken on
+  /// `collision_group.filter` for the lifetime of the body, exactly as one is
+  /// on `shape`; the desc itself takes none.
+  ZJoltCollisionGroup collision_group;
   uint64_t user_data;
   ZJoltObjectLayer object_layer;
   ZJoltMotionType motion_type;
   ZJoltMotionQuality motion_quality;
-  ZJoltAllowedDofs allowed_dofs;
+  /// A mask of ZJoltAllowedDofs, not a single enumerator.
+  uint32_t allowed_dofs;
   ZJoltOverrideMassProperties override_mass_properties;
   /// Used when override_mass_properties is CALCULATE_INERTIA.
   float mass;
@@ -124,6 +134,41 @@ ZJOLT_API void zjoltBodyGetPositionAndRotation(
     ZJoltQuat *out_rotation);
 ZJOLT_API void zjoltBodyGetCenterOfMassPosition(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltRVec3 *out);
+
+/// The body's world transform: the rotation and translation that place the
+/// SHAPE's origin, column-major with the translation in the fourth column.
+///
+/// Identity when `system` is NULL or the body lock fails. That is Jolt's own
+/// answer rather than one this binding invented — BodyInterface::
+/// GetWorldTransform returns RMat44::sIdentity() on a failed lock
+/// (BodyInterface.cpp:535) — so a stale id and a body sitting unrotated at the
+/// origin read the same. Ask zjoltBodyIsAdded if the difference matters.
+ZJOLT_API void zjoltBodyGetWorldTransform(const ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body, ZJoltRMat44 *out);
+
+/// As zjoltBodyGetWorldTransform, but placing the body's CENTRE OF MASS rather
+/// than the shape's origin. This is the space Jolt simulates in, and the two
+/// differ by the shape's centre of mass offset — which is not zero for a
+/// capsule, a compound, or anything wrapped in an offset-centre-of-mass shape.
+///
+/// Identity on a NULL system or a failed body lock, again Jolt's own default
+/// (BodyInterface.cpp:544).
+ZJOLT_API void zjoltBodyGetCenterOfMassTransform(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltRMat44 *out);
+
+/// The body's inverse inertia tensor, rotated into world space, as a 3x3
+/// matrix padded out to 4x4 the way Jolt stores one.
+///
+/// Only a DYNAMIC body has one, and asking a body that is not is refused with
+/// ZJOLT_RESULT_INVALID_ARGUMENT rather than forwarded. Jolt's own
+/// BodyInterface::GetInverseInertia checks only whether the body lock
+/// succeeded (BodyInterface.cpp:917) and then calls Body::GetInverseInertia,
+/// which asserts IsDynamic (Body.inl:122) and, in a build without asserts,
+/// dereferences the motion properties a static body does not have. So the
+/// identity-on-failed-lock default that call documents is not reachable
+/// through here: a stale id is ZJOLT_RESULT_BODY_NOT_FOUND instead.
+ZJOLT_API ZJoltResult zjoltBodyGetInverseInertia(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out);
 
 /// As zjoltBodySetPositionAndRotation, but skips the broad-phase update and
 /// the activation check entirely when the new pose is close enough to the old
