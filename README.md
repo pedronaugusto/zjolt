@@ -422,8 +422,10 @@ constraints says which cache filled; `deinit` refuses while a handle is alive
 and traces why; a character settles on the floor, reports the body under it,
 walks, crouches, and climbs a step within its stride; a hinge holds its axis
 and its position motor drives toward a target angle; a ragdoll settles under
-gravity; and a character on a ramp is supported by it while one pressed
-against a wall is not.
+gravity, and releasing one that is still in the world takes it out before
+destroying it rather than leaving the broad phase holding freed bodies; and a
+character on a ramp is supported by it while one pressed against a wall is
+not.
 
 Two reflective sweeps run alongside those, and they are mechanical on purpose:
 one calls every entry point in the ABI with nulls, and one calls every entry

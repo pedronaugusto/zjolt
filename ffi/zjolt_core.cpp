@@ -310,7 +310,7 @@ void zjoltDeinit(void) {
         "heap. Destroy them and call zjoltDeinit again. The kinds counted here "
         "are physics systems, job systems, characters, character contact "
         "listeners, character-vs-character collisions, debug renderers, "
-        "compute systems, hair, and vehicle constraints.",
+        "compute systems, hair, vehicle constraints, and ragdolls.",
         static_cast<int>(live));
     return;
   }

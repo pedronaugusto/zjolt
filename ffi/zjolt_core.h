@@ -263,19 +263,24 @@ ZJOLT_API void zjoltDeinit(void);
 
 ZJOLT_API bool zjoltIsInitialized(void);
 
-/// Plain owning handles currently alive, across every kind there is:
-/// physics systems, job systems, characters (both kinds), character contact
+/// Owning handles currently alive, across every kind there is: physics
+/// systems, job systems, characters (both kinds), character contact
 /// listeners, character-vs-character collisions, debug renderers, compute
-/// systems, hair, and vehicle constraints.
+/// systems, hair, vehicle constraints, and ragdolls.
 ///
 /// The full list matters because zjoltDeinit REFUSES while this is non-zero.
 /// A host that has released only the kinds it remembers has no other way to
 /// find what is holding the library up.
 ///
-/// Reference-counted objects are not counted: Jolt owns their counts, which
-/// change inside calls zjolt does not mediate, so a number kept here would be
-/// wrong rather than merely absent. Release them anyway — they are freed
-/// through the installed allocator too.
+/// Objects that are nothing but a Jolt reference count — shapes, materials,
+/// group filters, skeletons, ragdoll settings — are not counted: Jolt owns
+/// their counts, which change inside calls zjolt does not mediate, so a
+/// number kept here would be wrong rather than merely absent. Release them
+/// anyway; they are freed through the installed allocator too. A ragdoll is
+/// counted despite being reference counted, because the handle is a
+/// zjolt-owned struct and not a tag: the count moves when
+/// zjoltRagdollSettingsCreateRagdoll allocates it and when the release that
+/// frees it drops the last reference, not on every zjoltRagdollAddRef.
 ZJOLT_API uint32_t zjoltLiveHandleCount(void);
 
 //===----------------------------------------------------------------------===//

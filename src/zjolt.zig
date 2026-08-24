@@ -401,18 +401,22 @@ pub fn isInitialized() bool {
     return c.zjoltIsInitialized();
 }
 
-/// Plain owning handles currently alive, across every kind there is: physics
+/// Owning handles currently alive, across every kind there is: physics
 /// systems, job systems, characters, character contact listeners,
 /// character-vs-character collisions, debug renderers, compute systems, hair,
-/// and vehicle constraints.
+/// vehicle constraints, and ragdolls.
 ///
 /// `deinit` refuses while this is non-zero, so a shutdown path can assert on
 /// it rather than discover the problem as heap corruption later. The full list
 /// matters for exactly that reason: a shutdown that released only the kinds it
 /// remembered has nothing else to go on.
 ///
-/// Reference-counted objects — shapes, materials, group filters, constraints,
-/// ragdolls and the rest — are not counted; Jolt owns their counts.
+/// Objects that are nothing but a Jolt reference count — shapes, materials,
+/// group filters, constraints, skeletons, ragdoll settings and the rest — are
+/// not counted; Jolt owns their counts. A `Ragdoll` is the exception, because
+/// its handle is a struct this package owns rather than a tag on Jolt's: the
+/// count moves when `RagdollSettings.createRagdoll` allocates it and when the
+/// `release` that frees it drops the last reference, not on every `addRef`.
 pub fn liveHandleCount() u32 {
     return c.zjoltLiveHandleCount();
 }

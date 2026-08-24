@@ -3,7 +3,7 @@
 //
 // A few conversions are duplicated from zjolt_body.cpp (ToJoltMotionType,
 // the ZJoltBodyDesc -> JPH::BodyCreationSettings fields) and zjolt_internal.h
-// (ToJolt/ToC for the four handles this file introduces). Both would
+// (ToJolt/ToC for the tag handles this file introduces). Both would
 // normally live in one shared place, but this subsystem is scoped to add
 // files and append registrations only — not to edit the existing
 // translation units they would otherwise join — so each stays local to this
@@ -18,15 +18,19 @@
 #include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Skeleton/SkeletonPose.h>
 
+#include <atomic>
+
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// All four are reinterpret_cast tags directly onto the Jolt type, exactly
-// like ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h — never completed,
-// never dereferenced except after converting back. Skeleton, RagdollSettings
-// and Ragdoll are reference counted (JPH::RefTarget); SkeletonPose is a plain
-// value type with no reference count of its own, allocated and freed like a
-// job system.
+// Three of the four are reinterpret_cast tags directly onto the Jolt type,
+// exactly like ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h — never
+// completed, never dereferenced except after converting back. Skeleton and
+// RagdollSettings are reference counted (JPH::RefTarget); SkeletonPose is a
+// plain value type with no reference count of its own, allocated and freed
+// like a job system.
+//
+// ZJoltRagdoll is the fourth, and it is not a tag — see The handle, below.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -64,19 +68,65 @@ inline ZJoltRagdollSettings *ToC(JPH::RagdollSettings *s) {
   return reinterpret_cast<ZJoltRagdollSettings *>(s);
 }
 
-inline const JPH::Ragdoll *ToJolt(const ZJoltRagdoll *r) {
-  return reinterpret_cast<const JPH::Ragdoll *>(r);
-}
-inline JPH::Ragdoll *ToJolt(ZJoltRagdoll *r) {
-  return reinterpret_cast<JPH::Ragdoll *>(r);
-}
-inline ZJoltRagdoll *ToC(JPH::Ragdoll *r) {
-  return reinterpret_cast<ZJoltRagdoll *>(r);
-}
-
 }  // namespace zjolt
 
+//===----------------------------------------------------------------------===//
+// The handle
+//
+// A ragdoll cannot be a tag on JPH::Ragdoll the way the three types above
+// are, because releasing the last reference to one has to be able to take
+// its bodies out of the broad phase first. `~Ragdoll` calls
+// `BodyInterface::DestroyBodies` where the bodies stand, and
+// `BodyManager::RemoveBodyInternal` asserts `!IsInBroadPhase()` before it
+// frees one (BodyManager.cpp:354) — so releasing a still-added ragdoll aborts
+// a build with assertions and corrupts the broad phase in one without.
+//
+// Removing it needs the PhysicsSystem, and `Ragdoll::mSystem` is private
+// with no getter (Ragdoll.h:248). So the handle keeps it: `owner`, the same
+// shape ZJoltCharacter (zjolt_internal.h) and ZJoltVehicleConstraint
+// (zjolt_vehicle.cpp) already have. Defined here rather than in the shared
+// header for the same reason the vehicle one is — nothing outside this file
+// ever sees a ZJoltRagdoll *.
+//
+// `refs` is the third member, and it is not a duplicate of the ragdoll's own
+// JPH::RefTarget count. BINDING.md's rule for the Release verb is that there
+// may be other holders, so two of them releasing at once must both be
+// correct and exactly one must run the teardown below. RefTarget cannot say
+// which: its Release destroys the object on the way to telling you, and
+// reading GetRefCount() before releasing leaves a gap between the read and
+// the drop that another thread fits into. Counting the handle's own
+// references is what makes that answer atomic. `impl` therefore holds Jolt's
+// only reference, pinned at one for as long as the handle lives, and
+// zjoltRagdollGetRefCount reports `refs` — which is the number the caller was
+// moving anyway.
+//===----------------------------------------------------------------------===//
+
+struct ZJoltRagdoll {
+  JPH::Ref<JPH::Ragdoll> impl;
+  ZJoltPhysicsSystem *owner;
+
+  /// Mutable for the same reason JPH::RefTarget's own count is: AddRef and
+  /// Release take a `const ZJoltRagdoll *`, because holding a reference to a
+  /// ragdoll is not modifying it.
+  mutable std::atomic<uint32_t> refs{1};
+};
+
 namespace {
+
+//===----------------------------------------------------------------------===//
+// Unwrapping
+//===----------------------------------------------------------------------===//
+
+/// The Jolt ragdoll behind a handle, or NULL for a NULL handle. `impl` is
+/// cleared only between the last two statements of zjoltRagdollRelease, so
+/// for any handle a caller can still hold this is NULL exactly when
+/// `ragdoll` is.
+JPH::Ragdoll *Impl(ZJoltRagdoll *ragdoll) {
+  return ragdoll != nullptr ? ragdoll->impl.GetPtr() : nullptr;
+}
+const JPH::Ragdoll *Impl(const ZJoltRagdoll *ragdoll) {
+  return ragdoll != nullptr ? ragdoll->impl.GetPtr() : nullptr;
+}
 
 //===----------------------------------------------------------------------===//
 // Small conversions duplicated from zjolt_body.cpp — see the file comment.
@@ -572,14 +622,32 @@ ZJoltResult zjoltRagdollSettingsCreateRagdoll(
   }
 
   const JPH::RagdollSettings *s = zjolt::ToJolt(settings);
-  JPH::Ragdoll *fresh = s->CreateRagdoll(
+  JPH::Ragdoll *created = s->CreateRagdoll(
       static_cast<JPH::CollisionGroup::GroupID>(collision_group), user_data,
       &system->system);
-  if (fresh == nullptr) {
+  if (created == nullptr) {
     return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
                            "the physics system has run out of bodies");
   }
-  *out = zjolt::ToC(zjolt::Own(fresh));
+
+  // Held from here, so failing to allocate the handle destroys the bodies
+  // CreateRagdoll just made rather than stranding them in the system. None
+  // of them are added yet, which is the one state ~Ragdoll can clean up on
+  // its own.
+  JPH::Ref<JPH::Ragdoll> fresh = created;
+
+  ZJoltRagdoll *handle = zjolt::New<ZJoltRagdoll>();
+  if (handle == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
+                           "could not allocate a ragdoll handle");
+  }
+
+  // Not zjolt::Own: the handle's JPH::Ref is what owns the ragdoll now, and
+  // the reference this call hands the caller is `refs`, which starts at one.
+  handle->impl = fresh;
+  handle->owner = system;
+  zjolt::HandleCreated();
+  *out = handle;
   return ZJOLT_RESULT_OK;
 }
 
@@ -589,31 +657,65 @@ ZJoltResult zjoltRagdollSettingsCreateRagdoll(
 
 void zjoltRagdollAddRef(const ZJoltRagdoll *ragdoll) {
   if (ragdoll == nullptr) return;
-  zjolt::ToJolt(ragdoll)->AddRef();
+  ragdoll->refs.fetch_add(1, std::memory_order_relaxed);
 }
 
 void zjoltRagdollRelease(const ZJoltRagdoll *ragdoll) {
   if (ragdoll == nullptr) return;
-  zjolt::ToJolt(ragdoll)->Release();
+
+  // Release ordering on the way down and an acquire fence once the count
+  // reaches zero, so whichever thread runs the teardown sees every other
+  // holder's writes. Exactly the arithmetic JPH::RefTarget::Release does
+  // (Core/Reference.h:60), for exactly the same reason.
+  if (ragdoll->refs.fetch_sub(1, std::memory_order_release) != 1) return;
+  std::atomic_thread_fence(std::memory_order_acquire);
+
+  ZJoltRagdoll *handle = const_cast<ZJoltRagdoll *>(ragdoll);
+  JPH::Ragdoll *impl = handle->impl.GetPtr();
+
+  // Dropping `impl` below runs ~Ragdoll, which destroys the bodies where
+  // they stand — so anything the broad phase still holds has to come out
+  // first. Asked rather than assumed, because RemoveFromPhysicsSystem is not
+  // safe on a ragdoll that was never added: it removes the constraints
+  // before the bodies, and ConstraintManager::Remove asserts that each one
+  // was added (ConstraintManager.cpp:47).
+  //
+  // AddToPhysicsSystem and RemoveFromPhysicsSystem move every part as one
+  // batch and this ABI offers no way to split them, so the first body
+  // answers for all of them. A ragdoll with no parts — settings never built,
+  // or built from a skeleton with no joints — has nothing to ask and nothing
+  // to remove.
+  const JPH::Array<JPH::BodyID> &ids = impl->GetBodyIDs();
+  if (!ids.empty() &&
+      handle->owner->system.GetBodyInterface().IsAdded(ids.front())) {
+    // Locking: a release comes from outside the simulation, and there is no
+    // narrower promise about where the bodies are.
+    impl->RemoveFromPhysicsSystem(true);
+  }
+
+  handle->impl = nullptr;
+  zjolt::Delete(handle);
+  zjolt::HandleDestroyed();
 }
 
 uint32_t zjoltRagdollGetRefCount(const ZJoltRagdoll *ragdoll) {
   if (ragdoll == nullptr) return 0;
-  return static_cast<uint32_t>(zjolt::ToJolt(ragdoll)->GetRefCount());
+  return ragdoll->refs.load(std::memory_order_relaxed);
 }
 
 void zjoltRagdollAddToPhysicsSystem(ZJoltRagdoll *ragdoll,
                                     ZJoltActivation activation,
                                     bool lock_bodies) {
-  if (ragdoll == nullptr) return;
-  zjolt::ToJolt(ragdoll)->AddToPhysicsSystem(ToJoltActivation(activation),
-                                             lock_bodies);
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return;
+  impl->AddToPhysicsSystem(ToJoltActivation(activation), lock_bodies);
 }
 
 void zjoltRagdollRemoveFromPhysicsSystem(ZJoltRagdoll *ragdoll,
                                          bool lock_bodies) {
-  if (ragdoll == nullptr) return;
-  zjolt::ToJolt(ragdoll)->RemoveFromPhysicsSystem(lock_bodies);
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return;
+  impl->RemoveFromPhysicsSystem(lock_bodies);
 }
 
 ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
@@ -622,7 +724,7 @@ ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
   ZJOLT_ENTER(out_count);
   if (!zjolt::Present(ragdoll, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  const JPH::Ragdoll *impl = zjolt::ToJolt(ragdoll);
+  const JPH::Ragdoll *impl = Impl(ragdoll);
   const JPH::Array<JPH::BodyID> &ids = impl->GetBodyIDs();
   const uint32_t count = static_cast<uint32_t>(ids.size());
   *out_count = count;
@@ -634,18 +736,21 @@ ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
 }
 
 void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies) {
-  if (ragdoll == nullptr) return;
-  zjolt::ToJolt(ragdoll)->Activate(lock_bodies);
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return;
+  impl->Activate(lock_bodies);
 }
 
 bool zjoltRagdollIsActive(const ZJoltRagdoll *ragdoll, bool lock_bodies) {
-  if (ragdoll == nullptr) return false;
-  return zjolt::ToJolt(ragdoll)->IsActive(lock_bodies);
+  const JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return false;
+  return impl->IsActive(lock_bodies);
 }
 
 void zjoltRagdollResetWarmStart(ZJoltRagdoll *ragdoll) {
-  if (ragdoll == nullptr) return;
-  zjolt::ToJolt(ragdoll)->ResetWarmStart();
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return;
+  impl->ResetWarmStart();
 }
 
 ZJoltResult zjoltRagdollSetPose(ZJoltRagdoll *ragdoll,
@@ -654,7 +759,7 @@ ZJoltResult zjoltRagdollSetPose(ZJoltRagdoll *ragdoll,
   ZJOLT_ENTER();
   if (!zjolt::Present(ragdoll, pose)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  JPH::Ragdoll *r = zjolt::ToJolt(ragdoll);
+  JPH::Ragdoll *r = Impl(ragdoll);
   const JPH::SkeletonPose *p = zjolt::ToJolt(pose);
   if (!SkeletonMatches(*r, *p)) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -669,7 +774,7 @@ ZJoltResult zjoltRagdollGetPose(ZJoltRagdoll *ragdoll, ZJoltSkeletonPose *pose,
   ZJOLT_ENTER();
   if (!zjolt::Present(ragdoll, pose)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  JPH::Ragdoll *r = zjolt::ToJolt(ragdoll);
+  JPH::Ragdoll *r = Impl(ragdoll);
   JPH::SkeletonPose *p = zjolt::ToJolt(pose);
   if (!SkeletonMatches(*r, *p)) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -685,7 +790,7 @@ ZJoltResult zjoltRagdollDriveToPoseUsingKinematics(
   ZJOLT_ENTER();
   if (!zjolt::Present(ragdoll, pose)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  JPH::Ragdoll *r = zjolt::ToJolt(ragdoll);
+  JPH::Ragdoll *r = Impl(ragdoll);
   const JPH::SkeletonPose *p = zjolt::ToJolt(pose);
   if (!SkeletonMatches(*r, *p)) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -700,7 +805,7 @@ ZJoltResult zjoltRagdollDriveToPoseUsingMotors(ZJoltRagdoll *ragdoll,
   ZJOLT_ENTER();
   if (!zjolt::Present(ragdoll, pose)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  JPH::Ragdoll *r = zjolt::ToJolt(ragdoll);
+  JPH::Ragdoll *r = Impl(ragdoll);
   const JPH::SkeletonPose *p = zjolt::ToJolt(pose);
   if (!SkeletonMatches(*r, *p)) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -726,7 +831,7 @@ ZJoltResult zjoltRagdollDriveToPoseUsingMotorsWithVelocity(
                            "delta_time must be positive");
   }
 
-  JPH::Ragdoll *r = zjolt::ToJolt(ragdoll);
+  JPH::Ragdoll *r = Impl(ragdoll);
   const JPH::SkeletonPose *prev = zjolt::ToJolt(prev_pose);
   const JPH::SkeletonPose *cur = zjolt::ToJolt(pose);
   if (!SkeletonMatches(*r, *prev) || !SkeletonMatches(*r, *cur)) {
