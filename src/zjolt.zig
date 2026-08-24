@@ -48,6 +48,7 @@ const batch_mod = @import("batch.zig");
 const group_mod = @import("group.zig");
 const state_mod = @import("state.zig");
 const softbody_mod = @import("softbody.zig");
+const vehicle_mod = @import("vehicle.zig");
 
 //=============================================================================
 // Public surface
@@ -180,6 +181,28 @@ pub const GroundState = character_mod.GroundState;
 pub const BackFaceMode = character_mod.BackFaceMode;
 pub const CharacterUpdateSettings = character_mod.UpdateSettings;
 pub const defaultCharacterUpdateSettings = character_mod.defaultUpdateSettings;
+
+pub const VehicleConstraint = vehicle_mod.VehicleConstraint;
+pub const VehicleControllerKind = vehicle_mod.ControllerKind;
+pub const VehicleCollisionTesterKind = vehicle_mod.CollisionTesterKind;
+pub const VehicleTransmissionMode = vehicle_mod.TransmissionMode;
+pub const VehicleCurvePoint = vehicle_mod.CurvePoint;
+pub const VehicleCurveDesc = vehicle_mod.CurveDesc;
+pub const default_vehicle_curve = vehicle_mod.default_curve;
+pub const VehicleWheelDesc = vehicle_mod.WheelDesc;
+pub const VehicleEngineDesc = vehicle_mod.EngineDesc;
+pub const VehicleTransmissionDesc = vehicle_mod.TransmissionDesc;
+pub const VehicleDifferentialDesc = vehicle_mod.DifferentialDesc;
+pub const VehicleAntiRollBarDesc = vehicle_mod.AntiRollBarDesc;
+pub const VehicleCollisionTesterDesc = vehicle_mod.CollisionTesterDesc;
+pub const VehicleMotorcycleDesc = vehicle_mod.MotorcycleDesc;
+pub const defaultVehicleWheelDesc = vehicle_mod.defaultWheelDesc;
+pub const defaultVehicleEngineDesc = vehicle_mod.defaultEngineDesc;
+pub const defaultVehicleTransmissionDesc = vehicle_mod.defaultTransmissionDesc;
+pub const defaultVehicleDifferentialDesc = vehicle_mod.defaultDifferentialDesc;
+pub const defaultVehicleAntiRollBarDesc = vehicle_mod.defaultAntiRollBarDesc;
+pub const defaultVehicleCollisionTesterDesc = vehicle_mod.defaultCollisionTesterDesc;
+pub const defaultVehicleMotorcycleDesc = vehicle_mod.defaultMotorcycleDesc;
 
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
