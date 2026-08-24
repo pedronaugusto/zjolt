@@ -520,6 +520,7 @@ test {
     _ = constraint_mod;
     _ = @import("integration_test.zig");
     _ = @import("constraint_test.zig");
+    _ = @import("shape_test.zig");
     _ = @import("ragdoll_test.zig");
     _ = @import("character_test.zig");
 
