@@ -421,27 +421,27 @@ pub const Ragdoll = struct {
         c.zjoltRagdollAddRef(self.handle);
     }
 
-    /// Drops one reference, and destroys every body the ragdoll owns once
-    /// the last one goes.
+    /// Drops one reference. The last one takes the ragdoll back out of its
+    /// physics system first if it is still in it — constraints and bodies
+    /// both, with body locking — and then destroys every body it owns.
     ///
-    /// CALL `removeFromPhysicsSystem` FIRST. Releasing the last reference to
-    /// a ragdoll that is still added destroys bodies the broad phase still
-    /// holds: Jolt asserts on it in a build with assertions, and silently
-    /// corrupts the broad phase in one without. It is Jolt's ownership rule
-    /// rather than one this package adds — `~Ragdoll` destroys the bodies
-    /// directly and cannot remove them itself, because by then it no longer
-    /// knows whether they were ever added.
+    /// So `defer ragdoll.release()` is the whole teardown, whether or not
+    /// `addToPhysicsSystem` was ever called. That is this package's doing
+    /// rather than Jolt's: `~Ragdoll` destroys the bodies where they stand,
+    /// and a `JPH::Ragdoll` does not expose the system it was spawned in for
+    /// anyone to remove them from. The handle keeps it, and asks whether the
+    /// ragdoll's first body is still added before removing anything —
+    /// removing one that was never added is an error in Jolt in its own
+    /// right.
     ///
-    /// ```zig
-    /// ragdoll.removeFromPhysicsSystem(true);
-    /// ragdoll.release();
-    /// ```
-    ///
-    /// Removing is not idempotent either, so remove exactly once.
+    /// `removeFromPhysicsSystem` remains the call for taking a ragdoll out of
+    /// the simulation while keeping it alive.
     pub fn release(self: Ragdoll) void {
         c.zjoltRagdollRelease(self.handle);
     }
 
+    /// References outstanding: one from `RagdollSettings.createRagdoll`, plus
+    /// one per `addRef`, less one per `release`.
     pub fn refCount(self: Ragdoll) u32 {
         return c.zjoltRagdollGetRefCount(self.handle);
     }
@@ -452,6 +452,9 @@ pub const Ragdoll = struct {
         c.zjoltRagdollAddToPhysicsSystem(self.handle, activation, lock_bodies);
     }
 
+    /// Takes them back out again, leaving the ragdoll alive and addable
+    /// again. Not idempotent — remove at most once per `addToPhysicsSystem` —
+    /// and not something `release` needs done for it.
     pub fn removeFromPhysicsSystem(self: Ragdoll, lock_bodies: bool) void {
         c.zjoltRagdollRemoveFromPhysicsSystem(self.handle, lock_bodies);
     }
