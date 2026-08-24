@@ -121,6 +121,10 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
   out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
   out->SetShape(zjolt::ToJolt(desc.shape));
+  // Overwritten for every part by zjoltRagdollSettingsDisableParentChildCollisions
+  // if that is called, and by zjoltRagdollSettingsCreateRagdoll's group id in
+  // any case — a per-part group here is what those two build on top of.
+  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
   out->mMotionType = ToJoltMotionType(desc.motion_type);
@@ -157,9 +161,9 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   return ZJOLT_RESULT_OK;
 }
 
-JPH::ESwingType ToJoltSwingType(ZJoltRagdollSwingType type) {
-  return type == ZJOLT_RAGDOLL_SWING_TYPE_PYRAMID ? JPH::ESwingType::Pyramid
-                                                  : JPH::ESwingType::Cone;
+JPH::ESwingType ToJoltSwingType(ZJoltSwingType type) {
+  return type == ZJOLT_SWING_TYPE_PYRAMID ? JPH::ESwingType::Pyramid
+                                          : JPH::ESwingType::Cone;
 }
 
 /// Builds a swing-twist constraint settings object on the heap (it must

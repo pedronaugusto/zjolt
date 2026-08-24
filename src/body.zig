@@ -44,6 +44,12 @@ pub const BodyDesc = struct {
     angular_velocity: math.Vec3 = math.vec3_zero,
     user_data: u64 = 0,
 
+    /// Exceptions to layer-based collision, for bodies of the same kind that
+    /// must not fight each other — the limbs of one ragdoll, the wheels of
+    /// one vehicle. The default makes none. The body takes its own reference
+    /// on `collision_group.filter`, exactly as it does on `shape`.
+    collision_group: group_mod.CollisionGroup = .{},
+
     motion_type: MotionType = .dynamic,
     motion_quality: MotionQuality = .discrete,
     allowed_dofs: AllowedDofs = .all,
@@ -75,6 +81,7 @@ pub const BodyDesc = struct {
         // still gets a sensible value rather than whatever was on the stack.
         c.zjoltBodyDescInit(&out);
         out.shape = self.shape.handle;
+        out.collision_group = group_mod.toC(self.collision_group);
         out.object_layer = self.object_layer;
         out.position = self.position;
         out.rotation = self.rotation;
@@ -224,6 +231,42 @@ pub const BodyInterface = struct {
     pub fn getCenterOfMassPosition(self: BodyInterface, body: BodyId) math.RVec3 {
         var out: math.RVec3 = math.rvec3_zero;
         c.zjoltBodyGetCenterOfMassPosition(self.handle, body, &out);
+        return out;
+    }
+
+    /// The rotation and translation that place the SHAPE's origin, as a
+    /// column-major matrix with the translation in the fourth column.
+    ///
+    /// Identity when the body lock fails, which is Jolt's own answer rather
+    /// than one this wrapper invented — so a stale id and a body sitting
+    /// unrotated at the origin read the same. Ask `isAdded` if that matters.
+    pub fn getWorldTransform(self: BodyInterface, body: BodyId) math.RMat44 {
+        var out: math.RMat44 = math.rmat44_identity;
+        c.zjoltBodyGetWorldTransform(self.handle, body, &out);
+        return out;
+    }
+
+    /// As `getWorldTransform`, but placing the body's CENTRE OF MASS — the
+    /// space Jolt simulates in. The two differ by the shape's centre-of-mass
+    /// offset, which is not zero for a capsule, a compound, or anything
+    /// wrapped in an offset-centre-of-mass shape. Identity on a failed lock,
+    /// same as above.
+    pub fn getCenterOfMassTransform(self: BodyInterface, body: BodyId) math.RMat44 {
+        var out: math.RMat44 = math.rmat44_identity;
+        c.zjoltBodyGetCenterOfMassTransform(self.handle, body, &out);
+        return out;
+    }
+
+    /// The inverse inertia tensor rotated into world space, as a 3x3 matrix
+    /// padded out to 4x4 the way Jolt stores one.
+    ///
+    /// Only a dynamic body has one. A static or kinematic body is
+    /// `error.InvalidArgument` rather than a default, because Jolt's own
+    /// accessor asserts on it instead of returning anything; a stale id is
+    /// `error.BodyNotFound`.
+    pub fn getInverseInertia(self: BodyInterface, body: BodyId) err.Error!math.Mat44 {
+        var out: math.Mat44 = math.mat44_identity;
+        try err.check(c.zjoltBodyGetInverseInertia(self.handle, body, &out));
         return out;
     }
 

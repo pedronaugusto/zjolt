@@ -491,7 +491,8 @@ typedef struct ZJoltRigidCharacterDesc {
   float friction;
   /// Multiplies the system's gravity for this character alone.
   float gravity_factor;
-  ZJoltAllowedDofs allowed_dofs;
+  /// A mask of ZJoltAllowedDofs, not a single enumerator.
+  uint32_t allowed_dofs;
 } ZJoltRigidCharacterDesc;
 
 /// Fills `desc` with Jolt's defaults. `shape` is left NULL and is required.

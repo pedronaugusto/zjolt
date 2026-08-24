@@ -134,6 +134,11 @@ void zjoltBodyDescInit(ZJoltBodyDesc *desc) {
   desc->linear_velocity = zjolt::ToC(defaults.mLinearVelocity);
   desc->angular_velocity = zjolt::ToC(defaults.mAngularVelocity);
   desc->shape = nullptr;
+  // Not all-zero: "no group" is ZJOLT_COLLISION_GROUP_INVALID, and 0 is a
+  // perfectly good group id.
+  desc->collision_group.filter = nullptr;
+  desc->collision_group.group_id = defaults.mCollisionGroup.GetGroupID();
+  desc->collision_group.sub_group_id = defaults.mCollisionGroup.GetSubGroupID();
   desc->user_data = defaults.mUserData;
   desc->object_layer = static_cast<ZJoltObjectLayer>(defaults.mObjectLayer);
   desc->motion_type = ToCMotionType(defaults.mMotionType);
@@ -168,6 +173,7 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
   out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
   out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
   out->SetShape(zjolt::ToJolt(desc.shape));
+  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
   out->mMotionType = ToJoltMotionType(desc.motion_type);
@@ -359,6 +365,58 @@ void zjoltBodyGetCenterOfMassPosition(const ZJoltPhysicsSystem *system,
   if (iface == nullptr || out == nullptr) return;
   zjolt::WriteRVec3(out,
                     iface->GetCenterOfMassPosition(zjolt::ToJolt(body)));
+}
+
+void zjoltBodyGetWorldTransform(const ZJoltPhysicsSystem *system,
+                                ZJoltBodyId body, ZJoltRMat44 *out) {
+  if (out == nullptr) return;
+  const JPH::BodyInterface *iface = Interface(system);
+  // Identity for a NULL system too, so the promise the header makes about a
+  // failed body lock holds for every way this can decline to answer.
+  if (iface == nullptr) {
+    zjolt::WriteRMat44(out, JPH::RMat44::sIdentity());
+    return;
+  }
+  zjolt::WriteRMat44(out, iface->GetWorldTransform(zjolt::ToJolt(body)));
+}
+
+void zjoltBodyGetCenterOfMassTransform(const ZJoltPhysicsSystem *system,
+                                       ZJoltBodyId body, ZJoltRMat44 *out) {
+  if (out == nullptr) return;
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) {
+    zjolt::WriteRMat44(out, JPH::RMat44::sIdentity());
+    return;
+  }
+  zjolt::WriteRMat44(out,
+                     iface->GetCenterOfMassTransform(zjolt::ToJolt(body)));
+}
+
+ZJoltResult zjoltBodyGetInverseInertia(const ZJoltPhysicsSystem *system,
+                                       ZJoltBodyId body, ZJoltMat44 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // The lock is taken here rather than left to BodyInterface's own
+  // GetInverseInertia because the motion type has to be read and acted on
+  // under the SAME lock: between two separate calls the body could be made
+  // static, and the second would then reach Body::GetInverseInertia's
+  // assertion after the first had cleared it.
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsDynamic()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "only a dynamic body has an inverse inertia; a static or kinematic "
+        "one is driven rather than accelerated");
+  }
+  zjolt::WriteMat44(out, jolt_body.GetInverseInertia());
+  return ZJOLT_RESULT_OK;
 }
 
 void zjoltBodySetPositionAndRotationWhenChanged(ZJoltPhysicsSystem *system,

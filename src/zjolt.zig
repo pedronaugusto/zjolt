@@ -66,6 +66,8 @@ pub const Vec3 = math_mod.Vec3;
 pub const RVec3 = math_mod.RVec3;
 pub const Quat = math_mod.Quat;
 pub const Real = math_mod.Real;
+pub const Mat44 = math_mod.Mat44;
+pub const RMat44 = math_mod.RMat44;
 pub const AABox = math_mod.AABox;
 pub const MassProperties = math_mod.MassProperties;
 pub const ShapeStats = math_mod.ShapeStats;
@@ -77,6 +79,8 @@ pub const toRVec3 = math_mod.toRVec3;
 pub const vec3_zero = math_mod.vec3_zero;
 pub const rvec3_zero = math_mod.rvec3_zero;
 pub const quat_identity = math_mod.quat_identity;
+pub const mat44_identity = math_mod.mat44_identity;
+pub const rmat44_identity = math_mod.rmat44_identity;
 pub const gravity_earth = math_mod.gravity_earth;
 
 pub const Shape = shape_mod.Shape;
@@ -228,6 +232,8 @@ pub const SkeletonPose = ragdoll_mod.SkeletonPose;
 pub const RagdollSettings = ragdoll_mod.RagdollSettings;
 pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
 pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
+/// Deprecated alias for `SwingType`, which is the same type. Kept so existing
+/// callers build.
 pub const RagdollSwingType = ragdoll_mod.SwingType;
 pub const Ragdoll = ragdoll_mod.Ragdoll;
 /// Hair, and the compute backend it runs on. There is no renderer here: the
@@ -348,11 +354,18 @@ pub fn isInitialized() bool {
     return c.zjoltIsInitialized();
 }
 
-/// Physics systems, job systems and characters currently alive.
+/// Plain owning handles currently alive, across every kind there is: physics
+/// systems, job systems, characters, character contact listeners,
+/// character-vs-character collisions, debug renderers, compute systems, hair,
+/// and vehicle constraints.
 ///
 /// `deinit` refuses while this is non-zero, so a shutdown path can assert on
-/// it rather than discover the problem as heap corruption later. Shapes are
-/// not counted; Jolt reference counts those.
+/// it rather than discover the problem as heap corruption later. The full list
+/// matters for exactly that reason: a shutdown that released only the kinds it
+/// remembered has nothing else to go on.
+///
+/// Reference-counted objects — shapes, materials, group filters, constraints,
+/// ragdolls and the rest — are not counted; Jolt owns their counts.
 pub fn liveHandleCount() u32 {
     return c.zjoltLiveHandleCount();
 }
