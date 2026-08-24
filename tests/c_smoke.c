@@ -14,6 +14,7 @@
 // listeners, a step, queries, bulk read-back, a character and a soft body.
 //===----------------------------------------------------------------------===//
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +44,11 @@ static int g_failures = 0;
     CHECK(r_ == ZJOLT_RESULT_OK, "%s -> %s (%s)", #expr, zjoltResultName(r_),   \
           zjoltLastError());                                             \
   } while (0)
+
+#define CHECK_NEAR(a, b, tol)                                            \
+  CHECK(fabsf((float)(a) - (float)(b)) <= (tol),                         \
+        "%s (%.6f) not within %g of %s (%.6f)", #a, (double)(a), (tol),  \
+        #b, (double)(b))
 
 //===----------------------------------------------------------------------===//
 // Counting allocator
@@ -383,6 +389,124 @@ int main(void) {
         "double init should be refused");
   CHECK(zjoltInitWithConfig(&init, 0xdeadbeefu) == ZJOLT_RESULT_ALREADY_INITIALIZED,
         "double init is caught before the config check");
+
+  //-------------------------------------------------------------------------
+  // Math: quaternion and matrix algebra, reachable from plain C.
+  //-------------------------------------------------------------------------
+
+  {
+    /* Quaternion multiply matches applying two rotations in sequence to a
+       vector: rhs first, then lhs, the Hamilton product order zjolt_math.h
+       documents. */
+    const ZJoltVec3 y_axis = {0.0f, 1.0f, 0.0f};
+    const ZJoltVec3 z_axis = {0.0f, 0.0f, 1.0f};
+    ZJoltQuat lhs, rhs, composed;
+    CHECK_OK(zjoltQuatFromAxisAngle(&y_axis, 1.57079632679489661923f /* pi/2 */, &lhs));
+    CHECK_OK(zjoltQuatFromAxisAngle(&z_axis, 1.57079632679489661923f /* pi/2 */, &rhs));
+    zjoltQuatMultiply(&lhs, &rhs, &composed);
+
+    const ZJoltVec3 v = {1.0f, 0.0f, 0.0f};
+    ZJoltVec3 once, sequential, direct;
+    CHECK_OK(zjoltQuatRotateVector(&rhs, &v, &once));
+    CHECK_OK(zjoltQuatRotateVector(&lhs, &once, &sequential));
+    CHECK_OK(zjoltQuatRotateVector(&composed, &v, &direct));
+    CHECK_NEAR(sequential.x, direct.x, 1e-5f);
+    CHECK_NEAR(sequential.y, direct.y, 1e-5f);
+    CHECK_NEAR(sequential.z, direct.z, 1e-5f);
+
+    /* A non-unit axis is refused rather than left to Jolt's assert. */
+    const ZJoltVec3 not_unit = {2.0f, 0.0f, 0.0f};
+    ZJoltQuat unused;
+    CHECK(zjoltQuatFromAxisAngle(&not_unit, 1.0f, &unused) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a non-unit axis is refused");
+
+    /* A swing-twist decomposition recomposes to the original rotation. */
+    const ZJoltVec3 raw_axis = {0.3f, 0.7f, -0.2f};
+    const float raw_len = sqrtf(raw_axis.x * raw_axis.x +
+                                raw_axis.y * raw_axis.y +
+                                raw_axis.z * raw_axis.z);
+    const ZJoltVec3 axis = {raw_axis.x / raw_len, raw_axis.y / raw_len,
+                            raw_axis.z / raw_len};
+    ZJoltQuat q, swing, twist, recomposed;
+    CHECK_OK(zjoltQuatFromAxisAngle(&axis, 1.1f, &q));
+    zjoltQuatGetSwingTwist(&q, &swing, &twist);
+    zjoltQuatMultiply(&swing, &twist, &recomposed);
+    CHECK_NEAR(q.x, recomposed.x, 1e-5f);
+    CHECK_NEAR(q.y, recomposed.y, 1e-5f);
+    CHECK_NEAR(q.z, recomposed.z, 1e-5f);
+    CHECK_NEAR(q.w, recomposed.w, 1e-5f);
+
+    /* Euler angles round-trip well away from the Y = +-pi/2 gimbal lock. */
+    const ZJoltVec3 angles = {0.2f, -0.5f, 0.9f};
+    ZJoltQuat from_euler;
+    ZJoltVec3 back_to_euler;
+    zjoltQuatFromEulerAngles(&angles, &from_euler);
+    zjoltQuatGetEulerAngles(&from_euler, &back_to_euler);
+    CHECK_NEAR(angles.x, back_to_euler.x, 1e-4f);
+    CHECK_NEAR(angles.y, back_to_euler.y, 1e-4f);
+    CHECK_NEAR(angles.z, back_to_euler.z, 1e-4f);
+
+    /* SLERP stays unit length and matches its endpoints; LERP matches its. */
+    const ZJoltQuat identity_q = {0.0f, 0.0f, 0.0f, 1.0f};
+    ZJoltQuat lerp_start, lerp_end, slerp_mid;
+    zjoltQuatLerp(&identity_q, &rhs, 0.0f, &lerp_start);
+    zjoltQuatLerp(&identity_q, &rhs, 1.0f, &lerp_end);
+    CHECK_NEAR(lerp_start.w, identity_q.w, 1e-6f);
+    CHECK_NEAR(lerp_end.w, rhs.w, 1e-6f);
+    zjoltQuatSlerp(&identity_q, &rhs, 0.5f, &slerp_mid);
+    const float slerp_len =
+        sqrtf(slerp_mid.x * slerp_mid.x + slerp_mid.y * slerp_mid.y +
+              slerp_mid.z * slerp_mid.z + slerp_mid.w * slerp_mid.w);
+    CHECK_NEAR(slerp_len, 1.0f, 1e-6f);
+
+    /* Vec3/RVec3 lerp, componentwise. */
+    const ZJoltVec3 lo = {0.0f, 0.0f, 0.0f};
+    const ZJoltVec3 hi = {10.0f, -4.0f, 2.0f};
+    ZJoltVec3 mid;
+    zjoltVec3Lerp(&lo, &hi, 0.5f, &mid);
+    CHECK_NEAR(mid.x, 5.0f, 1e-6f);
+    CHECK_NEAR(mid.y, -2.0f, 1e-6f);
+    CHECK_NEAR(mid.z, 1.0f, 1e-6f);
+
+    const ZJoltRVec3 rlo = {0.0, 0.0, 0.0};
+    const ZJoltRVec3 rhi = {10.0, -4.0, 2.0};
+    ZJoltRVec3 rmid;
+    zjoltRVec3Lerp(&rlo, &rhi, 0.5f, &rmid);
+    CHECK_NEAR((float)rmid.x, 5.0f, 1e-6f);
+
+    /* ZJoltMat44: build, compose with the rigid inverse to the identity, and
+       carry the translation through TransformPoint. */
+    const ZJoltVec3 translation = {1.0f, 2.0f, 3.0f};
+    ZJoltMat44 m, inv, identity_ish;
+    CHECK_OK(zjoltMat44FromRotationTranslation(&lhs, &translation, &m));
+    zjoltMat44InverseRotationTranslation(&m, &inv);
+    zjoltMat44Multiply(&inv, &m, &identity_ish);
+    for (int i = 0; i < 16; ++i) {
+      const float expected = (i % 5 == 0) ? 1.0f : 0.0f; /* diagonal */
+      CHECK_NEAR(identity_ish.m[i], expected, 1e-4f);
+    }
+    const ZJoltVec3 origin = {0.0f, 0.0f, 0.0f};
+    ZJoltVec3 transformed_point;
+    zjoltMat44TransformPoint(&m, &origin, &transformed_point);
+    CHECK_NEAR(transformed_point.x, translation.x, 1e-5f);
+    CHECK_NEAR(transformed_point.y, translation.y, 1e-5f);
+    CHECK_NEAR(transformed_point.z, translation.z, 1e-5f);
+
+    /* ZJoltRMat44: the world-space (ZJoltReal) transform used by
+       zjoltBodyGetWorldTransform, composed and inverted the same way. */
+    const ZJoltRVec3 r_translation = {5.0, -2.0, 100.0};
+    ZJoltRMat44 rm, r_inv;
+    CHECK_OK(zjoltRMat44FromRotationTranslation(&lhs, &r_translation, &rm));
+    zjoltRMat44InverseRotationTranslation(&rm, &r_inv);
+    const ZJoltRVec3 original_point = {1.0, 1.0, 1.0};
+    ZJoltRVec3 world_point, back_point;
+    zjoltRMat44TransformPoint(&rm, &original_point, &world_point);
+    zjoltRMat44TransformPoint(&r_inv, &world_point, &back_point);
+    CHECK_NEAR((float)back_point.x, (float)original_point.x, 1e-3f);
+    CHECK_NEAR((float)back_point.y, (float)original_point.y, 1e-3f);
+    CHECK_NEAR((float)back_point.z, (float)original_point.z, 1e-3f);
+  }
 
   //-------------------------------------------------------------------------
   // Shapes
