@@ -1,11 +1,18 @@
+# Build output.
 .zig-cache/
 zig-out/
+
+# Agent worktrees. These are full checkouts of this repository; committing one
+# would nest the repository inside itself.
 .claude/
 
-# Build artefacts from ad-hoc compiler invocations. These carry absolute
-# paths from the machine that produced them, which is not something a public
-# repository should be handing out — and ci/check-abi-drift.sh leaves a .bak
-# behind if it is interrupted mid-mutation.
+# macOS.
+.DS_Store
+
+# Build artefacts from ad-hoc compiler invocations. These carry absolute paths
+# from the machine that produced them, which is not something a public
+# repository should hand out — and a mutation script leaves a .bak behind if it
+# is interrupted mid-run.
 *.o
 *.obj
 *.a
