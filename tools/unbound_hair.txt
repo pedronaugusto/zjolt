@@ -1,0 +1,60 @@
+# Physics/Hair — every name `tools/coverage.sh Hair` reports as unbound, classified.
+#
+# NAME  CATEGORY  reason
+#
+# INTERNAL        the solver/compute bookkeeping a host never calls.
+# EXTENSION_POINT a C++ subclassing/injection point zjolt gives a caller the
+#                 same power over through a named type or entry point.
+# BOUND_ELSEWHERE already reachable under a different name; the name is given.
+# REAL_GAP        a caller would want it and could not reach it. Bound now, and
+#                 the entry point that closed it is named.
+
+Float4  BOUND_ELSEWHERE  Jolt's plain four-float POD, picked up from the Float4(...) construction in GradientSampler::ToFloat4. It crosses as ZJoltHairMaterial.bend_compliance_multiplier[4] and as ZJoltHairGradient; per BINDING.md a Jolt math type never crosses as itself.
+GetAngularVelocities  REAL_GAP  per-simulated-vertex angular velocity, readable in Jolt after ReadBackGPUState and nowhere in this ABI. Bound as zjoltHairReadBackVertexState (ZJoltHairVertexState.angular_velocity).
+GetBendCompliance  REAL_GAP  Material::GetBendCompliance interpolates bend_compliance_multiplier[4] across the strand; a caller had the four numbers and no way to evaluate them, and uint(fraction) on a fraction outside [0,1] is UB in Jolt. Bound as zjoltHairMaterialGetBendCompliance, which rejects the out-of-range fraction.
+GetGridVelocityAndDensity  INTERNAL  the velocity/density grid the solver clears, accumulates and normalises each substep; Jolt exposes it only between LockReadBackBuffers/UnlockReadBackBuffers for its own debug renderer.
+GetHairSettings  REAL_GAP  the shared HairSettings asset itself does not cross (BINDING.md: settings objects do not cross), but everything Init computed into it was unreachable. Bound as zjoltHairGetInfo, which reports the derived facts a caller cannot recompute.
+GetNeutralDensity  INTERNAL  samples the neutral density grid at a cell index; solver input, computed by HairSettings::Init and consumed by the HairGridNormalize/HairUpdateVelocity shaders.
+GetNumVerticesPadded  REAL_GAP  simulated strands * max vertices per strand — the row stride of the transposed GPU position/velocity buffers, which a host reading those buffers on the device cannot derive. Bound as ZJoltHairInfo.padded_vertex_count.
+GetPositions  BOUND_ELSEWHERE  zjoltHairReadBackPositions (and now also ZJoltHairVertexState.position).
+GetPositionsCB  EXTENSION_POINT  ZJoltComputeInterface. The buffer is the host's own handle from create_buffer; it identifies it by the shader-side name "gPositions" passed to queue_set_rw_buffer.
+GetRenderPositions  BOUND_ELSEWHERE  zjoltHairReadBackRenderPositions.
+GetRenderPositionsCB  EXTENSION_POINT  ZJoltComputeInterface; the host's own handle, named "gRenderPositions" at queue_set_rw_buffer.
+GetRotations  REAL_GAP  the per-vertex Bishop-frame quaternion, which is what orients a strand's cross-section — a host building ribbon or tube geometry needs it and had only positions. Bound as zjoltHairReadBackVertexState (ZJoltHairVertexState.rotation).
+GetScalpTrianglesCB  EXTENSION_POINT  ZJoltComputeInterface; the host's own handle, named "gScalpTriangles" at queue_set_buffer.
+GetScalpVertices  REAL_GAP  the scalp as the solver skinned it, which is the only way to see whether zjoltHairSetPose is moving the roots where the caller thinks. Bound as zjoltHairReadBackScalpVertices.
+GetScalpVerticesCB  EXTENSION_POINT  ZJoltComputeInterface; the host's own handle, named "gScalpVertices" / "gScalpVerticesOut" at queue_set_buffer / queue_set_rw_buffer.
+GetVelocities  REAL_GAP  per-simulated-vertex linear velocity; needed for motion blur and for telling a settled groom from a slow-moving one. Bound as zjoltHairReadBackVertexState (ZJoltHairVertexState.velocity).
+GetVelocitiesCB  EXTENSION_POINT  ZJoltComputeInterface; the host's own handle, named "gVelocities" at queue_set_rw_buffer.
+GetVelocityAndDensityCB  EXTENSION_POINT  ZJoltComputeInterface; the host's own handle, named "gVelocityAndDensity" at queue_set_rw_buffer.
+GetX  BOUND_ELSEWHERE  JPH::UVec4::GetX on HairSettings::mGridSize, picked up by the name match. The grid size crosses as ZJoltHairDesc.grid_size_x/y/z and reads back as ZJoltHairInfo.grid_size_x/y/z.
+GlobalPoseOnly  BOUND_ELSEWHERE  ZJoltHairMaterial. It is the solver's own "can I skip everything but the global pose" test — !enable_collision && global_pose.min == 1 && global_pose.max == 1 — over three fields the caller already writes.
+Gradient  BOUND_ELSEWHERE  ZJoltHairGradient, which mirrors it field for field and converts in ffi/zjolt_hair.cpp's ToC/ToJolt. (Deliberately NOT internal: it is a value type that crosses this ABI, not solver machinery.)
+GradientSampler  REAL_GAP  the sampler was the only thing that could evaluate a ZJoltHairGradient, and it divides by (max_fraction - min_fraction) with no guard. Bound as zjoltHairGradientSample, and the degenerate range is now refused at zjoltHairCreate too.
+GridSampler  INTERNAL  maps a hair-space position to a velocity-grid cell and trilinear weights; its members are memcpy'd straight into the shader constant buffer each step.
+InitCompute  INTERNAL  allocates HairSettings' compute buffers; driven by zjoltHairCreate, never by a host.
+InitializeContext  INTERNAL  fills the per-step UpdateContext — substep count, delta transform, substep gravity. Pure solver bookkeeping.
+InitRenderAndSimulationStrands  INTERNAL  splits the authored strands into simulated and interpolated sets; driven by zjoltHairCreate from ZJoltHairDesc.
+LeafShape  INTERNAL  the per-step record of one convex hull the strands collide against, rebuilt from the physics system inside Hair::Update.
+LockReadBackBuffers  INTERNAL  maps the readback buffers; zjoltHairReadBackPositions / ...RenderPositions / ...ScalpVertices pair it with its unlock so a caller cannot leave a buffer mapped.
+MakeStepDependent  INTERNAL  rewrites a gradient's k for the substep length actually used, once per substep inside Hair::Update.
+MeasureLength  INTERNAL  sums a strand's rod lengths over the authored vertex array, which the caller owns and can measure itself.
+NeedsGrid  INTERNAL  the solver's "does this material want a velocity grid" test, derived from grid_velocity_factor and grid_density_force_factor.
+PositionToIndexAndFraction  INTERNAL  GridSampler's position-to-cell step; shader-side arithmetic.
+PrepareForScalpSkinning  INTERNAL  combines joint_to_hair, the pose and the inverse bind pose into the matrices uploaded by zjoltHairSetPose / zjoltHairUpdate.
+ReadBackGPUState  INTERNAL  the device stall itself; each zjoltHairReadBack* entry point performs it.
+RegisterHair  BOUND_ELSEWHERE  zjoltInit. RegisterHair only registers HairSettings' RTTI with Jolt's ObjectStream Factory, which this ABI never uses because HairSettings does not cross it; nothing on the hair compute path consults the factory.
+RestoreBinaryState  REAL_GAP  Jolt can bake a groom offline and skip the whole of InitRenderAndSimulationStrands and Init at load; this ABI could only ever build one from scratch. Bound as zjoltHairCreateFromGroom.
+RStrand  BOUND_ELSEWHERE  ZJoltHairStrand. Verified in HairSettings.cpp:132-138 — the render strands and render vertices are a 1:1 copy of what the caller passed in ZJoltHairDesc, so zjoltHairReadBackRenderPositions is already in the caller's own indexing.
+Sample  REAL_GAP  GradientSampler::Sample, bound as zjoltHairGradientSample. (GridSampler::Sample, the other overload set behind this name, stays internal.)
+SaveBinaryState  REAL_GAP  the other half of the groom bake. Bound as zjoltHairSaveGroom, framed in the same magic/version/config/CRC container as zjoltShapeSave.
+SetScalpToHead  EXTENSION_POINT  ZJoltComputeInterface. It is a no-op unless scalp skinning is skipped via SetScalpVerticesCB/SetScalpTrianglesCB — in the ordinary path the scalp is skinned into hair-local space already and a non-identity matrix here would transform it twice.
+SetScalpTrianglesCB  EXTENSION_POINT  ZJoltComputeInterface. Handing Jolt a device buffer it did not create is a backend concern, and the layout it must have is fixed by JPH_SHADER_BIND_SCALP_TRIANGLES at Jolt build time, so a prebuilt C ABI cannot promise it.
+SetScalpVerticesCB  EXTENSION_POINT  ZJoltComputeInterface, as SetScalpTrianglesCB — JPH_SHADER_BIND_SCALP_VERTICES fixes the layout, and it would have to be set before the Hair::Init that zjoltHairCreate performs.
+SkinScalpVertices  INTERNAL  the CPU twin of the HairSkinVertices shader pass; the scalp mesh, weights, bind pose and pose are all the caller's own inputs.
+SStrand  REAL_GAP  the simulated strands are a reordered subset of the authored ones, so the vertices zjoltHairReadBackPositions returns could not be attributed to a strand. Bound as zjoltHairGetSimulatedStrands.
+SVertex  BOUND_ELSEWHERE  ZJoltHairVertex carries the two authored fields; length, strand fraction, Bishop frame and omega0 are all computed by Init and never authored.
+SVertexInfluence  INTERNAL  which simulated vertices an interpolated render vertex follows, computed by Init and read only by the HairCalculateRenderPositions shader.
+ToFloat4  INTERNAL  packs a GradientSampler into the four floats the shader constant buffer wants.
+UnlockReadBackBuffers  INTERNAL  see LockReadBackBuffers.
+VertexCount  BOUND_ELSEWHERE  ZJoltHairStrand's start_vertex/end_vertex, on both the authored strands and the ones zjoltHairGetSimulatedStrands now reports.

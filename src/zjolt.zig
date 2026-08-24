@@ -342,7 +342,12 @@ pub const HairStrand = hair_mod.Strand;
 pub const HairGradient = hair_mod.Gradient;
 pub const HairSkinWeight = hair_mod.SkinWeight;
 pub const HairMaterial = hair_mod.Material;
+pub const HairVertexState = hair_mod.VertexState;
+pub const HairInfo = hair_mod.Info;
+pub const HairPlacement = hair_mod.Placement;
 pub const defaultHairMaterial = hair_mod.defaultMaterial;
+pub const sampleHairGradient = hair_mod.sampleGradient;
+pub const hairBendComplianceAt = hair_mod.bendComplianceAt;
 
 pub const Constraint = constraint_mod.Constraint;
 pub const ConstraintSubType = constraint_mod.SubType;

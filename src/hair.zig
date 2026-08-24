@@ -56,6 +56,8 @@ pub const Strand = c.HairStrand;
 pub const Gradient = c.HairGradient;
 pub const SkinWeight = c.HairSkinWeight;
 pub const Material = c.HairMaterial;
+pub const VertexState = c.HairVertexState;
+pub const Info = c.HairInfo;
 
 /// Whether this build compiled Jolt's CPU compute path. False means
 /// `ComputeSystem.initCpu` returns `error.Unsupported` and an injected backend
@@ -70,6 +72,36 @@ pub fn defaultMaterial() Material {
     var material: Material = undefined;
     c.zjoltHairMaterialInit(&material);
     return material;
+}
+
+/// What the solver will read out of `gradient` at `strand_fraction` of the way
+/// along a strand — 0 at the root, 1 at the tip.
+///
+/// Outside the gradient's own fraction range the value is clamped rather than
+/// extrapolated, and `strand_fraction` itself may be anything finite. A
+/// gradient whose `min_fraction` equals its `max_fraction` is
+/// `error.InvalidArgument`: Jolt divides by that difference with no guard, so
+/// such a gradient has no value anywhere and `Hair.init` refuses one too.
+pub fn sampleGradient(gradient: Gradient, strand_fraction: f32) err.Error!f32 {
+    var value: f32 = 0;
+    try err.check(c.zjoltHairGradientSample(&gradient, strand_fraction, &value));
+    return value;
+}
+
+/// The bend compliance the solver will use at `strand_fraction` of the way
+/// along a strand: `bend_compliance` scaled by the four-entry multiplier curve,
+/// interpolated across the thirds of the strand it names.
+///
+/// `strand_fraction` must be in [0, 1] — Jolt truncates it to an unsigned
+/// index, so anything below 0 is undefined behaviour there rather than a clamp.
+pub fn bendComplianceAt(material: Material, strand_fraction: f32) err.Error!f32 {
+    var value: f32 = 0;
+    try err.check(c.zjoltHairMaterialGetBendCompliance(
+        &material,
+        strand_fraction,
+        &value,
+    ));
+    return value;
 }
 
 //=============================================================================
@@ -651,6 +683,158 @@ pub const Hair = struct {
         ));
         return count;
     }
+
+    /// How many scalp vertices `readBackScalpVertices` would write. 0 for a
+    /// groom with no scalp.
+    pub fn scalpVertexCount(self: Hair) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairReadBackScalpVertices(self.handle, null, 0, &count));
+        return count;
+    }
+
+    /// The scalp mesh as the solver skinned it, in the hair's LOCAL space.
+    ///
+    /// This is what `setPose` actually did. Worth looking at when a groom sits
+    /// in the wrong place and nothing else says why: the roots are barycentric
+    /// points on these triangles, so a scalp that is not where the head is has
+    /// no other symptom than hair that is not where the head is.
+    pub fn readBackScalpVertices(self: Hair, out: []math.Vec3) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairReadBackScalpVertices(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return count;
+    }
+
+    /// Position, orientation, velocity and angular velocity of every simulated
+    /// vertex, in ONE device stall. `out` wants `positionCount()` entries.
+    ///
+    /// Reach for this rather than `readBackPositions` followed by anything
+    /// else: each readback copies the entire simulation state back from the
+    /// device, so two calls cost two stalls for the same bytes. The `rotation`
+    /// is the vertex's Bishop frame, which is what orients a strand's
+    /// cross-section — positions alone give a polyline with no way to say which
+    /// way round a ribbon faces.
+    pub fn readBackVertexState(self: Hair, out: []VertexState) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairReadBackVertexState(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return count;
+    }
+
+    /// How many strands `simulatedStrands` would write.
+    pub fn simulatedStrandCount(self: Hair) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetSimulatedStrands(self.handle, null, 0, &count));
+        return count;
+    }
+
+    /// Where each simulated strand starts and ends in what `readBackPositions`
+    /// and `readBackVertexState` return, and which material it uses.
+    ///
+    /// Without this those are a flat run of vertices with no strand boundaries
+    /// in them: Jolt simulates a fraction of the authored strands — each
+    /// material's `simulation_strands_fraction`, at least one per material —
+    /// and groups what it keeps by material. `readBackRenderPositions` needs no
+    /// such call, being already in the caller's own indexing.
+    ///
+    /// Cheap: this reads the groom, not the device.
+    pub fn simulatedStrands(self: Hair, out: []Strand) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetSimulatedStrands(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return count;
+    }
+
+    /// What `init` made of the groom — the counts, the grid, and the bounds
+    /// Jolt derived rather than the ones that went in.
+    ///
+    /// `max_root_distance_to_scalp` is the one to look at first on a groom that
+    /// came from an authoring tool: Jolt projects every root onto the nearest
+    /// scalp triangle instead of complaining, so hair authored against a
+    /// different head silently attaches to this one anyway.
+    pub fn info(self: Hair) err.Error!Info {
+        var out: Info = undefined;
+        try err.check(c.zjoltHairGetInfo(self.handle, &out));
+        return out;
+    }
+
+    /// Bytes `saveGroom` needs.
+    pub fn saveGroomSize(self: Hair) err.Error!usize {
+        var size: usize = 0;
+        try err.check(c.zjoltHairSaveGroom(self.handle, null, 0, &size));
+        return size;
+    }
+
+    /// Writes the built groom into `buffer`, returning the slice written.
+    /// `error.BufferTooSmall` if it does not fit; use `saveGroomSize` first.
+    ///
+    /// The groom, not the simulation: the strands, materials, rest frames, skin
+    /// points and density grid as they were when the hair was built. Not where
+    /// the hair is, not how it is moving, not the pose.
+    pub fn saveGroom(self: Hair, buffer: []u8) err.Error![]u8 {
+        var size: usize = 0;
+        try err.check(c.zjoltHairSaveGroom(
+            self.handle,
+            buffer.ptr,
+            buffer.len,
+            &size,
+        ));
+        return buffer[0..size];
+    }
+
+    /// Allocates and bakes in one step.
+    pub fn saveGroomAlloc(self: Hair, gpa: std.mem.Allocator) ![]u8 {
+        const size = try self.saveGroomSize();
+        const buffer = try gpa.alloc(u8, size);
+        errdefer gpa.free(buffer);
+        return try self.saveGroom(buffer);
+    }
+
+    /// Rebuilds a hair from `saveGroom` output, skipping the strand split, the
+    /// root matching and the density grid — everything `init` spends its time
+    /// on. Only the compute buffers are allocated.
+    ///
+    /// A blob from a different zjolt build, a different Jolt, a different
+    /// precision setting, or one truncated or damaged in storage, is
+    /// `error.BadFormat` and creates nothing.
+    pub fn initFromGroom(
+        compute: ComputeSystem,
+        data: []const u8,
+        placement: Placement,
+    ) err.Error!Hair {
+        var handle: *c.Hair = undefined;
+        try err.check(c.zjoltHairCreateFromGroom(
+            compute.handle,
+            data.ptr,
+            data.len,
+            &placement.position,
+            &placement.rotation,
+            placement.object_layer,
+            &handle,
+        ));
+        return .{ .handle = handle };
+    }
+};
+
+/// Where a restored groom goes and what it collides with. `Groom` carries the
+/// same three for a fresh one; they are not in the baked blob because they
+/// describe the instance rather than the asset.
+pub const Placement = struct {
+    position: math.RVec3 = math.rvec3_zero,
+    rotation: math.Quat = math.quat_identity,
+    object_layer: system_mod.ObjectLayer = 0,
 };
 
 //=============================================================================
@@ -766,4 +950,450 @@ test "hair stepped on the CPU compute backend moves" {
     const tip = vertices.len - 1;
     try std.testing.expect(after[tip].y < before[tip].y - 1.0e-4);
     try std.testing.expect(after[tip].y < -1.0e-3);
+}
+
+/// A groom of two strands of DIFFERENT lengths, which is what makes the padded
+/// vertex count differ from the simulated one and the strand ranges worth
+/// asking for. Everything but the rod solver is switched off, as above.
+fn testGroom() struct { vertices: [7]Vertex, strands: [2]Strand, material: Material } {
+    var material = defaultMaterial();
+    material.enable_collision = false;
+    material.bend_compliance = 1.0e-3;
+    material.stretch_compliance = 1.0e-5;
+    material.gravity_factor = .{ .min = 1, .max = 1, .min_fraction = 0, .max_fraction = 1 };
+    material.global_pose = .{ .min = 0, .max = 0, .min_fraction = 0, .max_fraction = 1 };
+    material.grid_velocity_factor = .{ .min = 0, .max = 0, .min_fraction = 0, .max_fraction = 1 };
+    material.grid_density_force_factor = 0;
+    material.simulation_strands_fraction = 1;
+
+    return .{
+        .vertices = .{
+            .{ .position = math.vec3(0.0, 0, 0.0), .inv_mass = 0 },
+            .{ .position = math.vec3(0.1, 0, 0.0), .inv_mass = 1 },
+            .{ .position = math.vec3(0.2, 0, 0.0), .inv_mass = 1 },
+            .{ .position = math.vec3(0.3, 0, 0.0), .inv_mass = 1 },
+            .{ .position = math.vec3(0.0, 0, 0.1), .inv_mass = 0 },
+            .{ .position = math.vec3(0.1, 0, 0.1), .inv_mass = 1 },
+            .{ .position = math.vec3(0.2, 0, 0.1), .inv_mass = 1 },
+        },
+        .strands = .{
+            .{ .start_vertex = 0, .end_vertex = 4, .material_index = 0 },
+            .{ .start_vertex = 4, .end_vertex = 7, .material_index = 0 },
+        },
+        .material = material,
+    };
+}
+
+test "the simulated set describes itself: strand ranges, padding and per-vertex state" {
+    if (!isCpuSupported()) return error.SkipZigTest;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    var bridged = @import("memory.zig").bridge(gpa.allocator());
+    var init_desc: c.InitDesc = .{ .allocator = &bridged };
+    try std.testing.expectEqual(
+        c.Result.ok,
+        c.zjoltInitWithConfig(&init_desc, c.config_id),
+    );
+    defer c.zjoltDeinit();
+
+    const system = try system_mod.PhysicsSystem.init(.{
+        .layers = system_mod.layersFromType(TestLayers),
+        .max_bodies = 16,
+    });
+    defer system.deinit();
+    system.setGravity(math.gravity_earth);
+
+    const compute = try ComputeSystem.initCpu();
+    defer compute.deinit();
+
+    const groom = testGroom();
+    const hair = try Hair.init(compute, .{
+        .vertices = &groom.vertices,
+        .strands = &groom.strands,
+        .materials = &.{groom.material},
+        .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+        .grid_size = .{ 4, 5, 6 },
+        .object_layer = TestLayers.moving,
+    });
+    defer hair.deinit();
+
+    const groom_info = try hair.info();
+    try std.testing.expectEqual(@as(u32, 7), groom_info.simulated_vertex_count);
+    try std.testing.expectEqual(@as(u32, 2), groom_info.simulated_strand_count);
+    try std.testing.expectEqual(@as(u32, 7), groom_info.render_vertex_count);
+    try std.testing.expectEqual(@as(u32, 2), groom_info.render_strand_count);
+    try std.testing.expectEqual(@as(u32, 1), groom_info.material_count);
+    try std.testing.expectEqual(@as(u32, 0), groom_info.joint_count);
+    try std.testing.expectEqual(@as(u32, 4), groom_info.max_vertices_per_strand);
+
+    // The device buffers are a rectangle of strands by longest strand, so the
+    // three-vertex strand is padded out to four. Reading them without knowing
+    // that reads one vertex of the next strand as the tail of this one.
+    try std.testing.expectEqual(@as(u32, 8), groom_info.padded_vertex_count);
+    try std.testing.expect(groom_info.padded_vertex_count > groom_info.simulated_vertex_count);
+
+    try std.testing.expectEqual(@as(u32, 4), groom_info.grid_size_x);
+    try std.testing.expectEqual(@as(u32, 5), groom_info.grid_size_y);
+    try std.testing.expectEqual(@as(u32, 6), groom_info.grid_size_z);
+    try std.testing.expect(groom_info.simulation_bounds_max.x > groom_info.simulation_bounds_min.x);
+    try std.testing.expect(groom_info.simulation_bounds_max.y > groom_info.simulation_bounds_min.y);
+    // No scalp, so nothing was matched to one.
+    try std.testing.expectEqual(@as(f32, 0), groom_info.max_root_distance_to_scalp);
+
+    // The strand ranges tile the simulated vertex array exactly: no gap for the
+    // padding to show through, and no overlap.
+    var strands: [2]Strand = undefined;
+    try std.testing.expectEqual(@as(u32, 2), try hair.simulatedStrandCount());
+    try std.testing.expectEqual(@as(u32, 2), try hair.simulatedStrands(&strands));
+    try std.testing.expectEqual(@as(u32, 0), strands[0].start_vertex);
+    try std.testing.expectEqual(strands[0].end_vertex, strands[1].start_vertex);
+    try std.testing.expectEqual(
+        groom_info.simulated_vertex_count,
+        strands[1].end_vertex,
+    );
+    for (strands) |strand| {
+        try std.testing.expectEqual(@as(u32, 0), strand.material_index);
+        try std.testing.expect(strand.end_vertex - strand.start_vertex >= 2);
+    }
+
+    var step: u32 = 0;
+    while (step < 30) : (step += 1) try hair.update(system, 1.0 / 60.0);
+
+    var state: [7]VertexState = undefined;
+    try std.testing.expectEqual(@as(u32, 7), try hair.readBackVertexState(&state));
+
+    // One readback, four quantities, and the positions in it are the same ones
+    // the positions-only readback reports.
+    var positions: [7]math.Vec3 = undefined;
+    _ = try hair.readBackPositions(&positions);
+    for (state, positions) |s, p| {
+        try std.testing.expectApproxEqAbs(p.x, s.position.x, 1.0e-5);
+        try std.testing.expectApproxEqAbs(p.y, s.position.y, 1.0e-5);
+        try std.testing.expectApproxEqAbs(p.z, s.position.z, 1.0e-5);
+    }
+
+    // Every rotation is a usable frame rather than whatever the buffer held.
+    for (state) |s| {
+        const length_sq = s.rotation.x * s.rotation.x + s.rotation.y * s.rotation.y +
+            s.rotation.z * s.rotation.z + s.rotation.w * s.rotation.w;
+        try std.testing.expectApproxEqAbs(@as(f32, 1), length_sq, 1.0e-3);
+    }
+
+    // A pinned root is not moving, and a tip swinging under gravity is — in
+    // the direction it is about to go. Correlating the velocity with the next
+    // step's displacement is what says these are velocities of these vertices,
+    // rather than a plausible-looking read of some other buffer: a pendulum's
+    // tip is somewhere different every step, so no fixed sign would hold.
+    try hair.update(system, 1.0 / 60.0);
+    var next: [7]math.Vec3 = undefined;
+    _ = try hair.readBackPositions(&next);
+
+    for (strands) |strand| {
+        const root = state[strand.start_vertex];
+        try std.testing.expectApproxEqAbs(@as(f32, 0), root.velocity.x, 1.0e-4);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), root.velocity.y, 1.0e-4);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), root.velocity.z, 1.0e-4);
+
+        const t = strand.end_vertex - 1;
+        const tip = state[t];
+        const speed = @abs(tip.velocity.x) + @abs(tip.velocity.y) + @abs(tip.velocity.z);
+        try std.testing.expect(speed > 1.0e-3);
+
+        const dx = next[t].x - positions[t].x;
+        const dy = next[t].y - positions[t].y;
+        const dz = next[t].z - positions[t].z;
+        const along = dx * tip.velocity.x + dy * tip.velocity.y + dz * tip.velocity.z;
+        try std.testing.expect(along > 0);
+
+        // And it is turning, because a rod that swings rotates its frame with
+        // it — the quantity nothing but this readback reports.
+        const spin = @abs(tip.angular_velocity.x) + @abs(tip.angular_velocity.y) +
+            @abs(tip.angular_velocity.z);
+        try std.testing.expect(spin > 1.0e-4);
+    }
+}
+
+test "a baked groom rebuilds into the same hair without redoing the build" {
+    if (!isCpuSupported()) return error.SkipZigTest;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    var bridged = @import("memory.zig").bridge(gpa.allocator());
+    var init_desc: c.InitDesc = .{ .allocator = &bridged };
+    try std.testing.expectEqual(
+        c.Result.ok,
+        c.zjoltInitWithConfig(&init_desc, c.config_id),
+    );
+    defer c.zjoltDeinit();
+
+    const system = try system_mod.PhysicsSystem.init(.{
+        .layers = system_mod.layersFromType(TestLayers),
+        .max_bodies = 16,
+    });
+    defer system.deinit();
+    system.setGravity(math.gravity_earth);
+
+    const compute = try ComputeSystem.initCpu();
+    defer compute.deinit();
+
+    const groom = testGroom();
+    const baked = blk: {
+        const built = try Hair.init(compute, .{
+            .vertices = &groom.vertices,
+            .strands = &groom.strands,
+            .materials = &.{groom.material},
+            .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+            .grid_size = .{ 4, 4, 4 },
+            .object_layer = TestLayers.moving,
+        });
+        defer built.deinit();
+        break :blk try built.saveGroomAlloc(std.testing.allocator);
+    };
+    defer std.testing.allocator.free(baked);
+    try std.testing.expect(baked.len > 0);
+
+    // The cook's hair is gone; this one never sees the authored strands.
+    const restored = try Hair.initFromGroom(compute, baked, .{
+        .object_layer = TestLayers.moving,
+    });
+    defer restored.deinit();
+
+    const fresh = try Hair.init(compute, .{
+        .vertices = &groom.vertices,
+        .strands = &groom.strands,
+        .materials = &.{groom.material},
+        .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+        .grid_size = .{ 4, 4, 4 },
+        .object_layer = TestLayers.moving,
+    });
+    defer fresh.deinit();
+
+    // Same groom, field for field — the split, the padding and the grid all
+    // came out of the blob rather than being recomputed.
+    try std.testing.expectEqual(try fresh.info(), try restored.info());
+
+    // And it simulates, which is the part a restored settings object could be
+    // structurally right about and still get wrong: the rest frames and the
+    // density grid are in the blob too.
+    var step: u32 = 0;
+    while (step < 30) : (step += 1) {
+        try fresh.update(system, 1.0 / 60.0);
+        try restored.update(system, 1.0 / 60.0);
+    }
+
+    var fresh_positions: [7]math.Vec3 = undefined;
+    var restored_positions: [7]math.Vec3 = undefined;
+    _ = try fresh.readBackPositions(&fresh_positions);
+    _ = try restored.readBackPositions(&restored_positions);
+    for (fresh_positions, restored_positions) |a, b| {
+        try std.testing.expectApproxEqAbs(a.x, b.x, 1.0e-5);
+        try std.testing.expectApproxEqAbs(a.y, b.y, 1.0e-5);
+        try std.testing.expectApproxEqAbs(a.z, b.z, 1.0e-5);
+    }
+
+    // A blob that lost bytes, and one that kept its length and lost a byte's
+    // worth of meaning, are both refused before Jolt reads any of it.
+    try std.testing.expectError(
+        error.BadFormat,
+        Hair.initFromGroom(compute, baked[0 .. baked.len - 1], .{}),
+    );
+    const damaged = try std.testing.allocator.dupe(u8, baked);
+    defer std.testing.allocator.free(damaged);
+    damaged[damaged.len - 1] ^= 0xff;
+    try std.testing.expectError(
+        error.BadFormat,
+        Hair.initFromGroom(compute, damaged, .{}),
+    );
+}
+
+test "a scalp carries the roots, and the skinned scalp is what says so" {
+    if (!isCpuSupported()) return error.SkipZigTest;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    var bridged = @import("memory.zig").bridge(gpa.allocator());
+    var init_desc: c.InitDesc = .{ .allocator = &bridged };
+    try std.testing.expectEqual(
+        c.Result.ok,
+        c.zjoltInitWithConfig(&init_desc, c.config_id),
+    );
+    defer c.zjoltDeinit();
+
+    const system = try system_mod.PhysicsSystem.init(.{
+        .layers = system_mod.layersFromType(TestLayers),
+        .max_bodies = 16,
+    });
+    defer system.deinit();
+    system.setGravity(math.gravity_earth);
+
+    const compute = try ComputeSystem.initCpu();
+    defer compute.deinit();
+
+    // One triangle in the XZ plane, one joint, one weight per vertex. The
+    // strand roots sit on it, which is what Jolt matches them against.
+    const scalp_vertices = [_]math.Vec3{
+        math.vec3(-0.2, 0, -0.2),
+        math.vec3(0.4, 0, -0.2),
+        math.vec3(-0.2, 0, 0.4),
+    };
+    const scalp_triangles = [_][3]u32{.{ 0, 1, 2 }};
+    const scalp_weights = [_]SkinWeight{
+        .{ .joint_index = 0, .weight = 1 },
+        .{ .joint_index = 0, .weight = 1 },
+        .{ .joint_index = 0, .weight = 1 },
+    };
+    const identity = [16]f32{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+
+    const groom = testGroom();
+    const hair = try Hair.init(compute, .{
+        .vertices = &groom.vertices,
+        .strands = &groom.strands,
+        .materials = &.{groom.material},
+        .scalp = .{
+            .vertices = &scalp_vertices,
+            .triangles = &scalp_triangles,
+            .skin_weights = &scalp_weights,
+            .weights_per_vertex = 1,
+            .inverse_bind_pose = &.{identity},
+        },
+        .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+        .grid_size = .{ 4, 4, 4 },
+        .object_layer = TestLayers.moving,
+    });
+    defer hair.deinit();
+
+    try std.testing.expectEqual(@as(u32, 1), try hair.jointCount());
+    const groom_info = try hair.info();
+    try std.testing.expectEqual(@as(u32, 1), groom_info.joint_count);
+    // Every root was already on the triangle, so Jolt moved none of them. A
+    // groom authored against a different head reports the distance here instead
+    // of failing anywhere.
+    try std.testing.expect(groom_info.max_root_distance_to_scalp < 1.0e-3);
+
+    try std.testing.expectEqual(@as(u32, 3), try hair.scalpVertexCount());
+
+    // The rest pose skins the scalp to where it was modelled.
+    try hair.setPose(&identity, &.{identity});
+    try hair.update(system, 1.0 / 60.0);
+
+    var skinned: [3]math.Vec3 = undefined;
+    try std.testing.expectEqual(@as(u32, 3), try hair.readBackScalpVertices(&skinned));
+    for (skinned, scalp_vertices) |got, want| {
+        try std.testing.expectApproxEqAbs(want.x, got.x, 1.0e-4);
+        try std.testing.expectApproxEqAbs(want.y, got.y, 1.0e-4);
+        try std.testing.expectApproxEqAbs(want.z, got.z, 1.0e-4);
+    }
+
+    // Raise the one joint half a metre and the scalp goes with it — this is the
+    // step between a pose and hair that moves, and the only place it is visible
+    // before the strands have had time to react.
+    var raised = identity;
+    raised[13] = 0.5;
+    try hair.setPose(&identity, &.{raised});
+    try hair.update(system, 1.0 / 60.0);
+
+    _ = try hair.readBackScalpVertices(&skinned);
+    for (skinned, scalp_vertices) |got, want| {
+        try std.testing.expectApproxEqAbs(want.y + 0.5, got.y, 1.0e-4);
+    }
+
+    // A groom with no scalp has none of this rather than failing for it.
+    const bald = try Hair.init(compute, .{
+        .vertices = &groom.vertices,
+        .strands = &groom.strands,
+        .materials = &.{groom.material},
+        .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+        .grid_size = .{ 4, 4, 4 },
+        .object_layer = TestLayers.moving,
+    });
+    defer bald.deinit();
+    try std.testing.expectEqual(@as(u32, 0), try bald.scalpVertexCount());
+}
+
+test "the authored gradients and compliance curve evaluate the way the solver reads them" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    var bridged = @import("memory.zig").bridge(gpa.allocator());
+    var init_desc: c.InitDesc = .{ .allocator = &bridged };
+    try std.testing.expectEqual(
+        c.Result.ok,
+        c.zjoltInitWithConfig(&init_desc, c.config_id),
+    );
+    defer c.zjoltDeinit();
+
+    // Ramps between its two fractions and CLAMPS outside them, rather than
+    // running on past the ends the way a plain lerp would.
+    const ramp: Gradient = .{ .min = 0, .max = 1, .min_fraction = 0.2, .max_fraction = 0.8 };
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try sampleGradient(ramp, 0), 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try sampleGradient(ramp, 0.2), 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), try sampleGradient(ramp, 0.5), 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), try sampleGradient(ramp, 0.8), 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), try sampleGradient(ramp, 1), 1.0e-6);
+
+    // A descending gradient clamps to the same two values, not to min-then-max.
+    const falling: Gradient = .{ .min = 1, .max = 0, .min_fraction = 0, .max_fraction = 1 };
+    try std.testing.expectApproxEqAbs(@as(f32, 1), try sampleGradient(falling, -5), 1.0e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try sampleGradient(falling, 5), 1.0e-6);
+
+    // An empty fraction range is a division by zero inside Jolt, so it is
+    // refused here and refused again by the groom that would carry it.
+    const degenerate: Gradient = .{ .min = 0, .max = 1, .min_fraction = 0.5, .max_fraction = 0.5 };
+    try std.testing.expectError(error.InvalidArgument, sampleGradient(degenerate, 0.5));
+    try std.testing.expectError(
+        error.InvalidArgument,
+        sampleGradient(ramp, std.math.nan(f32)),
+    );
+
+    // bend_compliance_multiplier names the value at 0%, 33%, 66% and 100%, and
+    // the ends of the strand are the ends of that array.
+    var material = defaultMaterial();
+    material.bend_compliance = 1.0e-3;
+    material.bend_compliance_multiplier = .{ 1, 10, 10, 1 };
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1.0e-3),
+        try bendComplianceAt(material, 0),
+        1.0e-9,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1.0e-2),
+        try bendComplianceAt(material, 1.0 / 3.0),
+        1.0e-8,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1.0e-3),
+        try bendComplianceAt(material, 1),
+        1.0e-9,
+    );
+    // The middle third is flat between two equal multipliers.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1.0e-2),
+        try bendComplianceAt(material, 0.5),
+        1.0e-8,
+    );
+    // Jolt truncates the fraction to an unsigned index, so out of range is
+    // undefined behaviour there and refused here.
+    try std.testing.expectError(error.InvalidArgument, bendComplianceAt(material, -0.1));
+    try std.testing.expectError(error.InvalidArgument, bendComplianceAt(material, 1.1));
+
+    if (!isCpuSupported()) return;
+
+    const compute = try ComputeSystem.initCpu();
+    defer compute.deinit();
+
+    const groom = testGroom();
+    var broken = groom.material;
+    broken.gravity_factor = degenerate;
+    try std.testing.expectError(error.InvalidArgument, Hair.init(compute, .{
+        .vertices = &groom.vertices,
+        .strands = &groom.strands,
+        .materials = &.{broken},
+        .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+        .grid_size = .{ 4, 4, 4 },
+        .object_layer = TestLayers.moving,
+    }));
 }

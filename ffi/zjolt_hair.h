@@ -504,6 +504,187 @@ ZJOLT_API ZJoltResult zjoltHairReadBackRenderPositions(ZJoltHair *hair,
                                                        uint32_t capacity,
                                                        uint32_t *out_count);
 
+/// The scalp mesh as the solver skinned it, in the hair's LOCAL space. Same
+/// cost and same buffer protocol as the two above.
+///
+/// This is what zjoltHairSetPose actually did, which is the only way to see
+/// whether the roots are being carried where the caller believes: a root is a
+/// barycentric point on one of these triangles, so a scalp in the wrong place
+/// is a groom in the wrong place with no other symptom.
+///
+/// A groom with no scalp reports a count of zero rather than failing.
+ZJOLT_API ZJoltResult zjoltHairReadBackScalpVertices(ZJoltHair *hair,
+                                                     ZJoltVec3 *out_positions,
+                                                     uint32_t capacity,
+                                                     uint32_t *out_count);
+
+/// Everything the solver knows about one simulated vertex.
+///
+/// `rotation` is the vertex's Bishop frame — the orientation of the rod that
+/// starts at it — and is what orients a strand's cross-section. Positions alone
+/// give a polyline with no way to say which way round a ribbon faces.
+typedef struct ZJoltHairVertexState {
+  /// In the hair's LOCAL space, as zjoltHairReadBackPositions reports it.
+  ZJoltVec3 position;
+  ZJoltQuat rotation;
+  /// Local space per second.
+  ZJoltVec3 velocity;
+  ZJoltVec3 angular_velocity;
+} ZJoltHairVertexState;
+
+/// Position, orientation, velocity and angular velocity of every simulated
+/// vertex, in ONE device stall.
+///
+/// Same ordering and same buffer protocol as zjoltHairReadBackPositions — the
+/// simulated strands only, in Jolt's order, which zjoltHairGetSimulatedStrands
+/// describes. Prefer this over calling that function and then wanting the
+/// velocities too: every readback entry point copies the whole simulation state
+/// back from the device, so two calls are two stalls for the same bytes.
+ZJOLT_API ZJoltResult zjoltHairReadBackVertexState(
+    ZJoltHair *hair, ZJoltHairVertexState *out_state, uint32_t capacity,
+    uint32_t *out_count);
+
+/// Where each simulated strand starts and ends in the arrays
+/// zjoltHairReadBackPositions and zjoltHairReadBackVertexState fill, and which
+/// material it uses.
+///
+/// Without this those arrays are a flat run of vertices with no strand
+/// boundaries in them: Jolt simulates only a fraction of the authored strands —
+/// each material's `simulation_strands_fraction`, at least one per material —
+/// and groups what it keeps by material. The RENDER positions need no such
+/// call, because Jolt copies the authored strands into the render set
+/// unchanged, so zjoltHairReadBackRenderPositions is already in the caller's
+/// own indexing.
+///
+/// Same two-call protocol as the readbacks: `out_strands` NULL reports the
+/// count. This one is cheap — it reads the groom, not the device.
+ZJOLT_API ZJoltResult zjoltHairGetSimulatedStrands(const ZJoltHair *hair,
+                                                   ZJoltHairStrand *out_strands,
+                                                   uint32_t capacity,
+                                                   uint32_t *out_count);
+
+/// What zjoltHairCreate made of a groom.
+///
+/// Jolt's HairSettings is a reference-counted asset with compute buffers in it
+/// and does not cross this boundary; these are the parts of it a caller cannot
+/// recompute from what it passed in, because Jolt derived them.
+typedef struct ZJoltHairInfo {
+  /// Vertices and strands the solver actually simulates — a subset, regrouped.
+  uint32_t simulated_vertex_count;
+  uint32_t simulated_strand_count;
+  /// Every authored vertex and strand, in the order they were passed in.
+  uint32_t render_vertex_count;
+  uint32_t render_strand_count;
+  uint32_t material_count;
+  /// As zjoltHairGetJointCount reports it; 0 for a groom with no scalp.
+  uint32_t joint_count;
+  /// Vertices in the longest simulated strand.
+  uint32_t max_vertices_per_strand;
+  /// `simulated_strand_count * max_vertices_per_strand` — the row stride of the
+  /// transposed position and velocity buffers on the device, and therefore what
+  /// a host reading those buffers directly has to index by. Larger than
+  /// `simulated_vertex_count` whenever the strands are not all one length.
+  uint32_t padded_vertex_count;
+  /// The box the velocity grid covers, in the hair's local space. Computed from
+  /// the neutral pose plus `simulation_bounds_padding`; a vertex that leaves it
+  /// is clamped back into the edge cell rather than growing the grid.
+  ZJoltVec3 simulation_bounds_min;
+  ZJoltVec3 simulation_bounds_max;
+  /// Cells in that box, after the zeroes in ZJoltHairDesc became Jolt's 32.
+  uint32_t grid_size_x;
+  uint32_t grid_size_y;
+  uint32_t grid_size_z;
+  /// How far the worst-matched strand root was from the scalp mesh, in local
+  /// units, when the groom was built. Jolt projects every root onto the closest
+  /// scalp triangle, so a mismatch does not fail — it silently moves a root
+  /// that was authored against a different mesh. A groom with no scalp reports
+  /// 0, and so does a groom restored by zjoltHairCreateFromGroom from a blob
+  /// written before this field existed.
+  float max_root_distance_to_scalp;
+} ZJoltHairInfo;
+
+/// Fills `out` with what the groom turned into. Cheap; nothing here touches the
+/// device.
+ZJOLT_API ZJoltResult zjoltHairGetInfo(const ZJoltHair *hair,
+                                       ZJoltHairInfo *out);
+
+//===----------------------------------------------------------------------===//
+// Baking a groom
+//
+// zjoltHairCreate is the expensive call — it splits the strands, matches every
+// root to the scalp through a triangle tree, builds a Bishop frame per rod and
+// voxelises the neutral density grid. None of that depends on the compute
+// backend, so it can be done once by a cook and the result shipped.
+//
+// The container is the one every save/load pair in this library uses: a magic
+// tag of its own, a version, this build's config id, the Jolt version, a length
+// and a CRC-32, all checked before Jolt reads a byte. It is not a defence
+// against a crafted payload carrying a matching checksum — treat a baked groom
+// as something your own cook wrote, not as untrusted input.
+//===----------------------------------------------------------------------===//
+
+/// Writes the built groom into `buffer`.
+///
+/// Two-call protocol: `buffer` NULL reports the size in `*out_size` and writes
+/// nothing, and a `capacity` short of that reports
+/// ZJOLT_RESULT_BUFFER_TOO_SMALL with the required size still written.
+///
+/// What is saved is the GROOM, not the simulation — the strands, the materials,
+/// the rest frames, the skin points and the density grid, as they were when the
+/// hair was built. Not where the hair is, not how it is moving, and not the
+/// pose: a restored groom starts at rest in its default pose exactly as a fresh
+/// one does.
+ZJOLT_API ZJoltResult zjoltHairSaveGroom(const ZJoltHair *hair, void *buffer,
+                                         size_t capacity, size_t *out_size);
+
+/// Builds a hair from zjoltHairSaveGroom output, skipping the strand split, the
+/// root matching and the density grid. Only the compute buffers are allocated,
+/// so this is the cheap way in.
+///
+/// `position` and `rotation` may each be NULL, for the origin and the identity.
+/// A blob from a different zjolt build, a different Jolt, a different precision
+/// setting, or one truncated or damaged in storage, is ZJOLT_RESULT_BAD_FORMAT
+/// and creates nothing.
+ZJOLT_API ZJoltResult zjoltHairCreateFromGroom(
+    ZJoltComputeSystem *compute, const void *data, size_t size,
+    const ZJoltRVec3 *position, const ZJoltQuat *rotation,
+    ZJoltObjectLayer object_layer, ZJoltHair **out);
+
+//===----------------------------------------------------------------------===//
+// Evaluating the authored parameters
+//
+// Two pure functions over the structs above, doing to them what the solver
+// does. They exist because a caller that authors a gradient or a compliance
+// curve otherwise has no way to see the value the solver will use, and because
+// re-deriving either by hand gets the clamping wrong.
+//===----------------------------------------------------------------------===//
+
+/// The gradient's value at `strand_fraction` of the way along a strand, 0 at
+/// the root and 1 at the tip.
+///
+/// Outside [`min_fraction`, `max_fraction`] the value is clamped, not
+/// extrapolated. `strand_fraction` need not be in [0, 1] — the clamp makes any
+/// finite value meaningful — but a NaN is refused.
+///
+/// A gradient whose `min_fraction` equals its `max_fraction` is refused: Jolt
+/// divides by the difference with no guard, and the NaN that produces reaches
+/// the shader constants and takes the whole groom with it. zjoltHairCreate
+/// refuses one for the same reason.
+ZJOLT_API ZJoltResult zjoltHairGradientSample(const ZJoltHairGradient *gradient,
+                                              float strand_fraction,
+                                              float *out_value);
+
+/// The material's bend compliance at `strand_fraction` of the way along a
+/// strand: `bend_compliance` scaled by `bend_compliance_multiplier`
+/// interpolated across the three thirds of the strand its four entries name.
+///
+/// `strand_fraction` must be in [0, 1]. Jolt's own version truncates it to an
+/// unsigned index, so a negative fraction is undefined behaviour there rather
+/// than a clamp, and anything above 1 trips an assert.
+ZJOLT_API ZJoltResult zjoltHairMaterialGetBendCompliance(
+    const ZJoltHairMaterial *material, float strand_fraction,
+    float *out_value);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
