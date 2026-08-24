@@ -442,17 +442,22 @@ test "the broad phase's bounds shrink again once the body stretching them is gon
     const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
+    // Relative to whatever the fixture floor happens to be, not an absolute
+    // figure: the floor's size is the fixture's business and a test that
+    // hard-codes it fails the day the fixture grows, which says nothing about
+    // the broad phase.
     const before = world.system.broadPhase().bounds();
-    try std.testing.expect(before.max.x < 100);
 
+    const far_x = before.max.x + 500;
     const far = try world.system.bodies().createAndAdd(.{
         .shape = shape,
         .object_layer = Layers.moving,
-        .position = zjolt.rvec3(500, 500, 500),
+        .position = zjolt.rvec3(far_x, far_x, far_x),
     }, .dont_activate);
 
     const grown = world.system.broadPhase().bounds();
-    try std.testing.expect(grown.max.x >= 499.5);
+    try std.testing.expect(grown.max.x >= far_x - 0.5);
+    try std.testing.expect(grown.max.x > before.max.x);
 
     // Removed, not merely deactivated — and the bounds pull back in with it,
     // with no `optimizeBroadPhase` call anywhere in this test.
@@ -460,8 +465,8 @@ test "the broad phase's bounds shrink again once the body stretching them is gon
     world.system.bodies().destroy(far);
 
     const shrunk = world.system.broadPhase().bounds();
-    try std.testing.expect(shrunk.max.x < 100);
     try std.testing.expect(shrunk.max.x < grown.max.x);
+    try std.testing.expectApproxEqAbs(before.max.x, shrunk.max.x, 1.0);
 }
 
 //=============================================================================
