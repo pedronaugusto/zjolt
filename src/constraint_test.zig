@@ -307,6 +307,539 @@ test "a hinge's limits outside [-pi, 0] / [0, pi] are refused, not asserted" {
 }
 
 //=============================================================================
+// Reading a constraint's frame back
+//=============================================================================
+
+test "a hinge reports back the frame it was built from, and its constraint-to-body matrix is that frame" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+    world.system.setGravity(zjolt.vec3_zero);
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.1, 0.1), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bodies = world.system.bodies();
+    const arm = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    // A frame nobody defaults to: the hinge turns about +Z and measures its
+    // angle from +Y. Jolt's own defaults are (0,1,0) and (1,0,0), so a getter
+    // that quietly reported those instead would be caught here.
+    const hinge_axis = zjolt.vec3(0, 0, 1);
+    const normal_axis = zjolt.vec3(0, 1, 0);
+    var hinge = try zjolt.Constraint.initHinge(world.system, zjolt.world_body, arm, .{
+        .point1 = anchor,
+        .point2 = anchor,
+        .hinge_axis1 = hinge_axis,
+        .normal_axis1 = normal_axis,
+        .hinge_axis2 = hinge_axis,
+        .normal_axis2 = normal_axis,
+    });
+    defer hinge.release();
+    try hinge.addTo(world.system);
+
+    // The descriptor was in WORLD space. What comes back is centre-of-mass
+    // space, which is the point of the getters: body 2 is a box at `anchor`
+    // with identity rotation, so its centre of mass IS `anchor` and the same
+    // frame reads back sitting at the origin.
+    try expectVec3(hinge_axis, try hinge.hingeLocalSpaceHingeAxis2(), 1e-5);
+    try expectVec3(normal_axis, try hinge.hingeLocalSpaceNormalAxis2(), 1e-5);
+    try expectVec3(zjolt.vec3(0, 0, 0), try hinge.hingeLocalSpacePoint2(), 1e-5);
+
+    // Body 1 is the world body, whose centre of mass is the origin — so the
+    // same frame reads back sitting at `anchor` instead. The two differing is
+    // exactly what makes these worth having.
+    try expectVec3(hinge_axis, try hinge.hingeLocalSpaceHingeAxis1(), 1e-5);
+    try expectVec3(normal_axis, try hinge.hingeLocalSpaceNormalAxis1(), 1e-5);
+    try expectVec3(zjolt.vec3(0, 4, 0), try hinge.hingeLocalSpacePoint1(), 1e-5);
+
+    // The matrix is that frame, column by column, in the column-major layout
+    // ZJoltMat44 documents: hinge axis, normal axis, their cross, then the
+    // attachment point.
+    const m = try hinge.constraintToBody2Matrix();
+    try expectVec3(hinge_axis, zjolt.vec3(m.m[0], m.m[1], m.m[2]), 1e-5);
+    try expectVec3(normal_axis, zjolt.vec3(m.m[4], m.m[5], m.m[6]), 1e-5);
+    try expectVec3(zjolt.vec3(-1, 0, 0), zjolt.vec3(m.m[8], m.m[9], m.m[10]), 1e-5);
+    try expectVec3(zjolt.vec3(0, 0, 0), zjolt.vec3(m.m[12], m.m[13], m.m[14]), 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), m.m[15], 1e-5);
+
+    // And on body 1 the translation column is the attachment point there.
+    const m1 = try hinge.constraintToBody1Matrix();
+    try expectVec3(zjolt.vec3(0, 4, 0), zjolt.vec3(m1.m[12], m1.m[13], m1.m[14]), 1e-5);
+}
+
+test "the constraint-to-body matrix is refused on a handle that is not a two-body constraint" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.3, 0.3, 0.3), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const box = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    var point = try zjolt.Constraint.initPoint(world.system, zjolt.world_body, box, .{
+        .point1 = anchor,
+        .point2 = anchor,
+    });
+    defer point.release();
+
+    // A point constraint IS a two-body constraint, so this succeeds — the
+    // narrowing is not a blanket refusal of the kinds that have no meaningful
+    // rotation, only of handles that are not two-body at all.
+    _ = try point.constraintToBody1Matrix();
+
+    // ...but the per-kind accessors still refuse the wrong kind, which is what
+    // keeps a hinge accessor off a point constraint.
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        point.hingeLocalSpaceHingeAxis1(),
+    );
+}
+
+//=============================================================================
+// Draw size
+//=============================================================================
+
+test "a constraint's draw size round-trips, or refuses honestly without the debug renderer" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.3, 0.3, 0.3), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const box = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    var point = try zjolt.Constraint.initPoint(world.system, zjolt.world_body, box, .{
+        .point1 = anchor,
+        .point2 = anchor,
+    });
+    defer point.release();
+
+    if (zjolt.options.debug_renderer) {
+        // Jolt's own default, which this reads rather than transcribes.
+        try std.testing.expectApproxEqAbs(@as(f32, 1), try point.drawSize(), 1e-5);
+        try point.setDrawSize(2.5);
+        try std.testing.expectApproxEqAbs(@as(f32, 2.5), try point.drawSize(), 1e-5);
+        // A NaN size would draw a frame with no bounds, which a renderer that
+        // culls by bounds silently never shows.
+        try std.testing.expectError(
+            zjolt.Error.InvalidArgument,
+            point.setDrawSize(std.math.nan(f32)),
+        );
+        try std.testing.expectApproxEqAbs(@as(f32, 2.5), try point.drawSize(), 1e-5);
+    } else {
+        // Declared in every build, and honest about the one it cannot serve.
+        try std.testing.expectError(zjolt.Error.Unsupported, point.setDrawSize(2.5));
+        try std.testing.expectError(zjolt.Error.Unsupported, point.drawSize());
+    }
+}
+
+//=============================================================================
+// Limit impulses — what a breakable joint is built from
+//=============================================================================
+
+test "a slider's position limit clamps travel, and the limit impulse says so" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.3, 0.3, 0.3), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bodies = world.system.bodies();
+    const carriage = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    const limit: f32 = 0.5;
+    var slider = try zjolt.Constraint.initSlider(world.system, zjolt.world_body, carriage, .{
+        .point1 = anchor,
+        .slider_axis1 = zjolt.vec3(1, 0, 0),
+        .normal_axis1 = zjolt.vec3(0, 1, 0),
+        .point2 = anchor,
+        .slider_axis2 = zjolt.vec3(1, 0, 0),
+        .normal_axis2 = zjolt.vec3(0, 1, 0),
+        .limits_min = -limit,
+        .limits_max = limit,
+    });
+    defer slider.release();
+    try slider.addTo(world.system);
+
+    // Gravity is left on and pulls perpendicular to the slider axis, so the
+    // AXIS impulse is carrying the carriage's weight from the first step.
+    try world.stepFor(0.3);
+    try std.testing.expect(@abs(try slider.sliderCurrentPosition()) < 0.05);
+
+    const held = try slider.sliderTotalLambdaPosition();
+    try std.testing.expect(@abs(held[0]) + @abs(held[1]) > 0);
+
+    // Nothing is pushing along the axis yet, so the LIMIT part has applied
+    // nothing — which is the half of this that a getter returning the wrong
+    // constraint part would fail.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        try slider.sliderTotalLambdaPositionLimits(),
+        1e-6,
+    );
+
+    // Now drive it hard into the stop.
+    var elapsed: f32 = 0;
+    const dt: f32 = 1.0 / 60.0;
+    while (elapsed < 1.0) : (elapsed += dt) {
+        bodies.setLinearVelocity(carriage, zjolt.vec3(4, 0, 0));
+        _ = try world.system.step(dt, 1, world.jobs);
+    }
+
+    // Travel actually clamped: four metres per second for a second, stopped
+    // half a metre out.
+    const position = try slider.sliderCurrentPosition();
+    try std.testing.expect(position > limit - 0.05);
+    try std.testing.expect(position < limit + 0.05);
+
+    // And the limit is what stopped it.
+    try std.testing.expect(@abs(try slider.sliderTotalLambdaPositionLimits()) > 0);
+}
+
+test "a swing-twist's twist limit stops rotation past it, and only the twist impulse rises" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+    world.system.setGravity(zjolt.vec3_zero);
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.4, 0.1, 0.1), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bodies = world.system.bodies();
+    const bone = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    const twist_limit: f32 = 0.3;
+    var joint = try zjolt.Constraint.initSwingTwist(world.system, zjolt.world_body, bone, .{
+        .position1 = anchor,
+        .twist_axis1 = zjolt.vec3(1, 0, 0),
+        .plane_axis1 = zjolt.vec3(0, 1, 0),
+        .position2 = anchor,
+        .twist_axis2 = zjolt.vec3(1, 0, 0),
+        .plane_axis2 = zjolt.vec3(0, 1, 0),
+        // A roomy swing cone, so the swing limits are nowhere near engaged and
+        // their impulses stay at zero while the twist limit does all the work.
+        .normal_half_cone_angle = 1.0,
+        .plane_half_cone_angle = 1.0,
+        .twist_min_angle = -twist_limit,
+        .twist_max_angle = twist_limit,
+    });
+    defer joint.release();
+    try joint.addTo(world.system);
+
+    // Inside every limit and nothing pushing: no limit has applied anything.
+    try world.stepFor(0.1);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try joint.swingTwistTotalLambdaTwist(), 1e-6);
+
+    // Spin it about the twist axis, hard and for long enough that an
+    // unconstrained bone would have turned several times round.
+    var elapsed: f32 = 0;
+    const dt: f32 = 1.0 / 60.0;
+    while (elapsed < 1.0) : (elapsed += dt) {
+        bodies.setAngularVelocity(bone, zjolt.vec3(6, 0, 0));
+        _ = try world.system.step(dt, 1, world.jobs);
+    }
+
+    // The limit held: body 1 is the world at identity, so the bone's world
+    // rotation is the joint's rotation, and its total angle is the twist.
+    const rotation = bodies.getRotation(bone);
+    try std.testing.expect(quatAngle(rotation, zjolt.quat_identity) < twist_limit + 0.1);
+
+    // The TWIST limit is what held it...
+    try std.testing.expect(@abs(try joint.swingTwistTotalLambdaTwist()) > 0);
+    // ...and the swing limits, well inside their cone, applied nothing. That
+    // is what says these three read three different constraint parts rather
+    // than the same one three times.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try joint.swingTwistTotalLambdaSwingY(), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try joint.swingTwistTotalLambdaSwingZ(), 1e-6);
+}
+
+test "a hinge driven past its limit reports the limit impulse, not just the axis one" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+    world.system.setGravity(zjolt.vec3_zero);
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.1, 0.1), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bodies = world.system.bodies();
+    const door = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    const limit: f32 = 0.4;
+    var hinge = try zjolt.Constraint.initHinge(world.system, zjolt.world_body, door, .{
+        .point1 = anchor,
+        .point2 = anchor,
+        .hinge_axis1 = zjolt.vec3(0, 1, 0),
+        .normal_axis1 = zjolt.vec3(1, 0, 0),
+        .hinge_axis2 = zjolt.vec3(0, 1, 0),
+        .normal_axis2 = zjolt.vec3(1, 0, 0),
+        .limits_min = -limit,
+        .limits_max = limit,
+    });
+    defer hinge.release();
+    try hinge.addTo(world.system);
+
+    try world.stepFor(0.1);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0),
+        try hinge.hingeTotalLambdaRotationLimits(),
+        1e-6,
+    );
+
+    var elapsed: f32 = 0;
+    const dt: f32 = 1.0 / 60.0;
+    while (elapsed < 1.0) : (elapsed += dt) {
+        // About the hinge axis, so only the LIMIT can stop it — the axis part
+        // has nothing to resist.
+        bodies.setAngularVelocity(door, zjolt.vec3(0, 5, 0));
+        _ = try world.system.step(dt, 1, world.jobs);
+    }
+
+    try std.testing.expectApproxEqAbs(limit, try hinge.hingeCurrentAngle(), 0.1);
+    try std.testing.expect(@abs(try hinge.hingeTotalLambdaRotationLimits()) > 0);
+}
+
+test "a path constraint's position impulse is what holds the cart on the track" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.2, 0.2, 0.2), .{});
+    defer shape.release();
+
+    // A straight run along +X, three control points so the middle one has a
+    // segment either side.
+    const tangent = zjolt.vec3(2, 0, 0);
+    const normal = zjolt.vec3(0, 1, 0);
+    const path = try zjolt.ConstraintPath.initHermite(&[_]zjolt.PathPoint{
+        .{ .position = zjolt.vec3(-2, 0, 0), .tangent = tangent, .normal = normal },
+        .{ .position = zjolt.vec3(0, 0, 0), .tangent = tangent, .normal = normal },
+        .{ .position = zjolt.vec3(2, 0, 0), .tangent = tangent, .normal = normal },
+    }, false);
+    defer path.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bodies = world.system.bodies();
+    const cart = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    var track = try zjolt.Constraint.initPath(world.system, zjolt.world_body, cart, .{
+        .path = path.handle,
+        .path_position = zjolt.vec3(0, 4, 0),
+        .path_rotation = zjolt.quat_identity,
+        .path_fraction = 1,
+        .rotation_constraint_type = .free,
+    });
+    defer track.release();
+    try track.addTo(world.system);
+
+    // Gravity pulls the cart off the track the whole time; the position part
+    // is what keeps it on.
+    try world.stepFor(0.5);
+
+    const held = try track.pathTotalLambdaPosition();
+    try std.testing.expect(@abs(held[0]) + @abs(held[1]) > 0);
+
+    // The cart stayed on the line the path runs along.
+    const position = bodies.getPosition(cart);
+    try std.testing.expectApproxEqAbs(@as(f64, 4), @as(f64, @floatCast(position.y)), 0.05);
+    try std.testing.expectApproxEqAbs(@as(f64, 0), @as(f64, @floatCast(position.z)), 0.05);
+
+    // Rotation is free on this track, so its rotation parts applied nothing —
+    // and both shapes of the rotation impulse are safe to sample regardless.
+    const hinge_lambda = try track.pathTotalLambdaRotationHinge();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), hinge_lambda[0], 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), hinge_lambda[1], 1e-6);
+    const rotation_lambda = try track.pathTotalLambdaRotation();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), rotation_lambda.x, 1e-6);
+}
+
+//=============================================================================
+// Body space against constraint space
+//=============================================================================
+
+test "a body-space target orientation drives a swing-twist to that relative rotation" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+    world.system.setGravity(zjolt.vec3_zero);
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.4, 0.1, 0.1), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bodies = world.system.bodies();
+    const bone = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    // The constraint frame is deliberately NOT the body frame — twist about
+    // +Z, plane axis +X — so constraint space and body space differ and
+    // passing the same quaternion to the two setters cannot give the same
+    // result. With an identity frame this test would pass without the
+    // conversion being done at all.
+    var joint = try zjolt.Constraint.initSwingTwist(world.system, zjolt.world_body, bone, .{
+        .position1 = anchor,
+        .twist_axis1 = zjolt.vec3(0, 0, 1),
+        .plane_axis1 = zjolt.vec3(1, 0, 0),
+        .position2 = anchor,
+        .twist_axis2 = zjolt.vec3(0, 0, 1),
+        .plane_axis2 = zjolt.vec3(1, 0, 0),
+        .normal_half_cone_angle = 1.0,
+        .plane_half_cone_angle = 1.0,
+        .twist_min_angle = -1.0,
+        .twist_max_angle = 1.0,
+    });
+    defer joint.release();
+    try joint.addTo(world.system);
+
+    const to_body1 = try joint.swingTwistConstraintToBody1();
+    const to_body2 = try joint.swingTwistConstraintToBody2();
+    // The frame really is rotated, or the rest of this proves nothing.
+    try std.testing.expect(quatAngle(to_body1, zjolt.quat_identity) > 0.5);
+
+    // Body 1 is the world at identity, so this is where the bone should end up
+    // in world space too.
+    const target = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), 0.4);
+    try joint.swingTwistSetTargetOrientationBodySpace(target);
+
+    // Stored in CONSTRAINT space: conj(toBody1) * target * toBody2, which is
+    // not the quaternion that went in.
+    const stored = try joint.swingTwistTargetOrientation();
+    const expected = zjolt.quatMultiply(
+        zjolt.quatMultiply(zjolt.quatConjugate(to_body1), target),
+        to_body2,
+    );
+    try std.testing.expect(quatAngle(stored, expected) < 1e-3);
+    try std.testing.expect(quatAngle(stored, target) > 1e-3);
+
+    // A position motor is a spring: the default MotorSettings has frequency 0
+    // and therefore applies nothing however large its torque limits are.
+    const motor: zjolt.MotorSettings = .{ .spring = .{
+        .mode = .frequency_and_damping,
+        .frequency_or_stiffness = 8,
+        .damping = 1,
+    } };
+    try joint.swingTwistSetSwingMotorSettings(motor);
+    try joint.swingTwistSetTwistMotorSettings(motor);
+    try joint.swingTwistSetSwingMotorState(.position);
+    try joint.swingTwistSetTwistMotorState(.position);
+
+    try world.stepFor(2.0);
+
+    // It arrived where BODY space said, not where treating that quaternion as
+    // constraint space would have put it.
+    try std.testing.expect(quatAngle(bodies.getRotation(bone), target) < 0.1);
+}
+
+test "a body-space angular velocity target is converted, not stored as given" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+    world.system.setGravity(zjolt.vec3_zero);
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.4, 0.1, 0.1), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const bone = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = anchor,
+    }, .activate);
+
+    var joint = try zjolt.Constraint.initSwingTwist(world.system, zjolt.world_body, bone, .{
+        .position1 = anchor,
+        .twist_axis1 = zjolt.vec3(0, 0, 1),
+        .plane_axis1 = zjolt.vec3(1, 0, 0),
+        .position2 = anchor,
+        .twist_axis2 = zjolt.vec3(0, 0, 1),
+        .plane_axis2 = zjolt.vec3(1, 0, 0),
+        .normal_half_cone_angle = 1.0,
+        .plane_half_cone_angle = 1.0,
+        .twist_min_angle = -1.0,
+        .twist_max_angle = 1.0,
+    });
+    defer joint.release();
+    try joint.addTo(world.system);
+
+    // Body space: turn about the bone's own +Z, which the constraint frame
+    // maps to its twist axis (+X in constraint space).
+    const body_space = zjolt.vec3(0, 0, 2);
+    try joint.swingTwistSetTargetAngularVelocityBodySpace(body_space);
+
+    // What comes back is the CONVERTED value — there is one target and it is
+    // held in constraint space, so the getter cannot echo what was passed.
+    const stored = try joint.swingTwistTargetAngularVelocity();
+    try std.testing.expectApproxEqAbs(@as(f32, 2), stored.x, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), stored.z, 1e-4);
+
+    // The constraint-space setter with the same numbers stores them verbatim,
+    // which is the difference the two calls exist for.
+    try joint.swingTwistSetTargetAngularVelocity(body_space);
+    const verbatim = try joint.swingTwistTargetAngularVelocity();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), verbatim.x, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), verbatim.z, 1e-4);
+}
+
+//=============================================================================
 // Helpers
 //=============================================================================
 
@@ -317,4 +850,10 @@ fn quatAngle(a: zjolt.Quat, b: zjolt.Quat) f32 {
     const dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
     const clamped = std.math.clamp(@abs(dot), 0.0, 1.0);
     return 2.0 * std.math.acos(clamped);
+}
+
+fn expectVec3(expected: zjolt.Vec3, actual: zjolt.Vec3, tolerance: f32) !void {
+    try std.testing.expectApproxEqAbs(expected.x, actual.x, tolerance);
+    try std.testing.expectApproxEqAbs(expected.y, actual.y, tolerance);
+    try std.testing.expectApproxEqAbs(expected.z, actual.z, tolerance);
 }

@@ -496,6 +496,29 @@ ZJoltResult Narrow(const ZJoltConstraint *constraint,
   return ZJOLT_RESULT_OK;
 }
 
+/// The handle as a TwoBodyConstraint, which is what carries the two bodies and
+/// the constraint frame.
+///
+/// Every kind this ABI can create is one, so this cannot fail for a handle
+/// that came out of zjoltConstraintCreate*. It is still asked rather than
+/// assumed, because that is not the only source of one:
+/// zjoltVehicleConstraintAsConstraint hands back a handle to a
+/// JPH::VehicleConstraint, which derives from Constraint DIRECTLY and is not a
+/// TwoBodyConstraint at all. Assuming would be a cast to the wrong type.
+ZJoltResult NarrowTwoBody(const ZJoltConstraint *constraint,
+                          const JPH::TwoBodyConstraint **out) {
+  if (constraint == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "constraint is NULL");
+  }
+  const JPH::Constraint *base = zjolt::ToJolt(constraint);
+  if (base->GetType() != JPH::EConstraintType::TwoBodyConstraint) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint is not a two-body constraint");
+  }
+  *out = static_cast<const JPH::TwoBodyConstraint *>(base);
+  return ZJOLT_RESULT_OK;
+}
+
 /// Whether `constraint` is in `system`'s constraint list.
 ///
 /// Jolt exposes membership only as a copy of the whole list — the index it
@@ -785,19 +808,69 @@ ZJoltResult zjoltConstraintGetBodies(const ZJoltConstraint *constraint,
               zjolt::OutIsEmptyAs(out_body2, (ZJoltBodyId)ZJOLT_BODY_ID_INVALID));
   if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  const JPH::Constraint *base = zjolt::ToJolt(constraint);
-  if (base->GetType() != JPH::EConstraintType::TwoBodyConstraint) {
-    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
-                           "constraint is not a two-body constraint");
-  }
-  const JPH::TwoBodyConstraint *two =
-      static_cast<const JPH::TwoBodyConstraint *>(base);
+  const JPH::TwoBodyConstraint *two = nullptr;
+  const ZJoltResult narrowed = NarrowTwoBody(constraint, &two);
+  if (narrowed != ZJOLT_RESULT_OK) return narrowed;
 
   // The world body's id IS the invalid one, which is what
   // ZJOLT_BODY_ID_WORLD is defined as, so no special case is needed here.
   if (out_body1 != nullptr) *out_body1 = zjolt::ToC(two->GetBody1()->GetID());
   if (out_body2 != nullptr) *out_body2 = zjolt::ToC(two->GetBody2()->GetID());
   return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltConstraintGetConstraintToBody1Matrix(
+    const ZJoltConstraint *constraint, ZJoltMat44 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::TwoBodyConstraint *two = nullptr;
+  const ZJoltResult narrowed = NarrowTwoBody(constraint, &two);
+  if (narrowed != ZJOLT_RESULT_OK) return narrowed;
+
+  *out = zjolt::ToC(two->GetConstraintToBody1Matrix());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltConstraintGetConstraintToBody2Matrix(
+    const ZJoltConstraint *constraint, ZJoltMat44 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::TwoBodyConstraint *two = nullptr;
+  const ZJoltResult narrowed = NarrowTwoBody(constraint, &two);
+  if (narrowed != ZJOLT_RESULT_OK) return narrowed;
+
+  *out = zjolt::ToC(two->GetConstraintToBody2Matrix());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltConstraintSetDrawSize(ZJoltConstraint *constraint, float size) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_DEBUG_RENDERER
+  // Jolt does not check this and would draw a NaN-sized frame, which in a
+  // renderer that culls by bounds is a frame that silently never appears.
+  const ZJoltResult checked = CheckFloat(size, "size must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  zjolt::ToJolt(constraint)->SetDrawConstraintSize(size);
+  return ZJOLT_RESULT_OK;
+#else
+  (void)size;
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltConstraintGetDrawSize(const ZJoltConstraint *constraint,
+                                       float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(constraint, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_DEBUG_RENDERER
+  *out = zjolt::ToJolt(constraint)->GetDrawConstraintSize();
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
 }
 
 void zjoltConstraintResetWarmStart(ZJoltConstraint *constraint) {
@@ -1661,6 +1734,60 @@ ZJoltResult zjoltPointConstraintGetTotalLambdaPosition(
 // Hinge
 //===----------------------------------------------------------------------===//
 
+ZJoltResult zjoltHingeConstraintGetLocalSpacePoint1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetLocalSpacePoint1());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLocalSpacePoint2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetLocalSpacePoint2());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLocalSpaceHingeAxis1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetLocalSpaceHingeAxis1());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLocalSpaceHingeAxis2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetLocalSpaceHingeAxis2());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLocalSpaceNormalAxis1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetLocalSpaceNormalAxis1());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLocalSpaceNormalAxis2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetLocalSpaceNormalAxis2());
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltHingeConstraintGetCurrentAngle(const ZJoltConstraint *constraint,
                                                 float *out) {
   ZJOLT_ENTER(out);
@@ -1851,6 +1978,25 @@ ZJoltResult zjoltHingeConstraintGetTotalLambdaPosition(
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltHingeConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y) {
+  ZJOLT_ENTER(out_x, out_y);
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  const JPH::Vector<2> lambda = hinge->GetTotalLambdaRotation();
+  if (out_x != nullptr) *out_x = lambda[0];
+  if (out_y != nullptr) *out_y = lambda[1];
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetTotalLambdaRotationLimits(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->GetTotalLambdaRotationLimits();
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltHingeConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, float *out) {
   ZJOLT_ENTER(out);
@@ -2033,6 +2179,34 @@ ZJoltResult zjoltSliderConstraintGetMaxFrictionForce(
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltSliderConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y) {
+  ZJOLT_ENTER(out_x, out_y);
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  const JPH::Vector<2> lambda = slider->GetTotalLambdaPosition();
+  if (out_x != nullptr) *out_x = lambda[0];
+  if (out_y != nullptr) *out_y = lambda[1];
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetTotalLambdaPositionLimits(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->GetTotalLambdaPositionLimits();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = zjolt::ToC(slider->GetTotalLambdaRotation());
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltSliderConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, float *out) {
   ZJOLT_ENTER(out);
@@ -2153,6 +2327,42 @@ ZJoltResult zjoltConeConstraintGetTotalLambdaRotation(
 //===----------------------------------------------------------------------===//
 // Swing-twist
 //===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSwingTwistConstraintGetLocalSpacePosition1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = zjolt::ToC(joint->GetLocalSpacePosition1());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintGetLocalSpacePosition2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = zjolt::ToC(joint->GetLocalSpacePosition2());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintGetConstraintToBody1(
+    const ZJoltConstraint *constraint, ZJoltQuat *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = zjolt::ToC(joint->GetConstraintToBody1());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintGetConstraintToBody2(
+    const ZJoltConstraint *constraint, ZJoltQuat *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = zjolt::ToC(joint->GetConstraintToBody2());
+  return ZJOLT_RESULT_OK;
+}
 
 ZJoltResult zjoltSwingTwistConstraintSetNormalHalfConeAngle(
     ZJoltConstraint *constraint, float angle) {
@@ -2385,12 +2595,34 @@ ZJoltResult zjoltSwingTwistConstraintGetTargetAngularVelocity(
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(
+    ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(angular_velocity)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  if (!IsFinite(*angular_velocity)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "angular_velocity must be finite");
+  }
+  joint->SetTargetAngularVelocityBS(zjolt::ToJolt(*angular_velocity));
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltSwingTwistConstraintSetTargetOrientation(
     ZJoltConstraint *constraint, const ZJoltQuat *orientation) {
   ZJOLT_ENTER();
   if (!zjolt::Present(orientation)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
   joint->SetTargetOrientationCS(zjolt::ToJoltRotation(*orientation));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintSetTargetOrientationBodySpace(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(orientation)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  joint->SetTargetOrientationBS(zjolt::ToJoltRotation(*orientation));
   return ZJOLT_RESULT_OK;
 }
 
@@ -2418,6 +2650,33 @@ ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaPosition(
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
   *out = zjolt::ToC(joint->GetTotalLambdaPosition());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaTwist(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = joint->GetTotalLambdaTwist();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaSwingY(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = joint->GetTotalLambdaSwingY();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaSwingZ(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
+  *out = joint->GetTotalLambdaSwingZ();
   return ZJOLT_RESULT_OK;
 }
 
@@ -2673,6 +2932,15 @@ ZJoltResult zjoltSixDofConstraintGetTargetOrientation(
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   ZJOLT_NARROW(SixDOFConstraint, SixDOF, joint);
   *out = zjolt::ToC(joint->GetTargetOrientationCS());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSixDofConstraintSetTargetOrientationBodySpace(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(orientation)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SixDOFConstraint, SixDOF, joint);
+  joint->SetTargetOrientationBS(zjolt::ToJoltRotation(*orientation));
   return ZJOLT_RESULT_OK;
 }
 
@@ -3002,6 +3270,44 @@ ZJoltResult zjoltPathConstraintGetMaxFrictionForce(
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   ZJOLT_NARROW(PathConstraint, Path, joint);
   *out = joint->GetMaxFrictionForce();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPathConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y) {
+  ZJOLT_ENTER(out_x, out_y);
+  ZJOLT_NARROW(PathConstraint, Path, joint);
+  const JPH::Vector<2> lambda = joint->GetTotalLambdaPosition();
+  if (out_x != nullptr) *out_x = lambda[0];
+  if (out_y != nullptr) *out_y = lambda[1];
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPathConstraintGetTotalLambdaPositionLimits(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PathConstraint, Path, joint);
+  *out = joint->GetTotalLambdaPositionLimits();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPathConstraintGetTotalLambdaRotationHinge(
+    const ZJoltConstraint *constraint, float *out_x, float *out_y) {
+  ZJOLT_ENTER(out_x, out_y);
+  ZJOLT_NARROW(PathConstraint, Path, joint);
+  const JPH::Vector<2> lambda = joint->GetTotalLambdaRotationHinge();
+  if (out_x != nullptr) *out_x = lambda[0];
+  if (out_y != nullptr) *out_y = lambda[1];
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPathConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PathConstraint, Path, joint);
+  *out = zjolt::ToC(joint->GetTotalLambdaRotation());
   return ZJOLT_RESULT_OK;
 }
 
