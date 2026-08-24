@@ -33,6 +33,9 @@
 
 #include "zjolt_core.h"
 
+// For ZJoltCollisionGroup, which ZJoltSoftBodyDesc carries.
+#include "zjolt_group.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -267,6 +270,11 @@ typedef struct ZJoltSoftBodyDesc {
   /// Required. A reference is taken for the lifetime of the body — call
   /// zjoltSoftBodySharedSettingsOptimize on it first.
   const ZJoltSoftBodySharedSettings *shared_settings;
+  /// Which exceptions this body makes to layer-based collision, on the same
+  /// terms as ZJoltBodyDesc::collision_group: zjoltSoftBodyDescInit writes
+  /// "no group, no filter", and the body takes its own reference on the
+  /// filter when it is created.
+  ZJoltCollisionGroup collision_group;
   ZJoltRVec3 position;
   ZJoltQuat rotation;
   uint64_t user_data;

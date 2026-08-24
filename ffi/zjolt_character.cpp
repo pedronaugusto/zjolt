@@ -961,7 +961,7 @@ void zjoltRigidCharacterDescInit(ZJoltRigidCharacterDesc *desc) {
   desc->mass = defaults.mMass;
   desc->friction = defaults.mFriction;
   desc->gravity_factor = defaults.mGravityFactor;
-  desc->allowed_dofs = static_cast<ZJoltAllowedDofs>(defaults.mAllowedDOFs);
+  desc->allowed_dofs = static_cast<uint32_t>(defaults.mAllowedDOFs);
 }
 
 ZJoltResult zjoltRigidCharacterCreate(ZJoltPhysicsSystem *system,

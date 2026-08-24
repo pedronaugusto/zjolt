@@ -31,6 +31,7 @@ const c = @import("c.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");
+const group_mod = @import("group.zig");
 const system_mod = @import("system.zig");
 
 pub const BendType = c.SoftBodyBendType;
@@ -196,6 +197,10 @@ pub const Desc = struct {
     rotation: math.Quat = math.quat_identity,
     user_data: u64 = 0,
 
+    /// Exceptions to layer-based collision, on the same terms as
+    /// `BodyDesc.collision_group`. The default makes none.
+    collision_group: group_mod.CollisionGroup = .{},
+
     num_iterations: u32 = 5,
     linear_damping: f32 = 0.1,
     max_linear_velocity: f32 = 500,
@@ -221,6 +226,7 @@ pub const Desc = struct {
         // still gets a sensible value rather than whatever was on the stack.
         c.zjoltSoftBodyDescInit(&out);
         out.shared_settings = self.shared_settings.handle;
+        out.collision_group = group_mod.toC(self.collision_group);
         out.position = self.position;
         out.rotation = self.rotation;
         out.user_data = self.user_data;

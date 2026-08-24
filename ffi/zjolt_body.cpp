@@ -134,6 +134,11 @@ void zjoltBodyDescInit(ZJoltBodyDesc *desc) {
   desc->linear_velocity = zjolt::ToC(defaults.mLinearVelocity);
   desc->angular_velocity = zjolt::ToC(defaults.mAngularVelocity);
   desc->shape = nullptr;
+  // Not all-zero: "no group" is ZJOLT_COLLISION_GROUP_INVALID, and 0 is a
+  // perfectly good group id.
+  desc->collision_group.filter = nullptr;
+  desc->collision_group.group_id = defaults.mCollisionGroup.GetGroupID();
+  desc->collision_group.sub_group_id = defaults.mCollisionGroup.GetSubGroupID();
   desc->user_data = defaults.mUserData;
   desc->object_layer = static_cast<ZJoltObjectLayer>(defaults.mObjectLayer);
   desc->motion_type = ToCMotionType(defaults.mMotionType);
@@ -168,6 +173,7 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
   out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
   out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
   out->SetShape(zjolt::ToJolt(desc.shape));
+  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
   out->mMotionType = ToJoltMotionType(desc.motion_type);

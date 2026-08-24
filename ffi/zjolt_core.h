@@ -396,6 +396,11 @@ typedef enum ZJoltActivation {
 
 /// Degrees of freedom a body is allowed, as a bit mask. Use
 /// ZJOLT_ALLOWED_DOFS_ALL unless constraining to a plane.
+///
+/// Like every other bit mask here, it CROSSES as a uint32_t and this enum only
+/// names the bits. A field or parameter typed as the enum itself would hold a
+/// value that is not one of its enumerators the moment two bits are combined,
+/// which is what the fields carrying this used to do.
 typedef enum ZJoltAllowedDofs {
   ZJOLT_ALLOWED_DOFS_TRANSLATION_X = 1 << 0,
   ZJOLT_ALLOWED_DOFS_TRANSLATION_Y = 1 << 1,
