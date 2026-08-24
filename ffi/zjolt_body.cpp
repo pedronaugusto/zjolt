@@ -4,6 +4,7 @@
 
 #include "zjolt_internal.h"
 
+#include <Jolt/Math/Math.h>
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 
@@ -37,6 +38,23 @@ ZJoltMotionType ToCMotionType(JPH::EMotionType type) {
       break;
   }
   return ZJOLT_MOTION_TYPE_DYNAMIC;
+}
+
+JPH::EMotionQuality ToJoltMotionQuality(ZJoltMotionQuality quality) {
+  return quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
+             ? JPH::EMotionQuality::LinearCast
+             : JPH::EMotionQuality::Discrete;
+}
+
+ZJoltMotionQuality ToCMotionQuality(JPH::EMotionQuality quality) {
+  return quality == JPH::EMotionQuality::LinearCast
+             ? ZJOLT_MOTION_QUALITY_LINEAR_CAST
+             : ZJOLT_MOTION_QUALITY_DISCRETE;
+}
+
+ZJoltBodyType ToCBodyType(JPH::EBodyType type) {
+  return type == JPH::EBodyType::SoftBody ? ZJOLT_BODY_TYPE_SOFT_BODY
+                                          : ZJOLT_BODY_TYPE_RIGID_BODY;
 }
 
 JPH::BodyInterface *Interface(ZJoltPhysicsSystem *system) {
@@ -262,6 +280,19 @@ void zjoltBodyDeactivate(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
   iface->DeactivateBody(zjolt::ToJolt(body));
 }
 
+void zjoltBodyResetSleepTimer(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  iface->ResetSleepTimer(zjolt::ToJolt(body));
+}
+
+ZJoltBodyType zjoltBodyGetBodyType(const ZJoltPhysicsSystem *system,
+                                   ZJoltBodyId body) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return ZJOLT_BODY_TYPE_RIGID_BODY;
+  return ToCBodyType(iface->GetBodyType(zjolt::ToJolt(body)));
+}
+
 //===----------------------------------------------------------------------===//
 // Motion type and transform
 //===----------------------------------------------------------------------===//
@@ -279,6 +310,20 @@ ZJoltMotionType zjoltBodyGetMotionType(const ZJoltPhysicsSystem *system,
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return ZJOLT_MOTION_TYPE_STATIC;
   return ToCMotionType(iface->GetMotionType(zjolt::ToJolt(body)));
+}
+
+void zjoltBodySetMotionQuality(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                               ZJoltMotionQuality quality) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  iface->SetMotionQuality(zjolt::ToJolt(body), ToJoltMotionQuality(quality));
+}
+
+ZJoltMotionQuality zjoltBodyGetMotionQuality(const ZJoltPhysicsSystem *system,
+                                             ZJoltBodyId body) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return ZJOLT_MOTION_QUALITY_DISCRETE;
+  return ToCMotionQuality(iface->GetMotionQuality(zjolt::ToJolt(body)));
 }
 
 void zjoltBodySetPositionAndRotation(ZJoltPhysicsSystem *system,
@@ -316,6 +361,21 @@ void zjoltBodyGetCenterOfMassPosition(const ZJoltPhysicsSystem *system,
                     iface->GetCenterOfMassPosition(zjolt::ToJolt(body)));
 }
 
+void zjoltBodySetPositionAndRotationWhenChanged(ZJoltPhysicsSystem *system,
+                                                ZJoltBodyId body,
+                                                const ZJoltRVec3 *position,
+                                                const ZJoltQuat *rotation,
+                                                ZJoltActivation activation) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || position == nullptr) return;
+  const JPH::BodyID id = zjolt::ToJolt(body);
+  const JPH::Quat orientation =
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation) : iface->GetRotation(id);
+  iface->SetPositionAndRotationWhenChanged(id, zjolt::ToJoltR(*position),
+                                           orientation,
+                                           ToJoltActivation(activation));
+}
+
 void zjoltBodyMoveKinematic(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                             const ZJoltRVec3 *target_position,
                             const ZJoltQuat *target_rotation,
@@ -328,6 +388,22 @@ void zjoltBodyMoveKinematic(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                                     : iface->GetRotation(id);
   iface->MoveKinematic(id, zjolt::ToJoltR(*target_position), orientation,
                        delta_time);
+}
+
+void zjoltBodySetPositionRotationAndVelocity(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *linear_velocity,
+    const ZJoltVec3 *angular_velocity) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || position == nullptr || linear_velocity == nullptr ||
+      angular_velocity == nullptr)
+    return;
+  const JPH::BodyID id = zjolt::ToJolt(body);
+  const JPH::Quat orientation =
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation) : iface->GetRotation(id);
+  iface->SetPositionRotationAndVelocity(
+      id, zjolt::ToJoltR(*position), orientation,
+      zjolt::ToJolt(*linear_velocity), zjolt::ToJolt(*angular_velocity));
 }
 
 //===----------------------------------------------------------------------===//
@@ -360,6 +436,61 @@ void zjoltBodyGetAngularVelocity(const ZJoltPhysicsSystem *system,
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr || out == nullptr) return;
   zjolt::WriteVec3(out, iface->GetAngularVelocity(zjolt::ToJolt(body)));
+}
+
+void zjoltBodySetLinearAndAngularVelocity(ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body,
+                                          const ZJoltVec3 *linear_velocity,
+                                          const ZJoltVec3 *angular_velocity) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || linear_velocity == nullptr ||
+      angular_velocity == nullptr)
+    return;
+  iface->SetLinearAndAngularVelocity(zjolt::ToJolt(body),
+                                     zjolt::ToJolt(*linear_velocity),
+                                     zjolt::ToJolt(*angular_velocity));
+}
+
+void zjoltBodyGetLinearAndAngularVelocity(const ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body,
+                                          ZJoltVec3 *out_linear_velocity,
+                                          ZJoltVec3 *out_angular_velocity) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  JPH::Vec3 linear = JPH::Vec3::sZero();
+  JPH::Vec3 angular = JPH::Vec3::sZero();
+  iface->GetLinearAndAngularVelocity(zjolt::ToJolt(body), linear, angular);
+  zjolt::WriteVec3(out_linear_velocity, linear);
+  zjolt::WriteVec3(out_angular_velocity, angular);
+}
+
+void zjoltBodyAddLinearVelocity(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                                const ZJoltVec3 *linear_velocity) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || linear_velocity == nullptr) return;
+  iface->AddLinearVelocity(zjolt::ToJolt(body), zjolt::ToJolt(*linear_velocity));
+}
+
+void zjoltBodyAddLinearAndAngularVelocity(ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body,
+                                          const ZJoltVec3 *linear_velocity,
+                                          const ZJoltVec3 *angular_velocity) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || linear_velocity == nullptr ||
+      angular_velocity == nullptr)
+    return;
+  iface->AddLinearAndAngularVelocity(zjolt::ToJolt(body),
+                                     zjolt::ToJolt(*linear_velocity),
+                                     zjolt::ToJolt(*angular_velocity));
+}
+
+void zjoltBodyGetPointVelocity(const ZJoltPhysicsSystem *system,
+                               ZJoltBodyId body, const ZJoltRVec3 *point,
+                               ZJoltVec3 *out) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || point == nullptr || out == nullptr) return;
+  zjolt::WriteVec3(out, iface->GetPointVelocity(zjolt::ToJolt(body),
+                                                zjolt::ToJoltR(*point)));
 }
 
 void zjoltBodyAddForce(ZJoltPhysicsSystem *system, ZJoltBodyId body,
@@ -406,6 +537,26 @@ void zjoltBodyAddAngularImpulse(ZJoltPhysicsSystem *system, ZJoltBodyId body,
   if (iface == nullptr || angular_impulse == nullptr) return;
   iface->AddAngularImpulse(zjolt::ToJolt(body),
                            zjolt::ToJolt(*angular_impulse));
+}
+
+bool zjoltBodyApplyBuoyancyImpulse(ZJoltPhysicsSystem *system,
+                                   ZJoltBodyId body,
+                                   const ZJoltRVec3 *surface_position,
+                                   const ZJoltVec3 *surface_normal,
+                                   float buoyancy, float linear_drag,
+                                   float angular_drag,
+                                   const ZJoltVec3 *fluid_velocity,
+                                   const ZJoltVec3 *gravity,
+                                   float delta_time) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr || surface_position == nullptr ||
+      surface_normal == nullptr || fluid_velocity == nullptr ||
+      gravity == nullptr)
+    return false;
+  return iface->ApplyBuoyancyImpulse(
+      zjolt::ToJolt(body), zjolt::ToJoltR(*surface_position),
+      zjolt::ToJolt(*surface_normal), buoyancy, linear_drag, angular_drag,
+      zjolt::ToJolt(*fluid_velocity), zjolt::ToJolt(*gravity), delta_time);
 }
 
 //===----------------------------------------------------------------------===//
@@ -490,6 +641,63 @@ float zjoltBodyGetGravityFactor(const ZJoltPhysicsSystem *system,
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return 0.0f;
   return iface->GetGravityFactor(zjolt::ToJolt(body));
+}
+
+void zjoltBodySetMaxLinearVelocity(ZJoltPhysicsSystem *system,
+                                   ZJoltBodyId body, float velocity) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  iface->SetMaxLinearVelocity(zjolt::ToJolt(body), velocity);
+}
+
+float zjoltBodyGetMaxLinearVelocity(const ZJoltPhysicsSystem *system,
+                                    ZJoltBodyId body) {
+  const JPH::BodyInterface *iface = Interface(system);
+  // Jolt's own construction-time default, forwarded rather than 0 — a caller
+  // that never overrode the ceiling should read back the ceiling, not "none".
+  if (iface == nullptr) return 500.0f;
+  return iface->GetMaxLinearVelocity(zjolt::ToJolt(body));
+}
+
+void zjoltBodySetMaxAngularVelocity(ZJoltPhysicsSystem *system,
+                                    ZJoltBodyId body, float velocity) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  iface->SetMaxAngularVelocity(zjolt::ToJolt(body), velocity);
+}
+
+float zjoltBodyGetMaxAngularVelocity(const ZJoltPhysicsSystem *system,
+                                     ZJoltBodyId body) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return 0.25f * JPH::JPH_PI * 60.0f;
+  return iface->GetMaxAngularVelocity(zjolt::ToJolt(body));
+}
+
+void zjoltBodySetUseManifoldReduction(ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body, bool use_reduction) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  iface->SetUseManifoldReduction(zjolt::ToJolt(body), use_reduction);
+}
+
+bool zjoltBodyGetUseManifoldReduction(const ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return true;
+  return iface->GetUseManifoldReduction(zjolt::ToJolt(body));
+}
+
+void zjoltBodySetIsSensor(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                          bool is_sensor) {
+  JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return;
+  iface->SetIsSensor(zjolt::ToJolt(body), is_sensor);
+}
+
+bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system, ZJoltBodyId body) {
+  const JPH::BodyInterface *iface = Interface(system);
+  if (iface == nullptr) return false;
+  return iface->IsSensor(zjolt::ToJolt(body));
 }
 
 const ZJoltPhysicsMaterial *zjoltBodyGetMaterial(
