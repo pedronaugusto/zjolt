@@ -24,13 +24,17 @@ pub const Error = error{
     BadFormat,
     /// The body id does not name a body in this system.
     BodyNotFound,
+    /// The call names a feature this library was not built with. Every
+    /// function exists in every build; whether it does anything does not.
+    Unsupported,
 };
 
 /// Turns a C result into a Zig error, or void on success.
 ///
 /// The switch is exhaustive over `c.Result` with no `else` branch: adding a
-/// result to the C enum without handling it here is a compile error, which is
-/// the property `AbiLayout.result_count` also checks at runtime.
+/// result to the C enum without handling it here is a compile error. The
+/// enumerator values themselves are checked against the header by
+/// `abi_check.zig`.
 pub fn check(result: c.Result) Error!void {
     return switch (result) {
         .ok => {},
@@ -43,6 +47,7 @@ pub fn check(result: c.Result) Error!void {
         .shape_invalid => Error.ShapeInvalid,
         .bad_format => Error.BadFormat,
         .body_not_found => Error.BodyNotFound,
+        .unsupported => Error.Unsupported,
     };
 }
 

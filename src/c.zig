@@ -75,6 +75,7 @@ pub const Result = enum(c_int) {
     shape_invalid = 7,
     bad_format = 8,
     body_not_found = 9,
+    unsupported = 10,
 };
 
 //=============================================================================

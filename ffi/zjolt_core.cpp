@@ -196,6 +196,8 @@ const char *zjoltResultName(ZJoltResult result) {
       return "bad format";
     case ZJOLT_RESULT_BODY_NOT_FOUND:
       return "body not found";
+    case ZJOLT_RESULT_UNSUPPORTED:
+      return "unsupported in this build";
   }
   return "unknown result";
 }
