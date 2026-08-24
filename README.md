@@ -227,21 +227,32 @@ The Zig side hand-writes `extern struct`s mirroring `zjolt.h`. Nothing in
 either compiler checks those two declarations still agree — a field reordered
 on one side and not the other is silent corruption, not a build error.
 
-`zjoltAbiLayout()` reports what the C++ actually compiled to, and a test
-asserts every size, alignment and offset against the Zig declarations. That
-much is the usual pattern, and it has a hole: it can only check the fields
-somebody remembered to list, and two adjacent `f32` fields swapping places
-moves no listed offset and changes no size. So the report also carries a
-**digest folded over every field name and offset of every type**, which the
-Zig side recomputes by reflection — it cannot miss a field, because it never
-had to know their names. Both halves are verified to fail on a deliberate
-swap.
+A test `@cImport`s `zjolt.h` and compares the two namespaces declaration by
+declaration: every struct field paired **by name** with its offset, every
+function's parameter count and per-parameter size, every enumerator's value,
+every constant. Nothing is listed by hand — the check discovers what to compare
+by reflecting over `c.zig`, and a declaration it cannot classify is a compile
+error rather than a silent pass, so it cannot quietly stop covering something.
+The `@cImport` is test-only; the shipped module never runs translate-c.
 
-That leaves the other half of a declaration: the functions. A parameter added
-or reordered between the header and the externs changes no struct at all, links
-cleanly, and corrupts the stack at the call. `ci/check-abi.sh` compares the two
-lists directly — 135 functions, matched by name and parameter count — and is
-likewise verified to fail on a deliberately dropped parameter.
+Pairing fields *by name* is the part that matters. Two same-sized adjacent
+fields swapping places leaves the sequence of offsets identical, so a positional
+comparison — or a digest folded over offsets alone — passes a swap that
+reinterprets both fields. Nine kinds of deliberate drift are verified to fail
+the build, including that swap, a dropped parameter, a widened parameter, a
+renumbered enumerator, a narrowed enum tag, a moved mask bit and an extern
+deleted from the Zig side.
+
+Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
+types are compared only by size and alignment — a `float *` declared as `*i32`
+would pass. `tests/c_smoke.c` drives the same scenarios through the header
+itself, which is what covers that residue.
+
+That check compares this build's externs against this build's *header*. It says
+nothing about whether the *library* was compiled from the same header with the
+same macros — and `ZJoltReal` and `ZJoltObjectLayer` change width with those
+macros. `zjoltAbiLayout()` reports what the library actually is, and
+`zjoltInit` refuses a caller whose `ZJOLT_CONFIG_ID` disagrees.
 
 In the other direction, `static_assert`s in `ffi/zjolt_abi.cpp` fail the
 **build** if a vendored Jolt upgrade changes a type, a constant, or an

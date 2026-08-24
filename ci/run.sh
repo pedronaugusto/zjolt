@@ -78,10 +78,6 @@ section 'Hygiene'
 # be reformatted, or the next re-vendor becomes an unreadable diff.
 run 'zig fmt (src, build.zig)' zig fmt --check src build.zig
 
-# The half of the ABI the runtime layout guard cannot see: function names and
-# parameter counts, header versus externs.
-run 'ABI declarations (header vs c.zig)' ci/check-abi.sh
-
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------

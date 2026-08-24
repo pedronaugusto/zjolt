@@ -71,8 +71,8 @@ void zjoltCharacterDescInit(ZJoltCharacterDesc *desc) {
   desc->max_num_hits = defaults.mMaxNumHits;
   desc->back_face_mode =
       defaults.mBackFaceMode == JPH::EBackFaceMode::CollideWithBackFaces
-          ? ZJOLT_BACK_FACE_COLLIDE
-          : ZJOLT_BACK_FACE_IGNORE;
+          ? ZJOLT_BACK_FACE_MODE_COLLIDE
+          : ZJOLT_BACK_FACE_MODE_IGNORE;
   desc->enhanced_internal_edge_removal = defaults.mEnhancedInternalEdgeRemoval;
   desc->inner_body_shape = nullptr;
   desc->inner_body_layer = static_cast<ZJoltObjectLayer>(defaults.mInnerBodyLayer);
@@ -99,12 +99,12 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
                                  const ZJoltCharacterDesc *desc,
                                  ZJoltCharacter **out) {
   zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_ERR_NOT_INITIALIZED;
-  if (system == nullptr || desc == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
+  if (system == nullptr || desc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (desc->shape == nullptr) {
-    return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a character needs a shape");
   }
 
@@ -123,7 +123,7 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
   settings.mMaxCollisionIterations = desc->max_collision_iterations;
   settings.mMaxConstraintIterations = desc->max_constraint_iterations;
   settings.mMaxNumHits = desc->max_num_hits;
-  settings.mBackFaceMode = desc->back_face_mode == ZJOLT_BACK_FACE_IGNORE
+  settings.mBackFaceMode = desc->back_face_mode == ZJOLT_BACK_FACE_MODE_IGNORE
                                ? JPH::EBackFaceMode::IgnoreBackFaces
                                : JPH::EBackFaceMode::CollideWithBackFaces;
   settings.mEnhancedInternalEdgeRemoval = desc->enhanced_internal_edge_removal;
@@ -143,7 +143,7 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
       JPH::Plane(up, -up.Dot(local_bounds.mMin) - desc->character_padding);
 
   ZJoltCharacter *handle = zjolt::New<ZJoltCharacter>();
-  if (handle == nullptr) return ZJOLT_ERR_OUT_OF_MEMORY;
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   JPH::CharacterVirtual *character = zjolt::New<JPH::CharacterVirtual>(
       &settings, zjolt::ToJoltR(desc->position),
@@ -151,14 +151,14 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
       desc->user_data, &system->system);
   if (character == nullptr) {
     zjolt::Delete(handle);
-    return ZJOLT_ERR_OUT_OF_MEMORY;
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
   }
 
   handle->impl = character;
   handle->owner = system;
   zjolt::HandleCreated();
   *out = handle;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 void zjoltCharacterDestroy(ZJoltCharacter *character) {
@@ -180,8 +180,8 @@ ZJoltResult zjoltCharacterUpdate(ZJoltCharacter *character, float delta_time,
                                  const ZJoltQueryFilters *filters) {
   zjolt::ClearError();
   JPH::CharacterVirtual *impl = Impl(character);
-  if (impl == nullptr || gravity == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
-  if (!(delta_time > 0.0f)) return ZJOLT_OK;
+  if (impl == nullptr || gravity == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!(delta_time > 0.0f)) return ZJOLT_RESULT_OK;
 
   zjolt::QueryFilters adapters(filters);
   const JPH::ShapeFilter shape_filter;
@@ -190,7 +190,7 @@ ZJoltResult zjoltCharacterUpdate(ZJoltCharacter *character, float delta_time,
   if (settings == nullptr) {
     impl->Update(delta_time, zjolt::ToJolt(*gravity), adapters.broad_phase,
                  adapters.object_layer, adapters.body, shape_filter, *temp);
-    return ZJOLT_OK;
+    return ZJOLT_RESULT_OK;
   }
 
   JPH::CharacterVirtual::ExtendedUpdateSettings extended;
@@ -207,7 +207,7 @@ ZJoltResult zjoltCharacterUpdate(ZJoltCharacter *character, float delta_time,
   impl->ExtendedUpdate(delta_time, zjolt::ToJolt(*gravity), extended,
                        adapters.broad_phase, adapters.object_layer,
                        adapters.body, shape_filter, *temp);
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//
@@ -315,7 +315,7 @@ ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
   zjolt::ClearError();
   if (out_changed != nullptr) *out_changed = false;
   JPH::CharacterVirtual *impl = Impl(character);
-  if (impl == nullptr || shape == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (impl == nullptr || shape == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   zjolt::QueryFilters adapters(filters);
   const JPH::ShapeFilter shape_filter;
@@ -334,7 +334,7 @@ ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
   if (changed && !impl->GetInnerBodyID().IsInvalid())
     impl->SetInnerBodyShape(zjolt::ToJolt(shape));
   if (out_changed != nullptr) *out_changed = changed;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 const ZJoltShape *zjoltCharacterGetShape(const ZJoltCharacter *character) {

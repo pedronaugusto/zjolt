@@ -123,15 +123,6 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - run: zig build -Dtarget=${{ matrix.target }}
 
-  # The half of the ABI the runtime layout guard cannot see: the names and
-  # parameter counts of the functions themselves.
-  abi-declarations:
-    name: ABI declarations
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ci/check-abi.sh
-
   # Proves libs/ is still a pristine copy of the pinned upstream commit, rather
   # than a claim in a markdown file. Needs network, so it is its own job and is
   # not part of the local inner loop.

@@ -176,25 +176,25 @@ uint32_t zjoltConfigId(void) { return static_cast<uint32_t>(ZJOLT_CONFIG_ID); }
 
 const char *zjoltResultName(ZJoltResult result) {
   switch (result) {
-    case ZJOLT_OK:
+    case ZJOLT_RESULT_OK:
       return "ok";
-    case ZJOLT_ERR_NOT_INITIALIZED:
+    case ZJOLT_RESULT_NOT_INITIALIZED:
       return "not initialized";
-    case ZJOLT_ERR_ALREADY_INITIALIZED:
+    case ZJOLT_RESULT_ALREADY_INITIALIZED:
       return "already initialized";
-    case ZJOLT_ERR_CONFIG_MISMATCH:
+    case ZJOLT_RESULT_CONFIG_MISMATCH:
       return "config mismatch";
-    case ZJOLT_ERR_OUT_OF_MEMORY:
+    case ZJOLT_RESULT_OUT_OF_MEMORY:
       return "out of memory";
-    case ZJOLT_ERR_INVALID_ARGUMENT:
+    case ZJOLT_RESULT_INVALID_ARGUMENT:
       return "invalid argument";
-    case ZJOLT_ERR_BUFFER_TOO_SMALL:
+    case ZJOLT_RESULT_BUFFER_TOO_SMALL:
       return "buffer too small";
-    case ZJOLT_ERR_SHAPE_INVALID:
+    case ZJOLT_RESULT_SHAPE_INVALID:
       return "shape invalid";
-    case ZJOLT_ERR_BAD_FORMAT:
+    case ZJOLT_RESULT_BAD_FORMAT:
       return "bad format";
-    case ZJOLT_ERR_BODY_NOT_FOUND:
+    case ZJOLT_RESULT_BODY_NOT_FOUND:
       return "body not found";
   }
   return "unknown result";
@@ -214,7 +214,7 @@ ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc, uint32_t config_id) {
   zjolt::ClearError();
 
   if (g_initialized) {
-    return zjolt::SetError(ZJOLT_ERR_ALREADY_INITIALIZED,
+    return zjolt::SetError(ZJOLT_RESULT_ALREADY_INITIALIZED,
                            "zjoltInit called twice without zjoltDeinit");
   }
 
@@ -224,7 +224,7 @@ ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc, uint32_t config_id) {
   // across the boundary — into a start-up error.
   if (config_id != static_cast<uint32_t>(ZJOLT_CONFIG_ID)) {
     return zjolt::SetError(
-        ZJOLT_ERR_CONFIG_MISMATCH,
+        ZJOLT_RESULT_CONFIG_MISMATCH,
         "zjolt.h was compiled with different layout-affecting settings than "
         "the library (double precision, or object layer bits)");
   }
@@ -234,7 +234,7 @@ ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc, uint32_t config_id) {
     if (host.allocate == nullptr || host.reallocate == nullptr ||
         host.free == nullptr || host.aligned_allocate == nullptr ||
         host.aligned_free == nullptr) {
-      return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+      return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                              "every ZJoltAllocator function pointer is "
                              "required; none may be null");
     }
@@ -272,7 +272,7 @@ ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc, uint32_t config_id) {
   JPH::Factory *factory = zjolt::New<JPH::Factory>();
   if (factory == nullptr) {
     JPH::RegisterDefaultAllocator();
-    return zjolt::SetError(ZJOLT_ERR_OUT_OF_MEMORY,
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
                            "could not allocate Jolt's type factory");
   }
   JPH::Factory::sInstance = factory;
@@ -284,7 +284,7 @@ ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc, uint32_t config_id) {
   JPH::RegisterTypes();
 
   g_initialized = true;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 uint32_t zjoltLiveHandleCount(void) {
@@ -344,58 +344,58 @@ ZJoltResult zjoltJobSystemCreateThreadPool(uint32_t max_jobs,
                                            int32_t num_threads,
                                            ZJoltJobSystem **out) {
   zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_ERR_NOT_INITIALIZED;
+  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
   if (max_jobs == 0 || max_barriers == 0) {
-    return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "max_jobs and max_barriers must be positive");
   }
 
   ZJoltJobSystem *handle = zjolt::New<ZJoltJobSystem>();
-  if (handle == nullptr) return ZJOLT_ERR_OUT_OF_MEMORY;
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   JPH::JobSystemThreadPool *pool = zjolt::New<JPH::JobSystemThreadPool>(
       static_cast<JPH::uint>(max_jobs), static_cast<JPH::uint>(max_barriers),
       static_cast<int>(num_threads));
   if (pool == nullptr) {
     zjolt::Delete(handle);
-    return ZJOLT_ERR_OUT_OF_MEMORY;
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
   }
 
   handle->impl = pool;
   handle->destroy = DestroyThreadPool;
   zjolt::HandleCreated();
   *out = handle;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltJobSystemCreateSingleThreaded(uint32_t max_jobs,
                                                ZJoltJobSystem **out) {
   zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_ERR_NOT_INITIALIZED;
+  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
   if (max_jobs == 0) {
-    return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "max_jobs must be positive");
   }
 
   ZJoltJobSystem *handle = zjolt::New<ZJoltJobSystem>();
-  if (handle == nullptr) return ZJOLT_ERR_OUT_OF_MEMORY;
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   JPH::JobSystemSingleThreaded *single =
       zjolt::New<JPH::JobSystemSingleThreaded>(static_cast<JPH::uint>(max_jobs));
   if (single == nullptr) {
     zjolt::Delete(handle);
-    return ZJOLT_ERR_OUT_OF_MEMORY;
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
   }
 
   handle->impl = single;
   handle->destroy = DestroySingleThreaded;
   zjolt::HandleCreated();
   *out = handle;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 void zjoltJobSystemDestroy(ZJoltJobSystem *job_system) {

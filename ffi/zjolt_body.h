@@ -63,7 +63,7 @@ ZJOLT_API ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                             ZJoltBodyId *out);
 
 /// Removes the body if it is still added, then destroys it. The id becomes
-/// stale; further calls with it report ZJOLT_ERR_BODY_NOT_FOUND rather than
+/// stale; further calls with it report ZJOLT_RESULT_BODY_NOT_FOUND rather than
 /// touching whatever body was created next.
 ZJOLT_API void zjoltBodyDestroy(ZJoltPhysicsSystem *system, ZJoltBodyId body);
 

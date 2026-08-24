@@ -357,6 +357,18 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.linkLibrary(lib);
 
+    // The ABI cross-check @cImport-s ffi/zjolt.h. It is wired here, on the test
+    // module, and deliberately not on the module above: the shipped module has
+    // no include path and never runs translate-c.
+    //
+    // The macros matter as much as the include path. ZJoltReal and
+    // ZJoltObjectLayer change width with the build, so a header preprocessed
+    // with different macros than the library describes different structs — and
+    // a guard that compared against that header would be checking something
+    // nobody ships. Same applyBuildMacros, same source of truth.
+    tests.root_module.addIncludePath(b.path("ffi"));
+    applyBuildMacros(tests.root_module, options);
+
     const test_step = b.step("test", "Run zjolt tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
     test_step.dependOn(c_test_step);

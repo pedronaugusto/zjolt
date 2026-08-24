@@ -93,7 +93,7 @@ ZJOLT_API ZJoltResult zjoltCastRayClosest(const ZJoltPhysicsSystem *system,
 ///
 /// Two-call protocol, as everywhere here: `*out_count` always receives the
 /// true number of hits, so a capacity of 0 (with hits = NULL) is a size query
-/// and a short buffer reports ZJOLT_ERR_BUFFER_TOO_SMALL with the count.
+/// and a short buffer reports ZJOLT_RESULT_BUFFER_TOO_SMALL with the count.
 ZJOLT_API ZJoltResult zjoltCastRayAll(const ZJoltPhysicsSystem *system,
                                       const ZJoltRVec3 *origin,
                                       const ZJoltVec3 *direction,

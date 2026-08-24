@@ -40,7 +40,7 @@ static int g_failures = 0;
 #define CHECK_OK(expr)                                                   \
   do {                                                                   \
     ZJoltResult r_ = (expr);                                             \
-    CHECK(r_ == ZJOLT_OK, "%s -> %s (%s)", #expr, zjoltResultName(r_),   \
+    CHECK(r_ == ZJOLT_RESULT_OK, "%s -> %s (%s)", #expr, zjoltResultName(r_),   \
           zjoltLastError());                                             \
   } while (0)
 
@@ -186,7 +186,7 @@ static ZJoltValidateResult onValidate(void *user,
   (void)user;
   (void)info;
   ++g_validates;
-  return ZJOLT_VALIDATE_ACCEPT_ALL_CONTACTS_FOR_THIS_BODY_PAIR;
+  return ZJOLT_VALIDATE_RESULT_ACCEPT_ALL_CONTACTS_FOR_THIS_BODY_PAIR;
 }
 
 static void onContactAdded(void *user, const ZJoltContactInfo *info,
@@ -246,13 +246,6 @@ static void checkAbiLayout(void) {
         "ZJoltReal width disagrees");
   CHECK(layout.object_layer_size == (uint32_t)sizeof(ZJoltObjectLayer),
         "ZJoltObjectLayer width disagrees");
-  CHECK(layout.vec3_size == (uint32_t)sizeof(ZJoltVec3), "ZJoltVec3 size");
-  CHECK(layout.body_desc_size == (uint32_t)sizeof(ZJoltBodyDesc),
-        "ZJoltBodyDesc size");
-  CHECK(layout.body_lock_size == (uint32_t)sizeof(ZJoltBodyLock),
-        "ZJoltBodyLock size");
-  CHECK(layout.result_count == (uint32_t)ZJOLT_ERR_BODY_NOT_FOUND + 1,
-        "result count");
   CHECK(layout.default_allocate_alignment ==
             (uint32_t)zjoltDefaultAllocateAlignment(),
         "default allocate alignment");
@@ -306,9 +299,9 @@ int main(void) {
   checkAbiLayout();
 
   /* A second init must be refused, and must not disturb the first. */
-  CHECK(zjoltInit(&init) == ZJOLT_ERR_ALREADY_INITIALIZED,
+  CHECK(zjoltInit(&init) == ZJOLT_RESULT_ALREADY_INITIALIZED,
         "double init should be refused");
-  CHECK(zjoltInitWithConfig(&init, 0xdeadbeefu) == ZJOLT_ERR_ALREADY_INITIALIZED,
+  CHECK(zjoltInitWithConfig(&init, 0xdeadbeefu) == ZJOLT_RESULT_ALREADY_INITIALIZED,
         "double init is caught before the config check");
 
   //-------------------------------------------------------------------------
@@ -378,19 +371,19 @@ int main(void) {
      be written into or pointed past. */
   size_t needed = 0;
   CHECK(zjoltShapeSave(floor_shape, saved, saved_size / 2, &needed) ==
-            ZJOLT_ERR_BUFFER_TOO_SMALL,
+            ZJOLT_RESULT_BUFFER_TOO_SMALL,
         "a short save buffer is refused");
   CHECK(needed == saved_size, "a refused save still reports the size needed");
 
   unsigned char stub[8];
   needed = 0;
   CHECK(zjoltShapeSave(floor_shape, stub, sizeof(stub), &needed) ==
-            ZJOLT_ERR_BUFFER_TOO_SMALL,
+            ZJOLT_RESULT_BUFFER_TOO_SMALL,
         "a buffer smaller than the header is refused");
   CHECK(needed == saved_size, "...and still reports the size needed");
   needed = 0;
   CHECK(zjoltShapeSave(floor_shape, stub, 0, &needed) ==
-            ZJOLT_ERR_BUFFER_TOO_SMALL,
+            ZJOLT_RESULT_BUFFER_TOO_SMALL,
         "a zero-capacity buffer is refused");
 
   ZJoltShape *restored = NULL;
@@ -415,7 +408,7 @@ int main(void) {
   /* Truncation must be refused rather than parsed. */
   ZJoltShape *truncated = NULL;
   CHECK(zjoltShapeRestore(saved, saved_size / 2, &truncated) ==
-            ZJOLT_ERR_BAD_FORMAT,
+            ZJOLT_RESULT_BAD_FORMAT,
         "a truncated shape buffer is refused");
   CHECK(truncated == NULL, "a refused restore yields no handle");
 
@@ -448,7 +441,7 @@ int main(void) {
   zjoltPhysicsSystemDescInit(&bad_desc);
   ZJoltPhysicsSystem *bad_system = NULL;
   CHECK(zjoltPhysicsSystemCreate(&bad_desc, &bad_system) ==
-            ZJOLT_ERR_INVALID_ARGUMENT,
+            ZJOLT_RESULT_INVALID_ARGUMENT,
         "a system without a broad phase interface is refused");
 
   const ZJoltVec3 gravity = {0.0f, -9.81f, 0.0f};
@@ -505,7 +498,7 @@ int main(void) {
   zjoltBodyDescInit(&shapeless);
   ZJoltBodyId shapeless_id = ZJOLT_BODY_ID_INVALID;
   CHECK(zjoltBodyCreate(system, &shapeless, &shapeless_id) ==
-            ZJOLT_ERR_INVALID_ARGUMENT,
+            ZJOLT_RESULT_INVALID_ARGUMENT,
         "a body without a shape is refused");
 
   /* Jolt asserts its way out of a max_bodies past its id range; this has to
@@ -513,7 +506,7 @@ int main(void) {
   ZJoltPhysicsSystemDesc huge = system_desc;
   huge.max_bodies = 100000000u;
   ZJoltPhysicsSystem *huge_system = NULL;
-  CHECK(zjoltPhysicsSystemCreate(&huge, &huge_system) == ZJOLT_ERR_INVALID_ARGUMENT,
+  CHECK(zjoltPhysicsSystemCreate(&huge, &huge_system) == ZJOLT_RESULT_INVALID_ARGUMENT,
         "a max_bodies past Jolt's id range is refused");
   CHECK(huge_system == NULL, "a refused system yields no handle");
 
