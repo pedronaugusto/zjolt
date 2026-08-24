@@ -34,7 +34,14 @@ if [ "$entry_points" != "$externs" ]; then
   printf '  ^ these must match; src/abi_check.zig pairs them at build time\n'
 fi
 
-printf 'public headers                        %s\n' "$(ls ffi/*.h | wc -l | tr -d ' ')"
+# Public means reachable through the umbrella. zjolt_internal.h and
+# zjolt_query_internal.h are neither included by it nor installed.
+printf 'public headers                        %s\n' \
+  "$(grep -c '^#include \"zjolt_' ffi/zjolt.h)"
+printf 'result-returning entry points         %s\n' \
+  "$(cat ffi/zjolt_*.h | grep -c '^ZJOLT_API ZJoltResult')"
+printf 'void entry points                     %s\n' \
+  "$(cat ffi/zjolt_*.h | grep -c '^ZJOLT_API void')"
 
 section "Tests"
 

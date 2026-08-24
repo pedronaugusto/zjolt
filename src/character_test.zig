@@ -114,7 +114,7 @@ test "a character on a ramp is supported by it" {
         .object_layer = Layers.static,
         .motion_type = .static,
         .position = zjolt.rvec3(0, 1, 0),
-        .rotation = zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), tilt),
+        .rotation = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), tilt),
     }, .dont_activate);
     world.system.optimizeBroadPhase();
 

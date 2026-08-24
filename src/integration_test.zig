@@ -665,7 +665,7 @@ test "the transform matrices place the body, its centre of mass, and its inertia
     defer offset.release();
 
     const bodies = world.system.bodies();
-    const quarter_turn = zjolt.quatFromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 2.0);
+    const quarter_turn = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 2.0);
     const ball = try bodies.createAndAdd(.{
         .shape = offset,
         .object_layer = Layers.moving,
@@ -747,7 +747,7 @@ test "the same inputs step to the same state twice" {
                 .shape = shape,
                 .object_layer = Layers.moving,
                 .position = zjolt.rvec3(0.1, 4, -0.2),
-                .rotation = zjolt.quatFromAxisAngle(normalize(zjolt.vec3(1, 1, 1)), 0.7),
+                .rotation = try zjolt.quatFromAxisAngle(normalize(zjolt.vec3(1, 1, 1)), 0.7),
                 .linear_velocity = zjolt.vec3(1.5, 0, -0.75),
                 .angular_velocity = zjolt.vec3(0.3, 1.1, -0.2),
                 .restitution = 0.4,

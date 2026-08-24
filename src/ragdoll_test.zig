@@ -223,7 +223,7 @@ test "driveToPoseUsingMotors moves the pose toward the target rather than away" 
 
     // A 0.7 radian tilt off the chain's resting orientation — comfortably
     // inside the cone `Chain.build` set up.
-    const target_rotation = zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), 0.7);
+    const target_rotation = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), 0.7);
 
     var pose = try zjolt.SkeletonPose.init();
     defer pose.deinit();

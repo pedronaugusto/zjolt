@@ -103,7 +103,6 @@ pub const quatConjugate = math_mod.quatConjugate;
 pub const quatDot = math_mod.quatDot;
 pub const quatIsNormalized = math_mod.quatIsNormalized;
 pub const quatNormalize = math_mod.quatNormalize;
-pub const quatRotation = math_mod.quatRotation;
 pub const quatGetAxisAngle = math_mod.quatGetAxisAngle;
 pub const quatFromTo = math_mod.quatFromTo;
 pub const quatFromEulerAngles = math_mod.quatFromEulerAngles;
