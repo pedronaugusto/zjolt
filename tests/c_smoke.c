@@ -11,7 +11,7 @@
 //     the run fails if a single byte is still outstanding at the end.
 //
 // It walks the whole v0.1 slice: shapes, save and restore, a world, bodies,
-// listeners, a step, queries, bulk read-back and a character.
+// listeners, a step, queries, bulk read-back, a character and a soft body.
 //===----------------------------------------------------------------------===//
 
 #include <stdint.h>
@@ -1010,6 +1010,215 @@ int main(void) {
   zjoltShapeRelease(pebble);
   zjoltPhysicsMaterialRelease(metal);
   zjoltPhysicsMaterialRelease(gravel);
+
+  //-------------------------------------------------------------------------
+  // A soft body, driven the way a host drives one
+  //
+  // The ABI guard on the Zig side compares pointee types by size and alignment
+  // only, so a `float *` declared as a pointer to a 32-bit integer passes it.
+  // This is what does not: every per-instance soft-body call with a pointer in
+  // it, reached through the header itself.
+  //-------------------------------------------------------------------------
+
+  {
+    /* A unit cube, every face wound counter-clockwise seen from outside so the
+       enclosed volume comes back positive. */
+    static const float kCorners[8][3] = {
+        {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, 0.5f},
+        {-0.5f, -0.5f, 0.5f},  {-0.5f, 0.5f, -0.5f}, {0.5f, 0.5f, -0.5f},
+        {0.5f, 0.5f, 0.5f},    {-0.5f, 0.5f, 0.5f},
+    };
+    static const uint32_t kTriangles[12][3] = {
+        {0, 1, 2}, {0, 2, 3}, {4, 6, 5}, {4, 7, 6}, {3, 2, 6}, {3, 6, 7},
+        {0, 4, 5}, {0, 5, 1}, {0, 3, 7}, {0, 7, 4}, {1, 5, 6}, {1, 6, 2},
+    };
+
+    ZJoltSoftBodyVertex cube_vertices[8];
+    ZJoltSoftBodyFace cube_faces[12];
+    for (int i = 0; i < 8; ++i) {
+      cube_vertices[i].position.x = kCorners[i][0];
+      cube_vertices[i].position.y = kCorners[i][1];
+      cube_vertices[i].position.z = kCorners[i][2];
+      cube_vertices[i].velocity.x = 0.0f;
+      cube_vertices[i].velocity.y = 0.0f;
+      cube_vertices[i].velocity.z = 0.0f;
+      cube_vertices[i].inv_mass = 1.0f;
+    }
+    for (int i = 0; i < 12; ++i) {
+      cube_faces[i].vertex[0] = kTriangles[i][0];
+      cube_faces[i].vertex[1] = kTriangles[i][1];
+      cube_faces[i].vertex[2] = kTriangles[i][2];
+      cube_faces[i].material_index = 0;
+    }
+
+    ZJoltSoftBodySharedSettings *cloth = NULL;
+    CHECK_OK(zjoltSoftBodySharedSettingsCreate(&cloth));
+    CHECK_OK(zjoltSoftBodySharedSettingsAddVertices(cloth, cube_vertices, 8));
+    CHECK_OK(zjoltSoftBodySharedSettingsAddFaces(cloth, cube_faces, 12));
+
+    /* The precondition that used to reach Jolt's own indexing unchecked. */
+    ZJoltSoftBodyFace bad_face = cube_faces[0];
+    bad_face.vertex[2] = 8;
+    CHECK(zjoltSoftBodySharedSettingsAddFaces(cloth, &bad_face, 1) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a face naming a vertex that does not exist is refused");
+
+    ZJoltSoftBodySkinned bad_skin;
+    memset(&bad_skin, 0, sizeof(bad_skin));
+    bad_skin.vertex = 8;
+    bad_skin.max_distance = 1.0f;
+    CHECK(zjoltSoftBodySharedSettingsAddSkinnedConstraints(cloth, &bad_skin,
+                                                           1) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a skinned constraint naming a vertex that does not exist is refused");
+
+    ZJoltSoftBodyVertexAttributes attributes;
+    zjoltSoftBodyVertexAttributesInit(&attributes);
+    CHECK_OK(zjoltSoftBodySharedSettingsCreateConstraints(
+        cloth, &attributes, 1, ZJOLT_SOFT_BODY_BEND_TYPE_DIHEDRAL, 0.1396f));
+    CHECK_OK(zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(cloth));
+    zjoltSoftBodySharedSettingsOptimize(cloth);
+
+    ZJoltSoftBodyDesc soft_desc;
+    zjoltSoftBodyDescInit(&soft_desc);
+    soft_desc.shared_settings = cloth;
+    soft_desc.object_layer = LAYER_MOVING;
+    soft_desc.position.y = 4;
+    soft_desc.pressure = 20.0f;
+    soft_desc.vertex_radius = 0.01f;
+    soft_desc.allow_sleeping = false;
+
+    /* Both of the values that reach a Jolt which does not check them. */
+    ZJoltSoftBodyDesc refused = soft_desc;
+    refused.vertex_radius = -1.0f;
+    ZJoltBodyId nowhere = 0;
+    CHECK(zjoltSoftBodyCreate(system, &refused, &nowhere) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a negative vertex radius is refused");
+    CHECK(nowhere == ZJOLT_BODY_ID_INVALID, "and no body came back");
+    refused = soft_desc;
+    refused.num_iterations = 0;
+    CHECK(zjoltSoftBodyCreate(system, &refused, &nowhere) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "zero solver iterations is refused");
+
+    ZJoltBodyId soft_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltSoftBodyCreateAndAdd(system, &soft_desc,
+                                       ZJOLT_ACTIVATION_ACTIVATE, &soft_id));
+
+    uint32_t vertex_count = 0;
+    CHECK_OK(zjoltSoftBodyGetVertexStates(system, soft_id, NULL, 0,
+                                          &vertex_count));
+    CHECK(vertex_count == 8, "the soft body has its eight vertices");
+
+    float volume = 0.0f;
+    CHECK_OK(zjoltSoftBodyGetVolume(system, soft_id, &volume));
+    CHECK(volume > 0.9f && volume < 1.1f, "a unit cube encloses a unit volume");
+
+    ZJoltSoftBodyVertexState states[8];
+    CHECK_OK(zjoltSoftBodyGetVertexStates(system, soft_id, states, 8,
+                                          &vertex_count));
+    ZJoltRVec3 com_before;
+    memset(&com_before, 0, sizeof(com_before));
+    zjoltBodyGetCenterOfMassPosition(system, soft_id, &com_before);
+
+    for (int i = 0; i < 60; ++i)
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+
+    ZJoltRVec3 com_after;
+    memset(&com_after, 0, sizeof(com_after));
+    zjoltBodyGetCenterOfMassPosition(system, soft_id, &com_after);
+    CHECK(com_after.y < com_before.y - 1.0, "the soft body fell");
+    CHECK_OK(zjoltSoftBodyGetVertexStates(system, soft_id, states, 8,
+                                          &vertex_count));
+    CHECK_OK(zjoltSoftBodyGetVolume(system, soft_id, &volume));
+    CHECK(volume > 0.25f, "and pressure held it open");
+
+    ZJoltAABox local_bounds;
+    memset(&local_bounds, 0, sizeof(local_bounds));
+    CHECK_OK(zjoltSoftBodyGetLocalBounds(system, soft_id, &local_bounds));
+    CHECK(local_bounds.max.y > local_bounds.min.y, "the local bounds enclose it");
+
+    /* The live properties, through the header's own types. */
+    uint32_t iterations = 0;
+    CHECK_OK(zjoltSoftBodyGetNumIterations(system, soft_id, &iterations));
+    CHECK(iterations == 5, "iteration count is Jolt's default");
+    CHECK_OK(zjoltSoftBodySetNumIterations(system, soft_id, 3));
+    CHECK_OK(zjoltSoftBodyGetNumIterations(system, soft_id, &iterations));
+    CHECK(iterations == 3, "and it took the change");
+    CHECK(zjoltSoftBodySetNumIterations(system, soft_id, 0) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "zero iterations is refused on a live body too");
+
+    float pressure = 0.0f;
+    CHECK_OK(zjoltSoftBodyGetPressure(system, soft_id, &pressure));
+    CHECK(pressure > 19.0f && pressure < 21.0f, "pressure reads back");
+    CHECK_OK(zjoltSoftBodySetPressure(system, soft_id, 0.0f));
+
+    bool flag = false;
+    CHECK_OK(zjoltSoftBodyGetUpdatePosition(system, soft_id, &flag));
+    CHECK(flag, "update position is on by default");
+    CHECK_OK(zjoltSoftBodySetUpdatePosition(system, soft_id, false));
+    CHECK_OK(zjoltSoftBodyGetFacesDoubleSided(system, soft_id, &flag));
+    CHECK(!flag, "faces are single sided by default");
+    CHECK_OK(zjoltSoftBodySetFacesDoubleSided(system, soft_id, true));
+    CHECK_OK(zjoltSoftBodyGetEnableSkinConstraints(system, soft_id, &flag));
+    CHECK(flag, "skin constraints are on by default");
+    CHECK_OK(zjoltSoftBodySetEnableSkinConstraints(system, soft_id, false));
+
+    float radius = -1.0f;
+    CHECK_OK(zjoltSoftBodyGetVertexRadius(system, soft_id, &radius));
+    CHECK(radius > 0.0f, "the vertex radius reads back");
+    CHECK(zjoltSoftBodySetVertexRadius(system, soft_id, -1.0f) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "and a negative one is refused");
+
+    float multiplier = 0.0f;
+    CHECK_OK(
+        zjoltSoftBodyGetSkinnedMaxDistanceMultiplier(system, soft_id, &multiplier));
+    CHECK(multiplier > 0.9f && multiplier < 1.1f, "the skin multiplier is 1");
+    CHECK_OK(
+        zjoltSoftBodySetSkinnedMaxDistanceMultiplier(system, soft_id, 0.5f));
+
+    /* Per-vertex control, and the index guard at both ends of it. */
+    ZJoltVec3 vertex_velocity = {0.0f, 3.0f, 0.0f};
+    CHECK_OK(zjoltSoftBodySetVertexVelocity(system, soft_id, 1,
+                                            &vertex_velocity));
+    vertex_velocity.y = 0.0f;
+    CHECK_OK(zjoltSoftBodyGetVertexVelocity(system, soft_id, 1,
+                                            &vertex_velocity));
+    CHECK(vertex_velocity.y > 2.9f && vertex_velocity.y < 3.1f,
+          "a hand-written vertex velocity reads back");
+
+    float inv_mass = -1.0f;
+    CHECK_OK(zjoltSoftBodyGetVertexInvMass(system, soft_id, 0, &inv_mass));
+    CHECK(inv_mass > 0.9f && inv_mass < 1.1f, "the vertex inverse mass is 1");
+    CHECK_OK(zjoltSoftBodySetVertexInvMass(system, soft_id, 0, 0.0f));
+    CHECK_OK(zjoltSoftBodyCalculateMassAndInertia(system, soft_id));
+    CHECK(zjoltSoftBodyGetVertexInvMass(system, soft_id, 8, &inv_mass) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a vertex index past the end is refused");
+    CHECK(zjoltSoftBodySetVertexVelocity(system, soft_id, 8,
+                                         &vertex_velocity) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "and so is writing one");
+
+    /* Skinning a body whose settings carry no skinned constraints has no
+       per-instance state to write into, which Jolt only notices by asserting. */
+    CHECK(zjoltSoftBodySkinVertices(system, soft_id, NULL, 0, false) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "skinning a body with no skinned constraints is refused");
+
+    /* A rigid body is not a soft body, and is told so. */
+    CHECK(zjoltSoftBodyGetVolume(system, ball_id, &volume) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a rigid body has no soft body motion properties");
+
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+
+    zjoltBodyDestroy(system, soft_id);
+    zjoltSoftBodySharedSettingsRelease(cloth);
+  }
 
   //-------------------------------------------------------------------------
   // Teardown

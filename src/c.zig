@@ -1344,6 +1344,7 @@ pub extern fn zjoltSoftBodySharedSettingsAddSkinnedConstraints(settings: *SoftBo
 
 pub extern fn zjoltSoftBodySharedSettingsCreateConstraints(settings: *SoftBodySharedSettings, vertex_attributes: ?[*]const SoftBodyVertexAttributes, vertex_attributes_count: u32, bend_type: SoftBodyBendType, angle_tolerance_radians: f32) Result;
 pub extern fn zjoltSoftBodySharedSettingsCalculateEdgeLengths(settings: *SoftBodySharedSettings) void;
+pub extern fn zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(settings: *SoftBodySharedSettings) Result;
 pub extern fn zjoltSoftBodySharedSettingsOptimize(settings: *SoftBodySharedSettings) void;
 
 pub extern fn zjoltSoftBodyDescInit(desc: *SoftBodyDesc) void;
@@ -1351,6 +1352,32 @@ pub extern fn zjoltSoftBodyCreate(system: *PhysicsSystem, desc: *const SoftBodyD
 pub extern fn zjoltSoftBodyCreateAndAdd(system: *PhysicsSystem, desc: *const SoftBodyDesc, activation: Activation, out: *BodyId) Result;
 
 pub extern fn zjoltSoftBodyGetVertexStates(system: *const PhysicsSystem, body: BodyId, out_states: ?[*]SoftBodyVertexState, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltSoftBodyGetNumIterations(system: *const PhysicsSystem, body: BodyId, out: *u32) Result;
+pub extern fn zjoltSoftBodySetNumIterations(system: *PhysicsSystem, body: BodyId, num_iterations: u32) Result;
+pub extern fn zjoltSoftBodyGetPressure(system: *const PhysicsSystem, body: BodyId, out: *f32) Result;
+pub extern fn zjoltSoftBodySetPressure(system: *PhysicsSystem, body: BodyId, pressure: f32) Result;
+pub extern fn zjoltSoftBodyGetUpdatePosition(system: *const PhysicsSystem, body: BodyId, out: *bool) Result;
+pub extern fn zjoltSoftBodySetUpdatePosition(system: *PhysicsSystem, body: BodyId, update_position: bool) Result;
+pub extern fn zjoltSoftBodyGetFacesDoubleSided(system: *const PhysicsSystem, body: BodyId, out: *bool) Result;
+pub extern fn zjoltSoftBodySetFacesDoubleSided(system: *PhysicsSystem, body: BodyId, double_sided: bool) Result;
+pub extern fn zjoltSoftBodyGetVertexRadius(system: *const PhysicsSystem, body: BodyId, out: *f32) Result;
+pub extern fn zjoltSoftBodySetVertexRadius(system: *PhysicsSystem, body: BodyId, vertex_radius: f32) Result;
+
+pub extern fn zjoltSoftBodyGetVertexVelocity(system: *const PhysicsSystem, body: BodyId, index: u32, out: *Vec3) Result;
+pub extern fn zjoltSoftBodySetVertexVelocity(system: *PhysicsSystem, body: BodyId, index: u32, velocity: *const Vec3) Result;
+pub extern fn zjoltSoftBodyGetVertexInvMass(system: *const PhysicsSystem, body: BodyId, index: u32, out: *f32) Result;
+pub extern fn zjoltSoftBodySetVertexInvMass(system: *PhysicsSystem, body: BodyId, index: u32, inv_mass: f32) Result;
+pub extern fn zjoltSoftBodyCalculateMassAndInertia(system: *PhysicsSystem, body: BodyId) Result;
+
+pub extern fn zjoltSoftBodyGetVolume(system: *const PhysicsSystem, body: BodyId, out: *f32) Result;
+pub extern fn zjoltSoftBodyGetLocalBounds(system: *const PhysicsSystem, body: BodyId, out: *AABox) Result;
+
+pub extern fn zjoltSoftBodySkinVertices(system: *PhysicsSystem, body: BodyId, joint_matrices: ?[*]const Mat44, joint_count: u32, hard_skin_all: bool) Result;
+pub extern fn zjoltSoftBodyGetEnableSkinConstraints(system: *const PhysicsSystem, body: BodyId, out: *bool) Result;
+pub extern fn zjoltSoftBodySetEnableSkinConstraints(system: *PhysicsSystem, body: BodyId, enable: bool) Result;
+pub extern fn zjoltSoftBodyGetSkinnedMaxDistanceMultiplier(system: *const PhysicsSystem, body: BodyId, out: *f32) Result;
+pub extern fn zjoltSoftBodySetSkinnedMaxDistanceMultiplier(system: *PhysicsSystem, body: BodyId, multiplier: f32) Result;
 // Vehicles
 //=============================================================================
 
