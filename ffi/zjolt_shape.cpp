@@ -9,6 +9,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
+#include "zjolt_transformed.h"
 
 #include <Jolt/Core/UnorderedSet.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -223,6 +224,49 @@ ZJoltResult OpenMutableCompound(ZJoltShape *shape, uint32_t index,
 
   *out_compound = compound;
   return ZJOLT_RESULT_OK;
+}
+
+/// The shape as a mesh, or null if it is any other kind. @see AsCompound for
+/// why this is a GetType/GetSubType dispatch rather than a dynamic_cast.
+const JPH::MeshShape *AsMesh(const ZJoltShape *shape) {
+  if (shape == nullptr) return nullptr;
+  const JPH::Shape *jolt = zjolt::ToJolt(shape);
+  if (jolt->GetSubType() != JPH::EShapeSubType::Mesh) return nullptr;
+  return static_cast<const JPH::MeshShape *>(jolt);
+}
+
+/// The shape as a height field, or null if it is any other kind.
+const JPH::HeightFieldShape *AsHeightField(const ZJoltShape *shape) {
+  if (shape == nullptr) return nullptr;
+  const JPH::Shape *jolt = zjolt::ToJolt(shape);
+  if (jolt->GetSubType() != JPH::EShapeSubType::HeightField) return nullptr;
+  return static_cast<const JPH::HeightFieldShape *>(jolt);
+}
+
+/// The center-of-mass transform Shape-level introspection takes as a
+/// position/rotation pair, folded into the Mat44 Jolt's own API wants.
+/// `position`/`rotation` NULL means the origin/identity — the transform a
+/// shape not yet placed anywhere is queried through.
+JPH::Mat44 MakeComTransform(const ZJoltVec3 *position,
+                            const ZJoltQuat *rotation) {
+  return JPH::Mat44::sRotationTranslation(
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation)
+                          : JPH::Quat::sIdentity(),
+      position != nullptr ? zjolt::ToJolt(*position) : JPH::Vec3::sZero());
+}
+
+/// Matches Jolt's own Shape::GetTrianglesContext byte for byte, checked once
+/// here rather than trusted: a mismatch would silently corrupt whichever
+/// walk's scratch space is smaller.
+static_assert(sizeof(ZJoltShapeTrianglesContext) ==
+                  sizeof(JPH::Shape::GetTrianglesContext),
+              "ZJoltShapeTrianglesContext must match Shape::GetTrianglesContext");
+static_assert(alignof(ZJoltShapeTrianglesContext) ==
+                  alignof(JPH::Shape::GetTrianglesContext),
+              "ZJoltShapeTrianglesContext must match Shape::GetTrianglesContext");
+
+JPH::Shape::GetTrianglesContext &AsJoltContext(ZJoltShapeTrianglesContext *context) {
+  return *reinterpret_cast<JPH::Shape::GetTrianglesContext *>(context);
 }
 
 }  // namespace
@@ -957,6 +1001,353 @@ ZJoltResult zjoltShapeRestore(const void *data, size_t size,
                            "trailing bytes after the shape");
   }
   return Finish(result, out);
+}
+
+//===----------------------------------------------------------------------===//
+// Introspection Jolt puts on every leaf shape
+//===----------------------------------------------------------------------===//
+
+uint32_t zjoltShapeGetSubShapeIDBits(const ZJoltShape *shape) {
+  if (shape == nullptr) return 0;
+  return zjolt::ToJolt(shape)->GetSubShapeIDBitsRecursive();
+}
+
+void zjoltShapeGetSurfaceNormal(const ZJoltShape *shape,
+                                ZJoltSubShapeId sub_shape_id,
+                                const ZJoltVec3 *local_surface_position,
+                                ZJoltVec3 *out_normal) {
+  if (out_normal == nullptr) return;
+  if (shape == nullptr || local_surface_position == nullptr) {
+    *out_normal = ZJoltVec3{0.0f, 0.0f, 0.0f};
+    return;
+  }
+  *out_normal = zjolt::ToC(zjolt::ToJolt(shape)->GetSurfaceNormal(
+      zjolt::ToJoltSubShapeId(sub_shape_id),
+      zjolt::ToJolt(*local_surface_position)));
+}
+
+ZJoltResult zjoltShapeGetSupportingFace(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id,
+    const ZJoltVec3 *direction, const ZJoltVec3 *scale,
+    const ZJoltVec3 *position, const ZJoltQuat *rotation,
+    ZJoltVec3 *out_vertices, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(shape, direction, position, rotation, out_vertices,
+                      out_count)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  JPH::Shape::SupportingFace face;
+  zjolt::ToJolt(shape)->GetSupportingFace(
+      zjolt::ToJoltSubShapeId(sub_shape_id), zjolt::ToJolt(*direction),
+      scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne(),
+      MakeComTransform(position, rotation), face);
+
+  for (JPH::uint i = 0; i < face.size(); ++i)
+    out_vertices[i] = zjolt::ToC(face[i]);
+  *out_count = static_cast<uint32_t>(face.size());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetSubShapeTransformedShape(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id,
+    const ZJoltVec3 *position, const ZJoltQuat *rotation,
+    const ZJoltVec3 *scale, ZJoltTransformedShape **out,
+    ZJoltSubShapeId *out_remainder) {
+  ZJOLT_ENTER(out, out_remainder);
+  if (!zjolt::Present(shape, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Vec3 jolt_position =
+      position != nullptr ? zjolt::ToJolt(*position) : JPH::Vec3::sZero();
+  const JPH::Quat jolt_rotation =
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation)
+                          : JPH::Quat::sIdentity();
+  const JPH::Vec3 jolt_scale =
+      scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
+
+  JPH::SubShapeID remainder;
+  const JPH::TransformedShape child =
+      zjolt::ToJolt(shape)->GetSubShapeTransformedShape(
+          zjolt::ToJoltSubShapeId(sub_shape_id), jolt_position, jolt_rotation,
+          jolt_scale, remainder);
+  if (out_remainder != nullptr) *out_remainder = zjolt::ToC(remainder);
+
+  // Built from the child's own public fields rather than by reaching into
+  // JPH::TransformedShape's insides: zjoltTransformedShapeCreate is the one
+  // place a ZJoltTransformedShape is constructed, and going through it here
+  // keeps that true instead of adding a second path with its own chance to
+  // drift. The body id is always invalid, matching what
+  // Shape::GetSubShapeTransformedShape itself documents: this relates two
+  // shapes, not a shape and a body.
+  const ZJoltRVec3 child_position = zjolt::ToCR(child.mShapePositionCOM);
+  const ZJoltQuat child_rotation = zjolt::ToC(child.mShapeRotation);
+  const ZJoltVec3 child_scale = zjolt::ToC(child.GetShapeScale());
+  return zjoltTransformedShapeCreate(zjolt::ToC(child.mShape.GetPtr()),
+                                     &child_position, &child_rotation,
+                                     &child_scale, ZJOLT_BODY_ID_INVALID, out);
+}
+
+ZJoltResult zjoltShapeScaleShape(const ZJoltShape *shape,
+                                 const ZJoltVec3 *scale, ZJoltShape **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(shape, scale, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::Shape::ShapeResult result =
+      zjolt::ToJolt(shape)->ScaleShape(zjolt::ToJolt(*scale));
+  return Finish(result, out);
+}
+
+bool zjoltShapeIsValidScale(const ZJoltShape *shape, const ZJoltVec3 *scale) {
+  if (shape == nullptr || scale == nullptr) return false;
+  return zjolt::ToJolt(shape)->IsValidScale(zjolt::ToJolt(*scale));
+}
+
+void zjoltShapeMakeScaleValid(const ZJoltShape *shape, const ZJoltVec3 *scale,
+                              ZJoltVec3 *out_scale) {
+  if (out_scale == nullptr) return;
+  if (scale == nullptr) {
+    *out_scale = ZJoltVec3{0.0f, 0.0f, 0.0f};
+    return;
+  }
+  if (shape == nullptr) {
+    *out_scale = *scale;
+    return;
+  }
+  *out_scale = zjolt::ToC(
+      zjolt::ToJolt(shape)->MakeScaleValid(zjolt::ToJolt(*scale)));
+}
+
+//===----------------------------------------------------------------------===//
+// Triangle read-back
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltShapeGetTrianglesStart(const ZJoltShape *shape,
+                                        ZJoltShapeTrianglesContext *context,
+                                        const ZJoltAABox *box,
+                                        const ZJoltVec3 *position,
+                                        const ZJoltQuat *rotation,
+                                        const ZJoltVec3 *scale) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, context, box)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::AABox jolt_box(zjolt::ToJolt(box->min), zjolt::ToJolt(box->max));
+  zjolt::ToJolt(shape)->GetTrianglesStart(
+      AsJoltContext(context), jolt_box,
+      position != nullptr ? zjolt::ToJolt(*position) : JPH::Vec3::sZero(),
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation)
+                          : JPH::Quat::sIdentity(),
+      scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetTrianglesNext(
+    const ZJoltShape *shape, ZJoltShapeTrianglesContext *context,
+    uint32_t max_triangles, ZJoltVec3 *out_vertices,
+    const ZJoltPhysicsMaterial **out_materials, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(shape, context, out_vertices, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (max_triangles < ZJOLT_SHAPE_MIN_TRIANGLES_REQUESTED) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "max_triangles is below ZJOLT_SHAPE_MIN_TRIANGLES_REQUESTED; Jolt "
+        "asserts on a smaller request rather than honouring it");
+  }
+
+  static_assert(sizeof(JPH::Float3) == sizeof(ZJoltVec3) &&
+                    alignof(JPH::Float3) <= alignof(ZJoltVec3),
+                "Float3 must lay out the same as ZJoltVec3 for this cast");
+  JPH::Float3 *vertices = reinterpret_cast<JPH::Float3 *>(out_vertices);
+
+  const JPH::PhysicsMaterial **materials = nullptr;
+  JPH::Array<const JPH::PhysicsMaterial *> material_storage;
+  if (out_materials != nullptr) {
+    material_storage.resize(max_triangles);
+    materials = material_storage.data();
+  }
+
+  const int found = zjolt::ToJolt(shape)->GetTrianglesNext(
+      AsJoltContext(context), static_cast<int>(max_triangles), vertices,
+      materials);
+  *out_count = static_cast<uint32_t>(found);
+
+  if (out_materials != nullptr) {
+    for (int i = 0; i < found; ++i)
+      out_materials[i] = zjolt::ToC(material_storage[static_cast<size_t>(i)]);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetMaterialList(const ZJoltShape *shape,
+                                      const ZJoltPhysicsMaterial **out_materials,
+                                      uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(shape, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::PhysicsMaterialList *list = nullptr;
+  if (const JPH::MeshShape *mesh = AsMesh(shape)) {
+    list = &mesh->GetMaterialList();
+  } else if (const JPH::HeightFieldShape *hf = AsHeightField(shape)) {
+    list = &hf->GetMaterialList();
+  } else {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "only a mesh or a height field has a material list; ask a compound's "
+        "leaves individually");
+  }
+
+  *out_count = static_cast<uint32_t>(list->size());
+  if (out_materials == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < list->size()) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  for (size_t i = 0; i < list->size(); ++i)
+    out_materials[i] = zjolt::ToC((*list)[i].GetPtr());
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Mesh specifics
+//===----------------------------------------------------------------------===//
+
+uint32_t zjoltShapeMeshGetMaterialIndex(const ZJoltShape *shape,
+                                        ZJoltSubShapeId sub_shape_id) {
+  const JPH::MeshShape *mesh = AsMesh(shape);
+  if (mesh == nullptr) return 0;
+  return mesh->GetMaterialIndex(zjolt::ToJoltSubShapeId(sub_shape_id));
+}
+
+uint32_t zjoltShapeMeshGetTriangleUserData(const ZJoltShape *shape,
+                                           ZJoltSubShapeId sub_shape_id) {
+  const JPH::MeshShape *mesh = AsMesh(shape);
+  if (mesh == nullptr) return 0;
+  return mesh->GetTriangleUserData(zjolt::ToJoltSubShapeId(sub_shape_id));
+}
+
+//===----------------------------------------------------------------------===//
+// Height field specifics
+//===----------------------------------------------------------------------===//
+
+uint32_t zjoltShapeHeightFieldGetSampleCount(const ZJoltShape *shape) {
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  return hf != nullptr ? hf->GetSampleCount() : 0;
+}
+
+uint32_t zjoltShapeHeightFieldGetBlockSize(const ZJoltShape *shape) {
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  return hf != nullptr ? hf->GetBlockSize() : 0;
+}
+
+float zjoltShapeHeightFieldGetMinHeightValue(const ZJoltShape *shape) {
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  return hf != nullptr ? hf->GetMinHeightValue() : 0.0f;
+}
+
+float zjoltShapeHeightFieldGetMaxHeightValue(const ZJoltShape *shape) {
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  return hf != nullptr ? hf->GetMaxHeightValue() : 0.0f;
+}
+
+void zjoltShapeHeightFieldGetPosition(const ZJoltShape *shape, uint32_t x,
+                                      uint32_t y, ZJoltVec3 *out_position) {
+  if (out_position == nullptr) return;
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  if (hf == nullptr || x >= hf->GetSampleCount() || y >= hf->GetSampleCount()) {
+    *out_position = ZJoltVec3{0.0f, 0.0f, 0.0f};
+    return;
+  }
+  *out_position = zjolt::ToC(hf->GetPosition(x, y));
+}
+
+bool zjoltShapeHeightFieldIsNoCollision(const ZJoltShape *shape, uint32_t x,
+                                        uint32_t y) {
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  if (hf == nullptr || x >= hf->GetSampleCount() || y >= hf->GetSampleCount())
+    return true;
+  return hf->IsNoCollision(x, y);
+}
+
+ZJoltResult zjoltShapeHeightFieldProjectOntoSurface(
+    const ZJoltShape *shape, const ZJoltVec3 *local_position,
+    ZJoltVec3 *out_surface_position, ZJoltSubShapeId *out_sub_shape_id,
+    bool *out_found) {
+  ZJOLT_ENTER(out_found);
+  if (!zjolt::Present(shape, local_position, out_surface_position,
+                      out_sub_shape_id, out_found)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  if (hf == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this shape is not a height field");
+  }
+
+  JPH::Vec3 surface_position;
+  JPH::SubShapeID sub_shape_id;
+  const bool found = hf->ProjectOntoSurface(
+      zjolt::ToJolt(*local_position), surface_position, sub_shape_id);
+  *out_found = found;
+  if (found) {
+    *out_surface_position = zjolt::ToC(surface_position);
+    *out_sub_shape_id = zjolt::ToC(sub_shape_id);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeHeightFieldGetSubShapeCoordinates(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id, uint32_t *out_x,
+    uint32_t *out_y, uint32_t *out_triangle_index) {
+  ZJOLT_ENTER(out_x, out_y, out_triangle_index);
+  if (!zjolt::Present(shape, out_x, out_y, out_triangle_index))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  if (hf == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this shape is not a height field");
+  }
+
+  JPH::uint x = 0, y = 0, triangle_index = 0;
+  hf->GetSubShapeCoordinates(zjolt::ToJoltSubShapeId(sub_shape_id), x, y,
+                             triangle_index);
+  *out_x = x;
+  *out_y = y;
+  *out_triangle_index = triangle_index;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeHeightFieldGetHeights(const ZJoltShape *shape,
+                                            uint32_t x, uint32_t y,
+                                            uint32_t size_x, uint32_t size_y,
+                                            float *out_heights,
+                                            uint32_t stride) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, out_heights)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (size_x == 0 || size_y == 0) return ZJOLT_RESULT_OK;
+
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  if (hf == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this shape is not a height field");
+  }
+
+  // Jolt asserts on all four of these instead of clamping or reporting them,
+  // which a build with asserts off would read straight past — into a block
+  // that starts or ends outside the grid it was carved from.
+  const uint32_t block_size = hf->GetBlockSize();
+  const uint32_t sample_count = hf->GetSampleCount();
+  if (block_size == 0 || x % block_size != 0 || y % block_size != 0 ||
+      x >= sample_count || y >= sample_count ||
+      x + size_x > sample_count || y + size_y > sample_count ||
+      stride < size_x) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "x and y must be a multiple of the block size, the requested block "
+        "must fit within the sample grid, and stride must be at least size_x");
+  }
+
+  hf->GetHeights(x, y, size_x, size_y, out_heights,
+                static_cast<intptr_t>(stride));
+  return ZJOLT_RESULT_OK;
 }
 
 }  // extern "C"
