@@ -1,0 +1,10 @@
+.{
+    .name = .zjolt_consumer,
+    .version = "0.0.0",
+    .fingerprint = 0x9a7718ec9e8bd74f,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .zjolt = .{ .path = "../.." },
+    },
+    .paths = .{""},
+}

@@ -84,6 +84,18 @@ const zjolt_dep = b.dependency("zjolt", .{ .target = target, .optimize = optimiz
 exe.root_module.addImport("zjolt", zjolt_dep.module("zjolt"));
 ```
 
+Or link the C library directly, from Zig or from a C or C++ host — the header
+is a real contract, not a private detail of the wrapper:
+
+```zig
+exe.root_module.linkLibrary(zjolt_dep.artifact("zjolt"));
+```
+
+Both are exercised by `tests/consumer`, which builds zjolt through
+`b.dependency` the way a downstream project does. That is a different code path
+from building it in-repo, and the difference is invisible to the rest of the
+suite.
+
 ## Design
 
 ### Callbacks cross as C, not as C++
@@ -293,8 +305,13 @@ upstream would compile perfectly and quietly start meaning something else.
 - No `-fno-access-control`. The FFI layer uses only Jolt's public API, so it
   has no reason to defeat C++ access checking and no coupling to Jolt
   internals.
-- UBSan is **not** blanket-disabled. It stays on in Debug (`-Dsanitize_c`), so
-  real undefined behaviour surfaces instead of being suppressed.
+- UBSan is **not** blanket-disabled, and it is **not** forced on consumers
+  either. `-Dsanitize_c` is off by default, because Zig's sanitizer emits calls
+  into a runtime linked only into a compilation that is itself sanitized — a
+  consumer who forgets to forward `optimize` would get a link failure naming
+  `__ubsan_handle_shift_out_of_bounds` and nothing they could act on. zjolt's
+  own Debug runs pass `-Dsanitize_c=true` explicitly, so real undefined
+  behaviour in zjolt's C++ still surfaces.
 - Build options are declared once and mirrored into a Zig `options` module, so
   the wrapper cannot disagree with how the C++ was compiled — and
   `zjoltInit` checks the two at run time as well, because Jolt reacts to that
@@ -310,14 +327,15 @@ upstream would compile perfectly and quietly start meaning something else.
 | `-Dobject_layer_bits` | `16` | Width of an object layer, 16 or 32. Changes the ABI. |
 | `-Dcross_platform_deterministic` | `false` | Trades speed for bit-identical results across platforms. |
 | `-Denable_asserts` | on in Debug | Keeps Jolt's internal assertions. |
-| `-Dsanitize_c` | on in Debug | Keeps Zig's C undefined-behaviour sanitizer. |
+| `-Dsanitize_c` | `false` | Compiles the C and C++ with Zig's undefined-behaviour sanitizer. Off by default so the sanitizer runtime is never forced into a consumer's link; zjolt's own Debug runs turn it on. |
 | `-Dshared` | `false` | Builds the C library as a shared object. |
 
 ## Testing
 
 ```sh
-zig build test      # the Zig suite, and the C smoke test with it
-zig build test-c    # the C smoke test alone
+zig build test                       # the Zig suite, and the C smoke test with it
+zig build test-c                     # the C smoke test alone
+zig build --build-file tests/consumer/build.zig run   # as a downstream dependency
 ```
 
 The suite is self-contained: every fixture is built in code, so it ships no
