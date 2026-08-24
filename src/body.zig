@@ -771,27 +771,27 @@ pub const Body = struct {
     //-------------------------------------------------------------------------
 
     pub fn setLinearVelocity(self: Body, velocity: math.Vec3) void {
-        c.zjoltBodyMutSetLinearVelocity(self.handle, &velocity);
+        c.zjoltBodySetLinearVelocityLocked(self.handle, &velocity);
     }
 
     pub fn setAngularVelocity(self: Body, velocity: math.Vec3) void {
-        c.zjoltBodyMutSetAngularVelocity(self.handle, &velocity);
+        c.zjoltBodySetAngularVelocityLocked(self.handle, &velocity);
     }
 
     pub fn setUserData(self: Body, user_data: u64) void {
-        c.zjoltBodyMutSetUserData(self.handle, user_data);
+        c.zjoltBodySetUserDataLocked(self.handle, user_data);
     }
 
     pub fn setFriction(self: Body, friction: f32) void {
-        c.zjoltBodyMutSetFriction(self.handle, friction);
+        c.zjoltBodySetFrictionLocked(self.handle, friction);
     }
 
     pub fn setRestitution(self: Body, restitution: f32) void {
-        c.zjoltBodyMutSetRestitution(self.handle, restitution);
+        c.zjoltBodySetRestitutionLocked(self.handle, restitution);
     }
 
     pub fn addImpulse(self: Body, impulse: math.Vec3) void {
-        c.zjoltBodyMutAddImpulse(self.handle, &impulse);
+        c.zjoltBodyAddImpulseLocked(self.handle, &impulse);
     }
 };
 
