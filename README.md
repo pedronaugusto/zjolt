@@ -133,7 +133,44 @@ Zig struct into the table at comptime — no `callconv(.c)` in host code, no
 branch on the target's ABI, on any platform.
 
 The same shape covers `ObjectVsBroadPhaseLayerFilter`, `ObjectLayerPairFilter`,
-`ContactListener`, `BodyActivationListener` and the three query filters.
+`ContactListener`, `BodyActivationListener` and the four query filters.
+
+### Queries stream
+
+Jolt finds hits with a *collector* — an object it calls once per hit, as it
+finds them. A binding can either surface that or hide it behind "give me all
+the hits", and hiding it costs more than it looks: the caller's buffer is not
+the expensive part. `AllHitCollisionCollector` accumulates into an unbounded
+array, and a `CollideShapeResult` is around a kilobyte, because it embeds two
+`StaticArray<Vec3, 32>` faces whether or not faces were asked for. Answering a
+count and then a fill that way is two traversals and two copies of every hit.
+
+So the collector is what zjolt exposes, and the other two forms are built on
+it:
+
+```zig
+var nearby: struct {
+    count: usize = 0,
+    pub fn onHit(self: *@This(), hit: zjolt.CollideShapeHit) zjolt.HitAction {
+        if (hit.penetration_depth > 0.1) self.count += 1;
+        return .@"continue";
+    }
+} = .{};
+try system.queries().collideShapeEach(.{ .shape = probe, .position = here }, null, &nearby);
+```
+
+Closest-hit and count-then-fill are two more sinks over the same traversal,
+so nothing accumulates in any of them and the three cannot drift apart.
+
+The callback returns an **enum**, never a fraction. Jolt's collectors assert
+that the early-out fraction only ever decreases, and with assertions compiled
+out an increasing one violates a precondition the narrow phase relies on. The
+narrowed value is computed from the hit on the C++ side, where it cannot be got
+wrong.
+
+`onHit` may fail. It may not fail *into Jolt*: it runs inside the traversal
+with a broad-phase read lock held, so the wrapper stashes the error, stops the
+query, and raises it once every lock has been dropped. A caller writes `try`.
 
 ### The frame loop has its own path
 
@@ -360,7 +397,9 @@ sleep; the same inputs step to a bit-identical state twice; a kinematic body
 moves toward its target while a teleport ignores what is in the way; an impulse
 changes velocity immediately and a force does not; contact and activation
 callbacks fire with the right bodies, and stop when cleared; rays and sweeps
-hit what is there and miss what is not, with and without filters; the bulk
+hit what is there and miss what is not, with and without filters; a streaming
+query sees exactly the hits a fill query collects, stops when told to, and
+leaves the system steppable after its callback fails; the bulk
 read-back agrees exactly with the per-body accessors; a locked body reads and
 writes; a rotation that is not unit length is renormalised rather than fatal; a
 body constrained to a plane stays in it; a step that runs out of contact
@@ -431,7 +470,9 @@ Exposed today:
 - Body locks, read and write
 - The step, with a job system seam
 - Contact and activation listeners
-- Ray casts, shape casts and overlap tests, closest-hit and all-hits
+- Ray casts, shape casts, overlap and point tests, in three forms each:
+  closest-hit, all-hits, and streaming to a callback
+- Broad-phase layer, object layer, body and shape filters on every query
 - `CharacterVirtual` with ground state, stair walking and shape swapping
 - Bulk transform and motion read-back
 

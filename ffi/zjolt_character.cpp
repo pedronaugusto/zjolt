@@ -181,12 +181,11 @@ ZJoltResult zjoltCharacterUpdate(ZJoltCharacter *character, float delta_time,
   if (!(delta_time > 0.0f)) return ZJOLT_RESULT_OK;
 
   zjolt::QueryFilters adapters(filters);
-  const JPH::ShapeFilter shape_filter;
   JPH::TempAllocator *temp = character->owner->temp_allocator;
 
   if (settings == nullptr) {
     impl->Update(delta_time, zjolt::ToJolt(*gravity), adapters.broad_phase,
-                 adapters.object_layer, adapters.body, shape_filter, *temp);
+                 adapters.object_layer, adapters.body, adapters.shape, *temp);
     return ZJOLT_RESULT_OK;
   }
 
@@ -203,7 +202,7 @@ ZJoltResult zjoltCharacterUpdate(ZJoltCharacter *character, float delta_time,
 
   impl->ExtendedUpdate(delta_time, zjolt::ToJolt(*gravity), extended,
                        adapters.broad_phase, adapters.object_layer,
-                       adapters.body, shape_filter, *temp);
+                       adapters.body, adapters.shape, *temp);
   return ZJOLT_RESULT_OK;
 }
 
@@ -314,10 +313,9 @@ ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
   if (!zjolt::Present(impl, shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   zjolt::QueryFilters adapters(filters);
-  const JPH::ShapeFilter shape_filter;
   const bool changed = impl->SetShape(
       zjolt::ToJolt(shape), max_penetration_depth, adapters.broad_phase,
-      adapters.object_layer, adapters.body, shape_filter,
+      adapters.object_layer, adapters.body, adapters.shape,
       *character->owner->temp_allocator);
 
   // A refused shape change is a normal outcome — standing up under a low

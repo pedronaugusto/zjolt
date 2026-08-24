@@ -109,6 +109,12 @@ pub const ShapeCastHit = query_mod.ShapeCastHit;
 pub const CollideShapeHit = query_mod.CollideShapeHit;
 pub const ExcludeBody = query_mod.ExcludeBody;
 pub const OnlyObjectLayer = query_mod.OnlyObjectLayer;
+pub const CollidePointHit = query_mod.CollidePointHit;
+pub const QueryShapeFilter = query_mod.ShapeFilter;
+pub const SubShapeId = query_mod.SubShapeId;
+pub const empty_sub_shape_id = query_mod.empty_sub_shape_id;
+pub const HitAction = query_mod.HitAction;
+pub const RayCastSettings = query_mod.RayCastSettings;
 
 pub const Character = character_mod.Character;
 pub const GroundState = character_mod.GroundState;

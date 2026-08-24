@@ -1028,11 +1028,20 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
         zjolt.rvec3(0, 10, 0),
         zjolt.vec3(0, -20, 0),
         null,
+        null,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ball, hit.body);
     try std.testing.expect(hit.fraction > 0 and hit.fraction < 1);
+    // The normal is resolved for us; the top of a sphere hit from above points
+    // back up the ray.
+    try std.testing.expect(hit.normal.y > 0.9);
 
-    const total = try queries.countRayHits(zjolt.rvec3(0, 10, 0), zjolt.vec3(0, -20, 0), null);
+    const total = try queries.countRayHits(
+        zjolt.rvec3(0, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+        null,
+    );
     try std.testing.expect(total >= 2);
 
     var buffer: [16]zjolt.RayCastHit = undefined;
@@ -1040,15 +1049,17 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
         zjolt.rvec3(0, 10, 0),
         zjolt.vec3(0, -20, 0),
         null,
+        null,
         &buffer,
     );
     try std.testing.expectEqual(total, @as(u32, @intCast(all.len)));
 
-    // A buffer too small reports what was needed instead of writing what fits.
+    // A buffer too small reports what was needed.
     var one: [1]zjolt.RayCastHit = undefined;
     try std.testing.expectError(zjolt.Error.BufferTooSmall, queries.castRayAll(
         zjolt.rvec3(0, 10, 0),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
         &one,
     ));
@@ -1059,6 +1070,7 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
     const floor_hit = (try queries.castRayClosest(
         zjolt.rvec3(0, 10, 0),
         zjolt.vec3(0, -20, 0),
+        null,
         &filters,
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(world.floor, floor_hit.body);
@@ -1068,7 +1080,20 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
         zjolt.rvec3(1000, 1000, 1000),
         zjolt.vec3(0, -1, 0),
         null,
+        null,
     )) == null);
+
+    // The point tests: inside the ball, and in open air above it.
+    try std.testing.expect((try queries.countPointHits(zjolt.rvec3(0, 2, 0), null)) >= 1);
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        try queries.countPointHits(zjolt.rvec3(0, 30, 0), null),
+    );
+
+    var inside: [4]zjolt.CollidePointHit = undefined;
+    const containing = try queries.collidePoint(zjolt.rvec3(0, 2, 0), null, &inside);
+    try std.testing.expectEqual(@as(usize, 1), containing.len);
+    try std.testing.expectEqual(ball, containing[0].body);
 
     // A sphere swept downward reaches the floor.
     const swept = (try queries.castShapeClosest(.{
@@ -1095,6 +1120,365 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
         .position = zjolt.rvec3(0, 30, 0),
     }, null, &overlaps);
     try std.testing.expectEqual(@as(usize, 0), empty.len);
+}
+
+//=============================================================================
+// Streaming queries
+//
+// A fixture with several things in a line, because everything below is about
+// what happens BETWEEN hits: the order they arrive in, stopping part way, and
+// what a failing callback leaves behind.
+//=============================================================================
+
+/// Four static spheres up the Y axis at y = 2, 4, 6, 8, above the fixture's
+/// floor. One ray straight down passes through all of them and then the floor,
+/// so a query has five hits at five distinct distances.
+const Stack = struct {
+    world: World,
+    shape: zjolt.Shape,
+    spheres: [4]zjolt.BodyId,
+
+    const ray_origin = zjolt.rvec3(0, 10, 0);
+    const ray_direction = zjolt.vec3(0, -20, 0);
+    const total_hits = 5;
+
+    fn init() !Stack {
+        var world = try World.init();
+        errdefer world.deinit();
+
+        const shape = try zjolt.Shape.initSphere(0.5, 0);
+        errdefer shape.release();
+
+        var spheres: [4]zjolt.BodyId = undefined;
+        for (&spheres, 0..) |*id, i| {
+            id.* = try world.system.bodies().createAndAdd(.{
+                .shape = shape,
+                .object_layer = Layers.static,
+                .motion_type = .static,
+                .position = zjolt.rvec3(0, @floatFromInt(2 * (i + 1)), 0),
+            }, .dont_activate);
+        }
+        world.system.optimizeBroadPhase();
+
+        return .{ .world = world, .shape = shape, .spheres = spheres };
+    }
+
+    fn deinit(self: *Stack) void {
+        self.world.deinit();
+        self.shape.release();
+    }
+
+    fn queries(self: *const Stack) zjolt.Queries {
+        return self.world.system.queries();
+    }
+};
+
+/// Records everything it is shown and asks for nothing.
+const CollectHits = struct {
+    bodies: [16]zjolt.BodyId = undefined,
+    fractions: [16]f32 = undefined,
+    count: usize = 0,
+    action: zjolt.HitAction = .@"continue",
+
+    pub fn onHit(self: *CollectHits, hit: zjolt.RayCastHit) zjolt.HitAction {
+        if (self.count < self.bodies.len) {
+            self.bodies[self.count] = hit.body;
+            self.fractions[self.count] = hit.fraction;
+        }
+        self.count += 1;
+        return self.action;
+    }
+};
+
+fn containsBody(haystack: []const zjolt.BodyId, needle: zjolt.BodyId) bool {
+    for (haystack) |id| {
+        if (id == needle) return true;
+    }
+    return false;
+}
+
+test "a streaming query visits exactly the hits a fill query collects" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    var buffer: [16]zjolt.RayCastHit = undefined;
+    const filled = try stack.queries().castRayAll(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &buffer,
+    );
+    try std.testing.expectEqual(@as(usize, Stack.total_hits), filled.len);
+
+    var streamed: CollectHits = .{};
+    try stack.queries().castRayEach(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &streamed,
+    );
+
+    // The same hits, as a set. Not as a sequence: neither form promises an
+    // order unless the callback narrows, and asserting one would be asserting
+    // something Jolt does not owe.
+    try std.testing.expectEqual(filled.len, streamed.count);
+    for (filled) |hit| {
+        try std.testing.expect(containsBody(streamed.bodies[0..streamed.count], hit.body));
+    }
+    for (streamed.bodies[0..streamed.count]) |id| {
+        var found = false;
+        for (filled) |hit| {
+            if (hit.body == id) found = true;
+        }
+        try std.testing.expect(found);
+    }
+}
+
+test "stopping from a hit callback ends the traversal" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    var once: CollectHits = .{ .action = .stop };
+    try stack.queries().castRayEach(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &once,
+    );
+    try std.testing.expectEqual(@as(usize, 1), once.count);
+}
+
+test "narrowing on every hit puts the hits in order, best last" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    var narrowed: CollectHits = .{ .action = .narrow };
+    try stack.queries().castRayEach(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &narrowed,
+    );
+
+    // Narrowing tells Jolt not to bother with anything worse than the hit it
+    // has just been given. Two things follow, and only one of them is about
+    // order: every further hit is strictly nearer than the last, and hits that
+    // are therefore uninteresting are never computed at all.
+    //
+    // The second effect mostly swallows the first, which is worth knowing
+    // before reaching for this: the broad phase already walks roughly front to
+    // back, so on this fixture the same ray that reports five hits unnarrowed
+    // reports ONE narrowed. Narrowing is a way to do less work, and only
+    // incidentally a way to get an order.
+    try std.testing.expect(narrowed.count >= 1);
+    try std.testing.expect(narrowed.count < Stack.total_hits);
+    for (1..narrowed.count) |i| {
+        try std.testing.expect(narrowed.fractions[i] < narrowed.fractions[i - 1]);
+    }
+
+    const closest = (try stack.queries().castRayClosest(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(
+        narrowed.fractions[narrowed.count - 1],
+        closest.fraction,
+    );
+}
+
+test "the closest hit is the nearest of all of them" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    // Closest is a sink over the same traversal as the other two forms, so
+    // this is really asking whether that reimplementation still agrees with
+    // the exhaustive answer.
+    var buffer: [16]zjolt.RayCastHit = undefined;
+    const all = try stack.queries().castRayAll(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &buffer,
+    );
+    var nearest = all[0];
+    for (all[1..]) |hit| {
+        if (hit.fraction < nearest.fraction) nearest = hit;
+    }
+
+    const closest = (try stack.queries().castRayClosest(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(nearest.body, closest.body);
+    try std.testing.expectEqual(nearest.fraction, closest.fraction);
+    try std.testing.expectEqual(stack.spheres[3], closest.body);
+}
+
+/// Rejects one body at the shape level, and records what it was asked.
+const RejectShapesOf = struct {
+    body: zjolt.BodyId,
+    calls: usize = 0,
+    all_sub_shapes_empty: bool = true,
+
+    fn shouldCollide(
+        user: ?*anyopaque,
+        body: zjolt.BodyId,
+        sub_shape_id: zjolt.SubShapeId,
+        query_sub_shape_id: zjolt.SubShapeId,
+    ) callconv(.c) bool {
+        const self: *RejectShapesOf = @ptrCast(@alignCast(user.?));
+        self.calls += 1;
+        if (sub_shape_id != zjolt.empty_sub_shape_id) self.all_sub_shapes_empty = false;
+        if (query_sub_shape_id != zjolt.empty_sub_shape_id) self.all_sub_shapes_empty = false;
+        return body != self.body;
+    }
+
+    fn filters(self: *RejectShapesOf) zjolt.QueryFilters {
+        return .{ .shape = .{ .should_collide = shouldCollide, .user = @ptrCast(self) } };
+    }
+};
+
+test "a shape filter suppresses exactly the shapes it rejects" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    var reject: RejectShapesOf = .{ .body = stack.spheres[3] };
+    const filters = reject.filters();
+
+    var buffer: [16]zjolt.RayCastHit = undefined;
+    const kept = try stack.queries().castRayAll(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        &filters,
+        &buffer,
+    );
+
+    try std.testing.expect(reject.calls > 0);
+
+    // Exactly the one shape named is gone, and everything else survived.
+    try std.testing.expectEqual(@as(usize, Stack.total_hits - 1), kept.len);
+    var kept_bodies: [16]zjolt.BodyId = undefined;
+    for (kept, 0..) |hit, i| kept_bodies[i] = hit.body;
+    try std.testing.expect(!containsBody(kept_bodies[0..kept.len], stack.spheres[3]));
+    for (stack.spheres[0..3]) |id| {
+        try std.testing.expect(containsBody(kept_bodies[0..kept.len], id));
+    }
+    try std.testing.expect(containsBody(kept_bodies[0..kept.len], stack.world.floor));
+
+    // Jolt asks this filter once per shape, and none of the shapes here has
+    // children — so both ids are the empty one every time. That is worth
+    // pinning down: it is the difference between this filter and a body
+    // filter, and it only appears when compound shapes do.
+    try std.testing.expect(reject.all_sub_shapes_empty);
+}
+
+/// Fails part way through, which is the thing a Zig callback may not simply
+/// do: it cannot return an error into Jolt's traversal. The wrapper stashes it
+/// and re-raises after every lock has been released.
+const FailOnSecondHit = struct {
+    seen: usize = 0,
+
+    pub fn onHit(self: *FailOnSecondHit, _: zjolt.RayCastHit) !zjolt.HitAction {
+        self.seen += 1;
+        if (self.seen == 2) return error.HitRejected;
+        return .@"continue";
+    }
+};
+
+const FailOnFirstOverlap = struct {
+    seen: usize = 0,
+
+    pub fn onHit(self: *FailOnFirstOverlap, _: zjolt.CollideShapeHit) !zjolt.HitAction {
+        self.seen += 1;
+        return error.OverlapRejected;
+    }
+};
+
+test "an error out of a hit callback leaves the system usable" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    // A failure inside the traversal. What must NOT happen is the error
+    // travelling out through Jolt: the callback runs under the broad phase's
+    // read lock, and a lock leaked there does not fail anything — it hangs the
+    // next step, minutes later and nowhere near the cause. So if this
+    // regresses the symptom is a hung test run, not a red assertion, which is
+    // exactly why the step below is part of the test.
+    var failing: FailOnSecondHit = .{};
+    try std.testing.expectError(error.HitRejected, stack.queries().castRayEach(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &failing,
+    ));
+    try std.testing.expectEqual(@as(usize, 2), failing.seen);
+
+    // The same through an overlap query, which takes the same locks by a
+    // different route.
+    var overlap_failure: FailOnFirstOverlap = .{};
+    try std.testing.expectError(
+        error.OverlapRejected,
+        stack.queries().collideShapeEach(.{
+            .shape = stack.shape,
+            .position = zjolt.rvec3(0, 4, 0),
+            .max_separation_distance = 4,
+        }, null, &overlap_failure),
+    );
+    try std.testing.expect(overlap_failure.seen > 0);
+
+    // The assertion: everything still works. The step is what would hang on a
+    // leaked broad-phase lock, and the queries are what would be wrong if the
+    // collector had been left in a half-finished state.
+    try stack.world.stepFor(0.2);
+
+    var buffer: [16]zjolt.RayCastHit = undefined;
+    const all = try stack.queries().castRayAll(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &buffer,
+    );
+    try std.testing.expectEqual(@as(usize, Stack.total_hits), all.len);
+
+    var again: CollectHits = .{};
+    try stack.queries().castRayEach(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        null,
+        &again,
+    );
+    try std.testing.expectEqual(@as(usize, Stack.total_hits), again.count);
 }
 
 //=============================================================================
@@ -1314,6 +1698,7 @@ test "a character with an inner body is visible to ray casts" {
     const hit = (try world.system.queries().castRayClosest(
         zjolt.rvec3(0, 10, 0),
         zjolt.vec3(0, -20, 0),
+        null,
         null,
     )) orelse return error.TestUnexpectedResult;
     // Without the inner body this ray would have found the floor.

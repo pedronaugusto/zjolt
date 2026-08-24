@@ -228,6 +228,68 @@ static void onDeactivated(void *user, ZJoltBodyId body, uint64_t user_data) {
 }
 
 //===----------------------------------------------------------------------===//
+// Streaming query callbacks
+//
+// The point of driving these from C is not that the Zig suite cannot: it is
+// that the ABI guard compares pointee types only by size and alignment, so a
+// hit struct whose fields the Zig side has in the wrong order still passes it.
+// Reading `fraction` and `normal` here, through the header, is what catches
+// that.
+//===----------------------------------------------------------------------===//
+
+typedef struct RayStream {
+  uint32_t count;
+  float last_fraction;
+  bool fractions_descend;
+  bool normals_point_up;
+  ZJoltHitAction action;
+} RayStream;
+
+static ZJoltHitAction onRayHit(void *user, const ZJoltRayCastHit *hit) {
+  RayStream *stream = (RayStream *)user;
+  if (stream->count > 0 && hit->fraction >= stream->last_fraction)
+    stream->fractions_descend = false;
+  if (hit->normal.y <= 0.0f) stream->normals_point_up = false;
+  stream->last_fraction = hit->fraction;
+  ++stream->count;
+  return stream->action;
+}
+
+static uint32_t g_overlaps_streamed = 0;
+
+static ZJoltHitAction onOverlapHit(void *user, const ZJoltCollideShapeHit *hit) {
+  (void)user;
+  (void)hit;
+  ++g_overlaps_streamed;
+  return ZJOLT_HIT_ACTION_CONTINUE;
+}
+
+static uint32_t g_points_streamed = 0;
+
+static ZJoltHitAction onPointHit(void *user, const ZJoltCollidePointHit *hit) {
+  (void)user;
+  (void)hit;
+  ++g_points_streamed;
+  return ZJOLT_HIT_ACTION_CONTINUE;
+}
+
+/* Rejects one body at the shape level. */
+static ZJoltBodyId g_rejected_body = ZJOLT_BODY_ID_INVALID;
+static uint32_t g_shape_filter_calls = 0;
+static bool g_shape_ids_were_empty = true;
+
+static bool rejectShapesOf(void *user, ZJoltBodyId body,
+                           ZJoltSubShapeId sub_shape_id,
+                           ZJoltSubShapeId query_sub_shape_id) {
+  (void)user;
+  ++g_shape_filter_calls;
+  if (sub_shape_id != ZJOLT_SUB_SHAPE_ID_EMPTY ||
+      query_sub_shape_id != ZJOLT_SUB_SHAPE_ID_EMPTY)
+    g_shape_ids_were_empty = false;
+  return body != g_rejected_body;
+}
+
+//===----------------------------------------------------------------------===//
 // Test body
 //===----------------------------------------------------------------------===//
 
@@ -569,31 +631,98 @@ int main(void) {
   const ZJoltRVec3 ray_origin = {(ZJoltReal)0.0, (ZJoltReal)10.0,
                                  (ZJoltReal)0.0};
   const ZJoltVec3 ray_direction = {0.0f, -20.0f, 0.0f};
+
+  /* The settings default to Jolt's, and NULL means the same thing. Both are
+     exercised: the struct here, NULL everywhere below. */
+  ZJoltRayCastSettings ray_settings;
+  memset(&ray_settings, 0xAB, sizeof(ray_settings));
+  zjoltRayCastSettingsInit(&ray_settings);
+  CHECK(ray_settings.treat_convex_as_solid,
+        "a ray starting inside a convex shape hits it by default");
+  CHECK(ray_settings.back_face_mode_triangles == ZJOLT_BACK_FACE_MODE_IGNORE,
+        "back faces are ignored by default");
+
   ZJoltRayCastHit hit;
   bool did_hit = false;
-  CHECK_OK(zjoltCastRayClosest(system, &ray_origin, &ray_direction, NULL, &hit,
-                               &did_hit));
+  CHECK_OK(zjoltCastRayClosest(system, &ray_origin, &ray_direction,
+                               &ray_settings, NULL, &hit, &did_hit));
   CHECK(did_hit, "a ray straight down hits something");
   CHECK(hit.body == ball_id, "the ray hit the ball first");
+  CHECK(hit.normal.y > 0.9f,
+        "the top of the ball faces back up the ray: %f", (double)hit.normal.y);
 
   uint32_t all_hits = 0;
-  CHECK_OK(zjoltCastRayAll(system, &ray_origin, &ray_direction, NULL, NULL, 0,
-                           &all_hits));
+  CHECK_OK(zjoltCastRayAll(system, &ray_origin, &ray_direction, NULL, NULL,
+                           NULL, 0, &all_hits));
   CHECK(all_hits >= 2, "the ray passes through the ball and the floor: %u",
         all_hits);
 
   ZJoltRayCastHit hits[8];
   uint32_t hit_count = 0;
-  CHECK_OK(zjoltCastRayAll(system, &ray_origin, &ray_direction, NULL, hits, 8,
-                           &hit_count));
+  CHECK_OK(zjoltCastRayAll(system, &ray_origin, &ray_direction, NULL, NULL,
+                           hits, 8, &hit_count));
   CHECK(hit_count == all_hits, "the size query matched the fill");
+
+  /* The same ray, streamed. One traversal, no buffer, and the hit struct read
+     field by field through the header. */
+  RayStream stream;
+  memset(&stream, 0, sizeof(stream));
+  stream.fractions_descend = true;
+  stream.normals_point_up = true;
+  stream.action = ZJOLT_HIT_ACTION_CONTINUE;
+  CHECK_OK(zjoltCastRayEach(system, &ray_origin, &ray_direction, NULL, NULL,
+                            onRayHit, &stream));
+  CHECK(stream.count == all_hits,
+        "streaming saw every hit the fill did: %u vs %u", stream.count,
+        all_hits);
+  CHECK(stream.normals_point_up,
+        "every surface hit from above faces back up the ray");
+
+  /* Stopping ends it. */
+  RayStream stop_after_one;
+  memset(&stop_after_one, 0, sizeof(stop_after_one));
+  stop_after_one.action = ZJOLT_HIT_ACTION_STOP;
+  CHECK_OK(zjoltCastRayEach(system, &ray_origin, &ray_direction, NULL, NULL,
+                            onRayHit, &stop_after_one));
+  CHECK(stop_after_one.count == 1, "STOP ended the traversal at one hit: %u",
+        stop_after_one.count);
+
+  /* Narrowing means every further hit is strictly nearer than the last. */
+  RayStream narrowed;
+  memset(&narrowed, 0, sizeof(narrowed));
+  narrowed.fractions_descend = true;
+  narrowed.action = ZJOLT_HIT_ACTION_NARROW;
+  CHECK_OK(zjoltCastRayEach(system, &ray_origin, &ray_direction, NULL, NULL,
+                            onRayHit, &narrowed));
+  CHECK(narrowed.count >= 1, "narrowing still reported a hit");
+  CHECK(narrowed.fractions_descend, "narrowed hits arrive nearest last");
+
+  /* A NULL callback is a caller mistake, not an empty result. */
+  CHECK(zjoltCastRayEach(system, &ray_origin, &ray_direction, NULL, NULL, NULL,
+                         NULL) == ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a streaming query with no callback is refused");
+
+  /* A shape filter, the third filter Jolt takes. */
+  ZJoltQueryFilters shape_filtered;
+  memset(&shape_filtered, 0, sizeof(shape_filtered));
+  shape_filtered.shape.should_collide = rejectShapesOf;
+  g_rejected_body = ball_id;
+  uint32_t filtered_hits = 0;
+  CHECK_OK(zjoltCastRayAll(system, &ray_origin, &ray_direction, NULL,
+                           &shape_filtered, NULL, 0, &filtered_hits));
+  CHECK(g_shape_filter_calls > 0, "the shape filter was consulted");
+  CHECK(filtered_hits == all_hits - 1,
+        "rejecting the ball's shape dropped exactly its hit: %u of %u",
+        filtered_hits, all_hits);
+  CHECK(g_shape_ids_were_empty,
+        "a shape with no children reports the empty sub-shape id");
 
   /* A ray that misses everything. */
   const ZJoltRVec3 far_origin = {(ZJoltReal)1000.0, (ZJoltReal)1000.0,
                                  (ZJoltReal)1000.0};
   bool missed = true;
-  CHECK_OK(zjoltCastRayClosest(system, &far_origin, &ray_direction, NULL, &hit,
-                               &missed));
+  CHECK_OK(zjoltCastRayClosest(system, &far_origin, &ray_direction, NULL, NULL,
+                               &hit, &missed));
   CHECK(!missed, "a ray far from anything misses");
 
   /* A shape cast down onto the floor. */
@@ -608,12 +737,33 @@ int main(void) {
   CHECK(shape_did_hit, "a sphere swept downward reaches the floor");
   CHECK(shape_hit.body == floor_id, "the sweep hit the floor");
 
-  /* An overlap test where the ball is resting. */
+  /* An overlap test where the ball is resting, both ways round. */
   ZJoltCollideShapeHit overlaps[8];
   uint32_t overlap_count = 0;
-  CHECK_OK(zjoltCollideShape(system, sphere, NULL, &rest_position, &identity,
-                             0.0f, NULL, overlaps, 8, &overlap_count));
+  CHECK_OK(zjoltCollideShapeAll(system, sphere, NULL, &rest_position, &identity,
+                                0.0f, NULL, overlaps, 8, &overlap_count));
   CHECK(overlap_count > 0, "a sphere at the ball's position overlaps something");
+
+  CHECK_OK(zjoltCollideShapeEach(system, sphere, NULL, &rest_position,
+                                 &identity, 0.0f, NULL, onOverlapHit, NULL));
+  CHECK(g_overlaps_streamed == overlap_count,
+        "streaming an overlap saw the same hits: %u vs %u", g_overlaps_streamed,
+        overlap_count);
+
+  /* The point tests: inside the resting ball, and in open air. */
+  uint32_t inside_count = 0;
+  CHECK_OK(zjoltCollidePointAll(system, &rest_position, NULL, NULL, 0,
+                                &inside_count));
+  CHECK(inside_count >= 1, "the ball's centre is inside the ball");
+
+  CHECK_OK(zjoltCollidePointEach(system, &rest_position, NULL, onPointHit,
+                                 NULL));
+  CHECK(g_points_streamed == inside_count, "streaming a point test agreed");
+
+  const ZJoltRVec3 empty_air = {(ZJoltReal)0.0, (ZJoltReal)40.0, (ZJoltReal)0.0};
+  uint32_t nothing = 1;
+  CHECK_OK(zjoltCollidePointAll(system, &empty_air, NULL, NULL, 0, &nothing));
+  CHECK(nothing == 0, "open air contains nothing");
 
   //-------------------------------------------------------------------------
   // Bulk read-back
