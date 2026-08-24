@@ -8,6 +8,7 @@
 const std = @import("std");
 const constraint = @import("constraint.zig");
 const core = @import("core.zig");
+const query = @import("query.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
@@ -20,6 +21,12 @@ pub const RVec3 = core.RVec3;
 pub const Result = core.Result;
 pub const SubShapeId = core.SubShapeId;
 pub const Vec3 = core.Vec3;
+
+// A wheel's ground test filters like any other cast, so `zjolt_vehicle.h`
+// reuses the query header's three filter tables rather than respelling them.
+pub const BroadPhaseLayerFilter = query.BroadPhaseLayerFilter;
+pub const ObjectLayerFilter = query.ObjectLayerFilter;
+pub const BodyFilter = query.BodyFilter;
 
 pub const VehicleControllerKind = enum(c_int) {
     wheeled = 0,
@@ -132,7 +139,73 @@ pub const VehicleMotorcycleDesc = extern struct {
     lean_smoothing_factor: f32,
 };
 
+pub const VehicleTrackSide = enum(c_int) {
+    left = 0,
+    right = 1,
+};
+
+pub const VehicleMotorcycleLeanSpring = extern struct {
+    spring_constant: f32,
+    spring_damping: f32,
+    spring_integration_coefficient: f32,
+    spring_integration_coefficient_decay: f32,
+    lean_smoothing_factor: f32,
+};
+
+pub const VehicleWheelFilters = extern struct {
+    broad_phase_layer: BroadPhaseLayerFilter = .{},
+    object_layer: ObjectLayerFilter = .{},
+    body: BodyFilter = .{},
+};
+
+pub const VehicleStepContext = extern struct {
+    delta_time: f32,
+    is_first_step: bool,
+    is_last_step: bool,
+};
+
 pub const VehicleConstraint = opaque {};
+
+pub const VehicleStepCallback = extern struct {
+    on_step: ?*const fn (
+        user: ?*anyopaque,
+        constraint_handle: *VehicleConstraint,
+        context: *const VehicleStepContext,
+    ) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
+pub const VehicleCombineFrictionCallback = extern struct {
+    combine: ?*const fn (
+        user: ?*anyopaque,
+        wheel_index: u32,
+        body: BodyId,
+        sub_shape_id: SubShapeId,
+        longitudinal_friction: *f32,
+        lateral_friction: *f32,
+    ) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
+pub const VehicleTireImpulseInputs = extern struct {
+    suspension_impulse: f32,
+    longitudinal_friction: f32,
+    lateral_friction: f32,
+    longitudinal_slip: f32,
+    lateral_slip: f32,
+    delta_time: f32,
+};
+
+pub const VehicleTireMaxImpulseCallback = extern struct {
+    compute: ?*const fn (
+        user: ?*anyopaque,
+        wheel_index: u32,
+        inputs: *const VehicleTireImpulseInputs,
+        out_longitudinal_impulse: *f32,
+        out_lateral_impulse: *f32,
+    ) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
 
 pub const VehicleConstraintDesc = extern struct {
     up: Vec3,
@@ -299,5 +372,63 @@ pub extern fn zjoltVehicleConstraintGetWheelLocalBasis(constraint: *const Vehicl
 pub extern fn zjoltVehicleConstraintGetWheelLocalTransform(constraint: *const VehicleConstraint, wheel_index: u32, wheel_right: *const Vec3, wheel_up: *const Vec3, out_position: *Vec3, out_rotation: *Quat) void;
 
 pub extern fn zjoltVehicleConstraintGetWheelWorldTransform(constraint: *const VehicleConstraint, wheel_index: u32, wheel_right: *const Vec3, wheel_up: *const Vec3, out_position: *RVec3, out_rotation: *Quat) void;
+
+pub extern fn zjoltVehicleConstraintGetAntiRollBarCount(constraint: *const VehicleConstraint) u32;
+
+pub extern fn zjoltVehicleConstraintGetAntiRollBar(constraint: *const VehicleConstraint, index: u32, out: *VehicleAntiRollBarDesc) bool;
+
+pub extern fn zjoltVehicleConstraintSetAntiRollBarStiffness(constraint: *VehicleConstraint, index: u32, stiffness: f32) Result;
+
+pub extern fn zjoltVehicleConstraintGetDifferentialCount(constraint: *const VehicleConstraint) u32;
+
+pub extern fn zjoltVehicleConstraintGetDifferential(constraint: *const VehicleConstraint, index: u32, out: *VehicleDifferentialDesc) bool;
+
+pub extern fn zjoltVehicleConstraintSetDifferential(constraint: *VehicleConstraint, index: u32, desc: *const VehicleDifferentialDesc) Result;
+
+pub extern fn zjoltVehicleConstraintGetDifferentialLimitedSlipRatio(constraint: *const VehicleConstraint) f32;
+
+pub extern fn zjoltVehicleConstraintSetDifferentialLimitedSlipRatio(constraint: *VehicleConstraint, ratio: f32) Result;
+
+pub extern fn zjoltVehicleConstraintGetTrackAngularVelocity(constraint: *const VehicleConstraint, side: VehicleTrackSide) f32;
+
+pub extern fn zjoltVehicleConstraintSetTrackAngularVelocity(constraint: *VehicleConstraint, side: VehicleTrackSide, angular_velocity: f32) Result;
+
+pub extern fn zjoltVehicleConstraintSetEngineRpm(constraint: *VehicleConstraint, rpm: f32) Result;
+
+pub extern fn zjoltVehicleConstraintGetEngineTorque(constraint: *const VehicleConstraint, acceleration: f32) f32;
+
+pub extern fn zjoltVehicleConstraintGetWheelSpeedAtClutch(constraint: *const VehicleConstraint) f32;
+
+pub extern fn zjoltVehicleConstraintSetRpmMeter(constraint: *VehicleConstraint, position: *const Vec3, size: f32) Result;
+
+pub extern fn zjoltVehicleConstraintGetMotorcycleLeanSpring(constraint: *const VehicleConstraint, out: *VehicleMotorcycleLeanSpring) bool;
+
+pub extern fn zjoltVehicleConstraintSetMotorcycleLeanSpring(constraint: *VehicleConstraint, spring: *const VehicleMotorcycleLeanSpring) Result;
+
+pub extern fn zjoltVehicleConstraintSetWheelFilters(constraint: *VehicleConstraint, filters: ?*const VehicleWheelFilters) Result;
+
+pub extern fn zjoltVehicleConstraintGetWheelFilters(constraint: *const VehicleConstraint, out: *VehicleWheelFilters) void;
+
+pub extern fn zjoltVehicleConstraintSetCollisionTester(constraint: *VehicleConstraint, desc: *const VehicleCollisionTesterDesc) Result;
+
+pub extern fn zjoltVehicleConstraintSetPreStepCallback(constraint: *VehicleConstraint, callback: ?*const VehicleStepCallback) Result;
+
+pub extern fn zjoltVehicleConstraintGetPreStepCallback(constraint: *const VehicleConstraint, out: *VehicleStepCallback) void;
+
+pub extern fn zjoltVehicleConstraintSetPostCollideCallback(constraint: *VehicleConstraint, callback: ?*const VehicleStepCallback) Result;
+
+pub extern fn zjoltVehicleConstraintGetPostCollideCallback(constraint: *const VehicleConstraint, out: *VehicleStepCallback) void;
+
+pub extern fn zjoltVehicleConstraintSetPostStepCallback(constraint: *VehicleConstraint, callback: ?*const VehicleStepCallback) Result;
+
+pub extern fn zjoltVehicleConstraintGetPostStepCallback(constraint: *const VehicleConstraint, out: *VehicleStepCallback) void;
+
+pub extern fn zjoltVehicleConstraintSetCombineFrictionCallback(constraint: *VehicleConstraint, callback: ?*const VehicleCombineFrictionCallback) Result;
+
+pub extern fn zjoltVehicleConstraintGetCombineFrictionCallback(constraint: *const VehicleConstraint, out: *VehicleCombineFrictionCallback) void;
+
+pub extern fn zjoltVehicleConstraintSetTireMaxImpulseCallback(constraint: *VehicleConstraint, callback: ?*const VehicleTireMaxImpulseCallback) Result;
+
+pub extern fn zjoltVehicleConstraintGetTireMaxImpulseCallback(constraint: *const VehicleConstraint, out: *VehicleTireMaxImpulseCallback) void;
 
 pub extern fn zjoltVehicleConstraintAsConstraint(constraint: *const VehicleConstraint) ?*Constraint;
