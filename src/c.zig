@@ -641,6 +641,46 @@ pub const RayCastSettings = extern struct {
     treat_convex_as_solid: bool = true,
 };
 
+/// @see `ZJoltActiveEdgeMode` in the header for what an active edge is.
+pub const ActiveEdgeMode = enum(c_int) {
+    collide_only_with_active = 0,
+    collide_with_all = 1,
+};
+
+/// Note the numbering: `collect_faces` is 0, so a zeroed settings struct asks
+/// for faces. That is Jolt's own numbering, mirrored rather than tidied.
+pub const CollectFacesMode = enum(c_int) {
+    collect_faces = 0,
+    no_faces = 1,
+};
+
+/// Jolt's own defaults, restated so a caller can set one field and leave the
+/// rest. The test in `query.zig` checks them against
+/// `zjoltCollideShapeSettingsInit`, so this copy cannot quietly drift.
+pub const CollideShapeSettings = extern struct {
+    active_edge_mode: ActiveEdgeMode = .collide_only_with_active,
+    collect_faces_mode: CollectFacesMode = .no_faces,
+    collision_tolerance: f32 = 1.0e-4,
+    penetration_tolerance: f32 = 1.0e-4,
+    active_edge_movement_direction: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    max_separation_distance: f32 = 0,
+    back_face_mode: BackFaceMode = .ignore,
+};
+
+/// @see `CollideShapeSettings` for the drift check these defaults are under.
+pub const ShapeCastSettings = extern struct {
+    active_edge_mode: ActiveEdgeMode = .collide_only_with_active,
+    collect_faces_mode: CollectFacesMode = .no_faces,
+    collision_tolerance: f32 = 1.0e-4,
+    penetration_tolerance: f32 = 1.0e-4,
+    active_edge_movement_direction: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    extra_convex_radius: f32 = 0,
+    back_face_mode_triangles: BackFaceMode = .ignore,
+    back_face_mode_convex: BackFaceMode = .ignore,
+    use_shrunken_shape_and_convex_radius: bool = false,
+    return_deepest_point: bool = false,
+};
+
 pub const RayCastHit = extern struct {
     body: BodyId,
     sub_shape_id: SubShapeId,
@@ -1001,6 +1041,13 @@ pub extern fn zjoltCollideShapeAll(system: *const PhysicsSystem, shape: *const S
 pub extern fn zjoltCollideShapeEach(system: *const PhysicsSystem, shape: *const Shape, scale: ?*const Vec3, position: *const RVec3, rotation: *const Quat, max_separation_distance: f32, filters: ?*const QueryFilters, on_hit: CollideShapeHitFn, user: ?*anyopaque) Result;
 pub extern fn zjoltCollidePointAll(system: *const PhysicsSystem, point: *const RVec3, filters: ?*const QueryFilters, out_hits: ?[*]CollidePointHit, capacity: u32, out_count: *u32) Result;
 pub extern fn zjoltCollidePointEach(system: *const PhysicsSystem, point: *const RVec3, filters: ?*const QueryFilters, on_hit: CollidePointHitFn, user: ?*anyopaque) Result;
+
+pub extern fn zjoltCollideShapeSettingsInit(settings: *CollideShapeSettings) void;
+pub extern fn zjoltShapeCastSettingsInit(settings: *ShapeCastSettings) void;
+pub extern fn zjoltCollideShapeVsShapeClosest(shape1: *const Shape, scale1: ?*const Vec3, position1: *const RVec3, rotation1: *const Quat, shape2: *const Shape, scale2: ?*const Vec3, position2: *const RVec3, rotation2: *const Quat, base_offset: ?*const RVec3, settings: ?*const CollideShapeSettings, filter: ?*const ShapeFilter, out_hit: *CollideShapeHit, out_hit_any: *bool) Result;
+pub extern fn zjoltCollideShapeVsShapeAll(shape1: *const Shape, scale1: ?*const Vec3, position1: *const RVec3, rotation1: *const Quat, shape2: *const Shape, scale2: ?*const Vec3, position2: *const RVec3, rotation2: *const Quat, base_offset: ?*const RVec3, settings: ?*const CollideShapeSettings, filter: ?*const ShapeFilter, out_hits: ?[*]CollideShapeHit, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltCastShapeVsShapeClosest(shape1: *const Shape, scale1: ?*const Vec3, position1: *const RVec3, rotation1: *const Quat, direction: *const Vec3, shape2: *const Shape, scale2: ?*const Vec3, position2: *const RVec3, rotation2: *const Quat, base_offset: ?*const RVec3, settings: ?*const ShapeCastSettings, filter: ?*const ShapeFilter, out_hit: *ShapeCastHit, out_hit_any: *bool) Result;
+pub extern fn zjoltCastShapeVsShapeAll(shape1: *const Shape, scale1: ?*const Vec3, position1: *const RVec3, rotation1: *const Quat, direction: *const Vec3, shape2: *const Shape, scale2: ?*const Vec3, position2: *const RVec3, rotation2: *const Quat, base_offset: ?*const RVec3, settings: ?*const ShapeCastSettings, filter: ?*const ShapeFilter, out_hits: ?[*]ShapeCastHit, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltCharacterDescInit(desc: *CharacterDesc) void;
 pub extern fn zjoltCharacterUpdateSettingsInit(settings: *CharacterUpdateSettings) void;

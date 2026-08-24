@@ -202,6 +202,21 @@ pub const QueryShapeFilter = query_mod.ShapeFilter;
 pub const empty_sub_shape_id = query_mod.empty_sub_shape_id;
 pub const HitAction = query_mod.HitAction;
 pub const RayCastSettings = query_mod.RayCastSettings;
+pub const CollideShapeSettings = query_mod.CollideShapeSettings;
+pub const ShapeCastSettings = query_mod.ShapeCastSettings;
+pub const ActiveEdgeMode = query_mod.ActiveEdgeMode;
+pub const CollectFacesMode = query_mod.CollectFacesMode;
+
+// Shape versus shape: two placed shapes, no physics system. @see query.zig.
+pub const PlacedShape = query_mod.PlacedShape;
+pub const ShapePair = query_mod.ShapePair;
+pub const ShapeCastPair = query_mod.ShapeCastPair;
+pub const collideShapeVsShapeClosest = query_mod.collideShapeVsShapeClosest;
+pub const countShapeVsShapeOverlaps = query_mod.countShapeVsShapeOverlaps;
+pub const collideShapeVsShapeAll = query_mod.collideShapeVsShapeAll;
+pub const castShapeVsShapeClosest = query_mod.castShapeVsShapeClosest;
+pub const countShapeVsShapeCastHits = query_mod.countShapeVsShapeCastHits;
+pub const castShapeVsShapeAll = query_mod.castShapeVsShapeAll;
 
 pub const Character = character_mod.Character;
 pub const GroundState = character_mod.GroundState;
