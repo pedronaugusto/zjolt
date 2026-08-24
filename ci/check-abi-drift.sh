@@ -144,5 +144,36 @@ try "a struct field added in the header only" ffi/zjolt_shape.h \
 'typedef struct ZJoltShapeStats {
   uint32_t intruder;'
 
+# Signedness, which size and alignment cannot see: same width, same offset,
+# same everything a layout digest looks at, and a value above 2^31 read back as
+# negative. Mutated on the HEADER side so the Zig suite still type-checks —
+# flipping c.zig instead breaks an unrelated test first, which is not evidence
+# about this check.
+try "a field's signedness flipped in the header" ffi/zjolt_shape.h \
+'  uint32_t num_triangles;' \
+'  int32_t num_triangles;'
+
+# A negative enumerator is not drift between the two sides — it is drift
+# between two toolchains. C leaves an enum's underlying type to the
+# implementation, and the choice only stops mattering while every enumerator is
+# non-negative. This is the precondition that lets the signedness comparison
+# above skip enums, so it has to be enforced, not assumed.
+try "a negative enumerator introduced" src/c.zig \
+'pub const Result = enum(c_int) {
+    ok = 0,' \
+'pub const Result = enum(c_int) {
+    ok = -1,'
+
+# A Zig helper wearing an exported symbol's name. Both sweeps used to let this
+# through: the forward sweep skips non-extern functions, and the reverse sweep
+# asked only whether the name existed. The extern it displaced would be gone
+# with neither direction noticing.
+try "an extern replaced by a Zig helper of the same name" src/c.zig \
+'pub extern fn zjoltBodyGetPosition(body: *const Body, out: *RVec3) void;' \
+'pub fn zjoltBodyGetPosition(body: *const Body, out: *RVec3) void {
+    _ = body;
+    _ = out;
+}'
+
 printf '\ncaught: %d   missed: %d\n' "$pass" "$fail"
 [ $fail -eq 0 ]
