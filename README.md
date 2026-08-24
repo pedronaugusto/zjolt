@@ -27,9 +27,10 @@ Status: **in development, unreleased.** No version is cut yet, and the package
 is not API-stable — it is being grown into complete Jolt bindings, and naming
 and shape may change until it is.
 
-Working today: shapes, bodies, the step, queries and `CharacterVirtual`. Not
-yet exposed: constraints, vehicles, ragdolls, soft bodies, hair, debug draw,
-and the non-virtual `Character`. See [Scope](#scope).
+Working today: every Jolt subsystem, across 677 C entry points — shapes,
+bodies, the step, queries, constraints, both character kinds, vehicles,
+ragdolls, soft bodies, hair, state save and restore, and debug draw. See
+[Scope](#scope) for what that covers and what is deliberately left out.
 
 ## Usage
 
@@ -404,8 +405,19 @@ read-back agrees exactly with the per-body accessors; a locked body reads and
 writes; a rotation that is not unit length is renormalised rather than fatal; a
 body constrained to a plane stays in it; a step that runs out of contact
 constraints says which cache filled; `deinit` refuses while a handle is alive
-and traces why; and a character settles on the floor, reports the body under
-it, walks, and crouches.
+and traces why; a character settles on the floor, reports the body under it,
+walks, crouches, and climbs a step within its stride; a hinge holds its axis
+and its position motor drives toward a target angle; a ragdoll settles under
+gravity; and a character on a ramp is supported by it while one pressed
+against a wall is not.
+
+Two reflective sweeps run alongside those, and they are mechanical on purpose:
+one calls every entry point in the ABI with nulls, and one calls every entry
+point before `init`. Both discover the list by reflection rather than being
+handed it, so an entry point added tomorrow is swept without anyone
+remembering to add it. They prove nothing about whether the physics is right —
+that is what the tests above are for — but they prove no entry point can be
+reached into a crash.
 
 Both diagnostic hooks are exercised, which took some doing — every path that
 would have reached one has been turned into a returned error, so the two that
@@ -431,10 +443,14 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 ```
 
 The default is trimmed rather than complete, which is a concession to what Jolt
-is: 130 translation units, so a configuration is tens of seconds rather than
-the couple of seconds a smaller library would take. On the machine this was
-written on, `--full` is 22 checks in about four minutes from a cold cache; the
+is: 172 translation units per configuration, so one is tens of seconds rather
+than the couple of seconds a smaller library would take. On the machine this
+was written on, `--full` is 22 checks — 14 of them building and running the
+suite, 8 cross-compiling — in about four minutes from a cold cache; the
 default is a few seconds once the cache is warm.
+
+Every number in this README comes from `ci/measurements.sh`, which recomputes
+them. Run it before editing one.
 
 ### Platform coverage
 
@@ -459,41 +475,52 @@ measurement said so.
 
 ## Scope
 
-Exposed today:
+Every Jolt subsystem is bound. 677 C entry points across 18 headers, each one
+mirrored by a Zig wrapper that a reflective cross-check pairs at build time.
 
-- Every shape kind Jolt can construct: the convex primitives (box, sphere,
-  capsule, cylinder, triangle, tapered capsule, tapered cylinder, convex hull),
-  mesh, height field, plane, empty, both compounds, and the decorated shapes
-  (scaled, rotated-translated, offset-centre-of-mass)
-- A mutable compound whose children move, are added and are removed at run time
-- Physics materials, per triangle on a mesh and per quad on a height field
-- Binary shape save and restore, for a collision cook
-- A physics system with broad-phase and object layers and their filters
-- Bodies: create, destroy, add, remove, motion type, teleport, kinematic move,
-  activate, velocities, forces and impulses, shape swap, user data
-- Body locks, read and write
-- The step, with a job system seam
-- Contact and activation listeners
-- Ray casts, shape casts, overlap and point tests, in three forms each:
-  closest-hit, all-hits, and streaming to a callback
-- Broad-phase layer, object layer, body and shape filters on every query
-- `CharacterVirtual` with ground state, stair walking and shape swapping
-- Bulk transform and motion read-back
+- **Shapes** — every kind Jolt can construct: the convex primitives (box,
+  sphere, capsule, cylinder, triangle, tapered capsule, tapered cylinder,
+  convex hull), mesh, height field, plane, empty, both compounds, and the
+  decorated shapes (scaled, rotated-translated, offset-centre-of-mass). A
+  mutable compound whose children move, are added and are removed at run time.
+  Introspection, mesh and height-field read-back, and binary save and restore
+  for a collision cook.
+- **Physics materials**, per triangle on a mesh and per quad on a height
+  field, resolved into every query hit.
+- **The world** — a physics system with broad-phase and object layers and
+  their filters, the step with a job-system seam, contact and activation
+  listeners, step listeners, and the combine callbacks for friction and
+  restitution.
+- **Bodies** — create, destroy, add, remove, motion type, teleport, kinematic
+  move, activate, velocities, forces and impulses, shape swap, user data,
+  collision groups, and read/write body locks. Batched add and remove for
+  bulk work.
+- **Queries** — ray casts, shape casts, overlap and point tests, in
+  closest-hit, all-hits and streaming forms, with broad-phase layer, object
+  layer, body and shape filters on every one. Plus `TransformedShape`: the
+  same queries against a single placed shape, with no physics system at all.
+- **Constraints** — all twelve kinds (fixed, point, hinge, slider, distance,
+  cone, swing-twist, six-DOF, gear, rack and pinion, pulley, path), with their
+  motors, limits, springs and run-time state.
+- **Characters** — `CharacterVirtual` with ground state, stair walking, shape
+  swapping, contact listeners and character-versus-character collision; and
+  the rigid `Character`.
+- **Vehicles** — wheeled and tracked, with the drivetrain (engine,
+  transmission, differentials), wheel pose and force read-back, and manual or
+  automatic gears.
+- **Ragdolls** — skeletons, poses, ragdoll settings and instances, driving to
+  a pose kinematically or with motors, and the body ids to map a contact back
+  to a limb.
+- **Soft bodies** and **hair**, including the compute-backend seam hair needs.
+- **State save and restore**, whole-system or one body at a time, for
+  rollback, replay and determinism checks.
+- **Debug draw**, as arrays of lines, triangles and text for the host to
+  render.
 
-Not exposed, in rough order of likely need:
-
-- Constraints (hinge, slider, six-DOF, and the rest)
-- Sensors as a first-class concept, rather than the `is_sensor` flag
-- `StateRecorder`, for rollback and replay
-- A host job-system implementation, plugged into the existing seam
-- Vehicles, ragdolls, soft bodies
-
-Nothing above is blocked — the sources are vendored and the C-boundary pattern
-is established; they are simply not written yet. Deliberately out of scope: a
-fixed-timestep loop, an entity system, and any coupling to a debug renderer.
-Debug geometry, when it lands, will come out as arrays for the host to draw.
-Those are a host's job, and keeping them out is what makes this package
-reusable.
+Deliberately out of scope, and staying that way: a fixed-timestep loop, an
+entity system, an asset format, and any coupling to a particular renderer.
+Debug geometry comes out as data for the host to draw. Those are a host's job,
+and keeping them out is what makes this package reusable.
 
 ## Contributing
 
