@@ -676,6 +676,198 @@ ZJOLT_API ZJoltResult zjoltConstraintGetBodies(const ZJoltConstraint *constraint
 /// not make.
 ZJOLT_API void zjoltConstraintResetWarmStart(ZJoltConstraint *constraint);
 
+//===----------------------------------------------------------------------===//
+// Per-kind state
+//
+// Each of these narrows the handle to one kind first, and reports
+// ZJOLT_RESULT_INVALID_ARGUMENT when it is a different one. That check is not
+// defensive tidiness: without it, asking a slider for its hinge angle is a
+// cast to the wrong type and a read through it.
+//
+// The lambda accessors report the impulse the solver applied over the last
+// step, in the constraint's own frame. They are what a breakable joint is
+// built from — compare against a budget, and disable the constraint when it is
+// exceeded.
+//===----------------------------------------------------------------------===//
+
+//===----------------------------------------------------------------------===//
+// Fixed
+//===----------------------------------------------------------------------===//
+
+ZJOLT_API ZJoltResult zjoltFixedConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltFixedConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+//===----------------------------------------------------------------------===//
+// Point
+//===----------------------------------------------------------------------===//
+
+/// Moves the attachment point on body 1. Note that the constraint keeps no
+/// record of the rotation between the bodies, so moving a point does not
+/// disturb anything else.
+ZJOLT_API ZJoltResult zjoltPointConstraintSetPoint1(ZJoltConstraint *constraint,
+                                                    ZJoltConstraintSpace space,
+                                                    const ZJoltRVec3 *point);
+ZJOLT_API ZJoltResult zjoltPointConstraintSetPoint2(ZJoltConstraint *constraint,
+                                                    ZJoltConstraintSpace space,
+                                                    const ZJoltRVec3 *point);
+
+/// The attachment point in the body's centre-of-mass space, whichever space it
+/// was given in.
+ZJOLT_API ZJoltResult zjoltPointConstraintGetLocalSpacePoint1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltPointConstraintGetLocalSpacePoint2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+ZJOLT_API ZJoltResult zjoltPointConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+//===----------------------------------------------------------------------===//
+// Hinge
+//===----------------------------------------------------------------------===//
+
+/// Radians, measured from where the two normal axes align.
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetCurrentAngle(
+    const ZJoltConstraint *constraint, float *out);
+
+/// `min` must be in [-pi, 0] and `max` in [0, pi] — Jolt asserts both.
+///
+/// Unlike creation, equal limits are allowed here: a hinge can legitimately be
+/// driven to a locked state and back at run time.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetLimits(ZJoltConstraint *constraint,
+                                                    float min, float max);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLimits(
+    const ZJoltConstraint *constraint, float *out_min, float *out_max);
+
+/// Whether the limits are narrower than a full turn. False means the hinge
+/// spins freely and the limit part is not solved at all.
+ZJOLT_API ZJoltResult zjoltHingeConstraintHasLimits(
+    const ZJoltConstraint *constraint, bool *out);
+
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, const ZJoltSpringSettings *spring);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSpringSettings *out);
+
+/// Replaces the motor's settings. Refused when they are not valid, because the
+/// next `SetMotorState` would assert on exactly that.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out);
+
+/// Switches the motor on or off. This is the call Jolt guards with
+/// `JPH_ASSERT(state == Off || mMotorSettings.IsValid())`; every path that can
+/// set those settings validates them, so the assertion is unreachable from
+/// here.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetMotorState(
+    ZJoltConstraint *constraint, ZJoltMotorState state);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetMotorState(
+    const ZJoltConstraint *constraint, ZJoltMotorState *out);
+
+/// Radians per second, for a velocity motor.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetTargetAngularVelocity(
+    ZJoltConstraint *constraint, float angular_velocity);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetTargetAngularVelocity(
+    const ZJoltConstraint *constraint, float *out);
+
+/// Radians, for a position motor. Jolt CLAMPS this to the current limits, so
+/// reading it back may give a different number than was written.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetTargetAngle(
+    ZJoltConstraint *constraint, float angle);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetTargetAngle(
+    const ZJoltConstraint *constraint, float *out);
+
+/// The same target given as an orientation of body 2 relative to body 1,
+/// which is projected onto the hinge axis and then clamped as above.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetTargetOrientation(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation);
+
+/// Newton metres resisting rotation when no motor is driving.
+ZJOLT_API ZJoltResult zjoltHingeConstraintSetMaxFrictionTorque(
+    ZJoltConstraint *constraint, float torque);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetMaxFrictionTorque(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaMotor(
+    const ZJoltConstraint *constraint, float *out);
+
+//===----------------------------------------------------------------------===//
+// Slider
+//===----------------------------------------------------------------------===//
+
+/// Metres along the slider axis, measured from where the two points coincide.
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetCurrentPosition(
+    const ZJoltConstraint *constraint, float *out);
+
+/// `min` must be <= 0 and `max` >= 0 — Jolt asserts both.
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetLimits(ZJoltConstraint *constraint,
+                                                     float min, float max);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetLimits(
+    const ZJoltConstraint *constraint, float *out_min, float *out_max);
+ZJOLT_API ZJoltResult zjoltSliderConstraintHasLimits(
+    const ZJoltConstraint *constraint, bool *out);
+
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, const ZJoltSpringSettings *spring);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSpringSettings *out);
+
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out);
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetMotorState(
+    ZJoltConstraint *constraint, ZJoltMotorState state);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetMotorState(
+    const ZJoltConstraint *constraint, ZJoltMotorState *out);
+
+/// Metres per second, for a velocity motor.
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetTargetVelocity(
+    ZJoltConstraint *constraint, float velocity);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetTargetVelocity(
+    const ZJoltConstraint *constraint, float *out);
+
+/// Metres, for a position motor. Clamped to the current limits, as a hinge's
+/// target angle is.
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetTargetPosition(
+    ZJoltConstraint *constraint, float position);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetTargetPosition(
+    const ZJoltConstraint *constraint, float *out);
+
+/// Newtons resisting sliding when no motor is driving.
+ZJOLT_API ZJoltResult zjoltSliderConstraintSetMaxFrictionForce(
+    ZJoltConstraint *constraint, float force);
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetMaxFrictionForce(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltSliderConstraintGetTotalLambdaMotor(
+    const ZJoltConstraint *constraint, float *out);
+
+//===----------------------------------------------------------------------===//
+// Distance
+//===----------------------------------------------------------------------===//
+
+/// `min` must be <= `max` — Jolt asserts it.
+///
+/// Unlike the descriptor, a NEGATIVE value here is not a sentinel: this is the
+/// raw setter, and "use the current separation" only exists at creation.
+ZJOLT_API ZJoltResult zjoltDistanceConstraintSetDistance(
+    ZJoltConstraint *constraint, float min, float max);
+ZJOLT_API ZJoltResult zjoltDistanceConstraintGetDistance(
+    const ZJoltConstraint *constraint, float *out_min, float *out_max);
+
+ZJOLT_API ZJoltResult zjoltDistanceConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, const ZJoltSpringSettings *spring);
+ZJOLT_API ZJoltResult zjoltDistanceConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSpringSettings *out);
+
+ZJOLT_API ZJoltResult zjoltDistanceConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

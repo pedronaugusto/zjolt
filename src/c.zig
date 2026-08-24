@@ -1187,3 +1187,56 @@ pub extern fn zjoltConstraintSetNumPositionStepsOverride(constraint: *Constraint
 pub extern fn zjoltConstraintGetNumPositionStepsOverride(constraint: *const Constraint) u32;
 pub extern fn zjoltConstraintGetBodies(constraint: *const Constraint, out_body1: ?*BodyId, out_body2: ?*BodyId) Result;
 pub extern fn zjoltConstraintResetWarmStart(constraint: *Constraint) void;
+
+pub extern fn zjoltFixedConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltFixedConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltPointConstraintSetPoint1(constraint: *Constraint, space: ConstraintSpace, point: *const RVec3) Result;
+pub extern fn zjoltPointConstraintSetPoint2(constraint: *Constraint, space: ConstraintSpace, point: *const RVec3) Result;
+pub extern fn zjoltPointConstraintGetLocalSpacePoint1(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltPointConstraintGetLocalSpacePoint2(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltPointConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltHingeConstraintGetCurrentAngle(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltHingeConstraintSetLimits(constraint: *Constraint, min: f32, max: f32) Result;
+pub extern fn zjoltHingeConstraintGetLimits(constraint: *const Constraint, out_min: ?*f32, out_max: ?*f32) Result;
+pub extern fn zjoltHingeConstraintHasLimits(constraint: *const Constraint, out: *bool) Result;
+pub extern fn zjoltHingeConstraintSetLimitsSpringSettings(constraint: *Constraint, spring: *const SpringSettings) Result;
+pub extern fn zjoltHingeConstraintGetLimitsSpringSettings(constraint: *const Constraint, out: *SpringSettings) Result;
+pub extern fn zjoltHingeConstraintSetMotorSettings(constraint: *Constraint, motor: *const MotorSettings) Result;
+pub extern fn zjoltHingeConstraintGetMotorSettings(constraint: *const Constraint, out: *MotorSettings) Result;
+pub extern fn zjoltHingeConstraintSetMotorState(constraint: *Constraint, state: MotorState) Result;
+pub extern fn zjoltHingeConstraintGetMotorState(constraint: *const Constraint, out: *MotorState) Result;
+pub extern fn zjoltHingeConstraintSetTargetAngularVelocity(constraint: *Constraint, angular_velocity: f32) Result;
+pub extern fn zjoltHingeConstraintGetTargetAngularVelocity(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltHingeConstraintSetTargetAngle(constraint: *Constraint, angle: f32) Result;
+pub extern fn zjoltHingeConstraintGetTargetAngle(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltHingeConstraintSetTargetOrientation(constraint: *Constraint, orientation: *const Quat) Result;
+pub extern fn zjoltHingeConstraintSetMaxFrictionTorque(constraint: *Constraint, torque: f32) Result;
+pub extern fn zjoltHingeConstraintGetMaxFrictionTorque(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltHingeConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltHingeConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltSliderConstraintGetCurrentPosition(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSliderConstraintSetLimits(constraint: *Constraint, min: f32, max: f32) Result;
+pub extern fn zjoltSliderConstraintGetLimits(constraint: *const Constraint, out_min: ?*f32, out_max: ?*f32) Result;
+pub extern fn zjoltSliderConstraintHasLimits(constraint: *const Constraint, out: *bool) Result;
+pub extern fn zjoltSliderConstraintSetLimitsSpringSettings(constraint: *Constraint, spring: *const SpringSettings) Result;
+pub extern fn zjoltSliderConstraintGetLimitsSpringSettings(constraint: *const Constraint, out: *SpringSettings) Result;
+pub extern fn zjoltSliderConstraintSetMotorSettings(constraint: *Constraint, motor: *const MotorSettings) Result;
+pub extern fn zjoltSliderConstraintGetMotorSettings(constraint: *const Constraint, out: *MotorSettings) Result;
+pub extern fn zjoltSliderConstraintSetMotorState(constraint: *Constraint, state: MotorState) Result;
+pub extern fn zjoltSliderConstraintGetMotorState(constraint: *const Constraint, out: *MotorState) Result;
+pub extern fn zjoltSliderConstraintSetTargetVelocity(constraint: *Constraint, velocity: f32) Result;
+pub extern fn zjoltSliderConstraintGetTargetVelocity(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSliderConstraintSetTargetPosition(constraint: *Constraint, position: f32) Result;
+pub extern fn zjoltSliderConstraintGetTargetPosition(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSliderConstraintSetMaxFrictionForce(constraint: *Constraint, force: f32) Result;
+pub extern fn zjoltSliderConstraintGetMaxFrictionForce(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSliderConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltDistanceConstraintSetDistance(constraint: *Constraint, min: f32, max: f32) Result;
+pub extern fn zjoltDistanceConstraintGetDistance(constraint: *const Constraint, out_min: ?*f32, out_max: ?*f32) Result;
+pub extern fn zjoltDistanceConstraintSetLimitsSpringSettings(constraint: *Constraint, spring: *const SpringSettings) Result;
+pub extern fn zjoltDistanceConstraintGetLimitsSpringSettings(constraint: *const Constraint, out: *SpringSettings) Result;
+pub extern fn zjoltDistanceConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *f32) Result;

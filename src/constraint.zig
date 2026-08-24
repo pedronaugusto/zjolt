@@ -436,9 +436,409 @@ pub const Constraint = struct {
     pub fn resetWarmStart(self: Constraint) void {
         c.zjoltConstraintResetWarmStart(self.handle);
     }
+
+    //-------------------------------------------------------------------------
+    // Per-kind state
+    //
+    // Each of these is `error.InvalidArgument` on a constraint of a different
+    // kind. `subType` is what says which one this is.
+    //
+    // The `totalLambda*` readings are the impulse the solver applied over the
+    // last step, in the constraint's own frame — what a breakable joint is
+    // built from.
+    //-------------------------------------------------------------------------
+
+    pub fn fixedTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltFixedConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn fixedTotalLambdaRotation(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltFixedConstraintGetTotalLambdaRotation(self.handle, &out));
+        return out;
+    }
+
+    /// Moves the attachment point on body 1. The constraint keeps no record of
+    /// the rotation between the bodies, so this disturbs nothing else.
+    pub fn pointSetPoint1(self: Constraint, space: Space, point: math.RVec3) err.Error!void {
+        try err.check(c.zjoltPointConstraintSetPoint1(self.handle, space, &point));
+    }
+
+    pub fn pointSetPoint2(self: Constraint, space: Space, point: math.RVec3) err.Error!void {
+        try err.check(c.zjoltPointConstraintSetPoint2(self.handle, space, &point));
+    }
+
+    /// The attachment point in the body's centre-of-mass space, whichever
+    /// space it was given in.
+    pub fn pointLocalSpacePoint1(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltPointConstraintGetLocalSpacePoint1(self.handle, &out));
+        return out;
+    }
+
+    pub fn pointLocalSpacePoint2(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltPointConstraintGetLocalSpacePoint2(self.handle, &out));
+        return out;
+    }
+
+    pub fn pointTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltPointConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    /// Radians, measured from where the two normal axes align.
+    pub fn hingeCurrentAngle(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetCurrentAngle(self.handle, &out));
+        return out;
+    }
+
+    /// `min` must be in [-pi, 0] and `max` in [0, pi] — Jolt asserts both.
+    pub fn hingeSetLimits(self: Constraint, min: f32, max: f32) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetLimits(self.handle, min, max));
+    }
+
+    pub fn hingeLimits(self: Constraint) err.Error!struct { min: f32, max: f32 } {
+        var min: f32 = 0;
+        var max: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetLimits(self.handle, &min, &max));
+        return .{ .min = min, .max = max };
+    }
+
+    /// False means the hinge spins freely and the limit part is not solved.
+    pub fn hingeHasLimits(self: Constraint) err.Error!bool {
+        var out: bool = false;
+        try err.check(c.zjoltHingeConstraintHasLimits(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeSetLimitsSpring(self: Constraint, spring: SpringSettings) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetLimitsSpringSettings(self.handle, &spring));
+    }
+
+    pub fn hingeLimitsSpring(self: Constraint) err.Error!SpringSettings {
+        var out: SpringSettings = .{};
+        try err.check(c.zjoltHingeConstraintGetLimitsSpringSettings(self.handle, &out));
+        return out;
+    }
+
+    /// Refused when the settings are not valid, because the next
+    /// `hingeSetMotorState` would assert on exactly that.
+    pub fn hingeSetMotorSettings(self: Constraint, motor: MotorSettings) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetMotorSettings(self.handle, &motor));
+    }
+
+    pub fn hingeMotorSettings(self: Constraint) err.Error!MotorSettings {
+        var out: MotorSettings = .{};
+        try err.check(c.zjoltHingeConstraintGetMotorSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeSetMotorState(self: Constraint, state: MotorState) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetMotorState(self.handle, state));
+    }
+
+    pub fn hingeMotorState(self: Constraint) err.Error!MotorState {
+        var out: MotorState = .off;
+        try err.check(c.zjoltHingeConstraintGetMotorState(self.handle, &out));
+        return out;
+    }
+
+    /// Radians per second, for a velocity motor.
+    pub fn hingeSetTargetAngularVelocity(self: Constraint, velocity: f32) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetTargetAngularVelocity(self.handle, velocity));
+    }
+
+    pub fn hingeTargetAngularVelocity(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetTargetAngularVelocity(self.handle, &out));
+        return out;
+    }
+
+    /// Radians, for a position motor. Jolt CLAMPS this to the current limits,
+    /// so reading it back may give a different number.
+    pub fn hingeSetTargetAngle(self: Constraint, angle: f32) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetTargetAngle(self.handle, angle));
+    }
+
+    pub fn hingeTargetAngle(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetTargetAngle(self.handle, &out));
+        return out;
+    }
+
+    /// The same target as an orientation of body 2 relative to body 1,
+    /// projected onto the hinge axis and clamped as above.
+    pub fn hingeSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetTargetOrientation(self.handle, &orientation));
+    }
+
+    pub fn hingeSetMaxFrictionTorque(self: Constraint, torque: f32) err.Error!void {
+        try err.check(c.zjoltHingeConstraintSetMaxFrictionTorque(self.handle, torque));
+    }
+
+    pub fn hingeMaxFrictionTorque(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetMaxFrictionTorque(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltHingeConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn hingeTotalLambdaMotor(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltHingeConstraintGetTotalLambdaMotor(self.handle, &out));
+        return out;
+    }
+
+    /// Metres along the slider axis, from where the two points coincide.
+    pub fn sliderCurrentPosition(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetCurrentPosition(self.handle, &out));
+        return out;
+    }
+
+    /// `min` must be <= 0 and `max` >= 0 — Jolt asserts both.
+    pub fn sliderSetLimits(self: Constraint, min: f32, max: f32) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetLimits(self.handle, min, max));
+    }
+
+    pub fn sliderLimits(self: Constraint) err.Error!struct { min: f32, max: f32 } {
+        var min: f32 = 0;
+        var max: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetLimits(self.handle, &min, &max));
+        return .{ .min = min, .max = max };
+    }
+
+    pub fn sliderHasLimits(self: Constraint) err.Error!bool {
+        var out: bool = false;
+        try err.check(c.zjoltSliderConstraintHasLimits(self.handle, &out));
+        return out;
+    }
+
+    pub fn sliderSetLimitsSpring(self: Constraint, spring: SpringSettings) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetLimitsSpringSettings(self.handle, &spring));
+    }
+
+    pub fn sliderLimitsSpring(self: Constraint) err.Error!SpringSettings {
+        var out: SpringSettings = .{};
+        try err.check(c.zjoltSliderConstraintGetLimitsSpringSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn sliderSetMotorSettings(self: Constraint, motor: MotorSettings) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetMotorSettings(self.handle, &motor));
+    }
+
+    pub fn sliderMotorSettings(self: Constraint) err.Error!MotorSettings {
+        var out: MotorSettings = .{};
+        try err.check(c.zjoltSliderConstraintGetMotorSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn sliderSetMotorState(self: Constraint, state: MotorState) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetMotorState(self.handle, state));
+    }
+
+    pub fn sliderMotorState(self: Constraint) err.Error!MotorState {
+        var out: MotorState = .off;
+        try err.check(c.zjoltSliderConstraintGetMotorState(self.handle, &out));
+        return out;
+    }
+
+    /// Metres per second, for a velocity motor.
+    pub fn sliderSetTargetVelocity(self: Constraint, velocity: f32) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetTargetVelocity(self.handle, velocity));
+    }
+
+    pub fn sliderTargetVelocity(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetTargetVelocity(self.handle, &out));
+        return out;
+    }
+
+    /// Metres, for a position motor. Clamped to the current limits.
+    pub fn sliderSetTargetPosition(self: Constraint, position: f32) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetTargetPosition(self.handle, position));
+    }
+
+    pub fn sliderTargetPosition(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetTargetPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn sliderSetMaxFrictionForce(self: Constraint, force: f32) err.Error!void {
+        try err.check(c.zjoltSliderConstraintSetMaxFrictionForce(self.handle, force));
+    }
+
+    pub fn sliderMaxFrictionForce(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetMaxFrictionForce(self.handle, &out));
+        return out;
+    }
+
+    pub fn sliderTotalLambdaMotor(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSliderConstraintGetTotalLambdaMotor(self.handle, &out));
+        return out;
+    }
+
+    /// `min` must be <= `max` — Jolt asserts it. Unlike the descriptor, a
+    /// negative value here is not a sentinel: this is the raw setter.
+    pub fn distanceSetDistance(self: Constraint, min: f32, max: f32) err.Error!void {
+        try err.check(c.zjoltDistanceConstraintSetDistance(self.handle, min, max));
+    }
+
+    pub fn distanceDistance(self: Constraint) err.Error!struct { min: f32, max: f32 } {
+        var min: f32 = 0;
+        var max: f32 = 0;
+        try err.check(c.zjoltDistanceConstraintGetDistance(self.handle, &min, &max));
+        return .{ .min = min, .max = max };
+    }
+
+    pub fn distanceSetLimitsSpring(self: Constraint, spring: SpringSettings) err.Error!void {
+        try err.check(c.zjoltDistanceConstraintSetLimitsSpringSettings(self.handle, &spring));
+    }
+
+    pub fn distanceLimitsSpring(self: Constraint) err.Error!SpringSettings {
+        var out: SpringSettings = .{};
+        try err.check(c.zjoltDistanceConstraintGetLimitsSpringSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn distanceTotalLambdaPosition(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltDistanceConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
 };
 
 /// How many constraints are currently added to `system`.
 pub fn count(system: system_mod.PhysicsSystem) u32 {
     return c.zjoltPhysicsSystemGetNumConstraints(system.handle);
+}
+
+//=============================================================================
+// The behavioural test
+//
+// One test, and it asserts the thing the subsystem exists to do: a hinge
+// takes five degrees of freedom away and leaves one. Everything else in this
+// module is covered mechanically — `misuse_sweep_test.zig` calls every entry
+// point with nulls and before init, and `abi_check.zig` pairs every
+// declaration here against the header.
+//=============================================================================
+
+const zjolt = @import("zjolt.zig");
+
+const TestLayers = struct {
+    pub const static: system_mod.ObjectLayer = 0;
+    pub const moving: system_mod.ObjectLayer = 1;
+
+    pub const bp_static: system_mod.BroadPhaseLayer = 0;
+    pub const bp_moving: system_mod.BroadPhaseLayer = 1;
+
+    pub fn broadPhaseLayerCount() u32 {
+        return 2;
+    }
+
+    pub fn broadPhaseLayerFor(layer: system_mod.ObjectLayer) system_mod.BroadPhaseLayer {
+        return if (layer == static) bp_static else bp_moving;
+    }
+
+    pub fn objectCanCollideWithBroadPhase(
+        object: system_mod.ObjectLayer,
+        broad: system_mod.BroadPhaseLayer,
+    ) bool {
+        return if (object == static) broad == bp_moving else true;
+    }
+
+    pub fn objectsCanCollide(a: system_mod.ObjectLayer, b: system_mod.ObjectLayer) bool {
+        return if (a == static) b == moving else true;
+    }
+};
+
+test "a hinge constrains a body to rotation about its axis" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const jobs = try zjolt.JobSystem.initSingleThreaded(c.max_physics_jobs);
+    defer jobs.deinit();
+
+    const system = try zjolt.PhysicsSystem.init(.{
+        .layers = zjolt.layersFromType(TestLayers),
+        .max_bodies = 64,
+    });
+    defer system.deinit();
+
+    // No gravity: the only thing acting on the body is the impulse below and
+    // the hinge's reaction to it, which is what the assertions are about.
+    system.setGravity(zjolt.vec3(0, 0, 0));
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.5, 0.5), .{});
+    defer shape.release();
+
+    const anchor = zjolt.rvec3(0, 4, 0);
+    const door = try system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = TestLayers.moving,
+        .motion_type = .dynamic,
+        .position = anchor,
+    }, .activate);
+
+    // Hinged to the world about Y, at the body's own position. Body 1 is the
+    // world, so the hinge frame is the world frame.
+    var hinge = try Constraint.initHinge(system, world_body, door, .{
+        .point1 = anchor,
+        .point2 = anchor,
+        .hinge_axis1 = zjolt.vec3(0, 1, 0),
+        .normal_axis1 = zjolt.vec3(1, 0, 0),
+        .hinge_axis2 = zjolt.vec3(0, 1, 0),
+        .normal_axis2 = zjolt.vec3(1, 0, 0),
+    });
+    defer hinge.deinit();
+
+    try std.testing.expectEqual(SubType.hinge, hinge.subType());
+    try std.testing.expectEqual(@as(u32, 0), count(system));
+
+    try hinge.addTo(system);
+    try std.testing.expect(hinge.isAddedTo(system));
+    try std.testing.expectEqual(@as(u32, 1), count(system));
+
+    // Twist about all three axes at once. Only the Y component may survive.
+    system.bodies().addAngularImpulse(door, zjolt.vec3(1000, 1000, 1000));
+
+    var elapsed: f32 = 0;
+    const dt: f32 = 1.0 / 60.0;
+    while (elapsed < 0.5) : (elapsed += dt) {
+        _ = try system.step(dt, 1, jobs);
+    }
+
+    const angular = system.bodies().getAngularVelocity(door);
+    try std.testing.expect(angular.y > 1.0);
+    try std.testing.expect(@abs(angular.x) < 5.0e-2);
+    try std.testing.expect(@abs(angular.z) < 5.0e-2);
+
+    // And the point stays where it was pinned: a hinge removes all three
+    // translations too.
+    const transform = system.bodies().getTransform(door);
+    try std.testing.expect(@abs(transform.position.x - anchor.x) < 1.0e-2);
+    try std.testing.expect(@abs(transform.position.y - anchor.y) < 1.0e-2);
+    try std.testing.expect(@abs(transform.position.z - anchor.z) < 1.0e-2);
+
+    // The hinge angle is a real reading, not a stub: the body has turned.
+    try std.testing.expect(@abs(try hinge.hingeCurrentAngle()) > 0.1);
+
+    // Removing gives the system's reference back and stops the solving.
+    try hinge.removeFrom(system);
+    try std.testing.expect(!hinge.isAddedTo(system));
+    try std.testing.expectEqual(@as(u32, 0), count(system));
 }

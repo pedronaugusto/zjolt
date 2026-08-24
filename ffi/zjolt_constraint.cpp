@@ -1487,4 +1487,558 @@ ZJoltResult zjoltConstraintCreatePath(ZJoltPhysicsSystem *system,
       });
 }
 
+//===----------------------------------------------------------------------===//
+// Per-kind state
+//
+// Every accessor below opens the same way: ZJOLT_ENTER with its outputs, then
+// ZJOLT_NARROW, which refuses a NULL handle and a handle of the wrong kind in
+// one step. Spelled as a macro because it has to return from the caller, and
+// because a per-kind check that can be half-written is one that eventually
+// will be.
+//===----------------------------------------------------------------------===//
+
+#define ZJOLT_NARROW(TYPE, SUBTYPE, VAR)                                  \
+  JPH::TYPE *VAR = nullptr;                                               \
+  do {                                                                    \
+    const ZJoltResult zjolt_narrowed_ =                                   \
+        Narrow<JPH::TYPE>(constraint, JPH::EConstraintSubType::SUBTYPE,   \
+                          "constraint is not a " #TYPE, &VAR);            \
+    if (zjolt_narrowed_ != ZJOLT_RESULT_OK) return zjolt_narrowed_;       \
+  } while (false)
+
+//===----------------------------------------------------------------------===//
+// Fixed
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltFixedConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(FixedConstraint, Fixed, fixed);
+  *out = zjolt::ToC(fixed->GetTotalLambdaPosition());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltFixedConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(FixedConstraint, Fixed, fixed);
+  *out = zjolt::ToC(fixed->GetTotalLambdaRotation());
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Point
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltPointConstraintSetPoint1(ZJoltConstraint *constraint,
+                                          ZJoltConstraintSpace space,
+                                          const ZJoltRVec3 *point) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(point)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PointConstraint, Point, joint);
+
+  JPH::EConstraintSpace jolt_space;
+  const ZJoltResult converted = ToJoltSpace(space, &jolt_space);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+  const ZJoltResult checked = CheckPoint(*point, "point must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+
+  joint->SetPoint1(jolt_space, zjolt::ToJoltR(*point));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPointConstraintSetPoint2(ZJoltConstraint *constraint,
+                                          ZJoltConstraintSpace space,
+                                          const ZJoltRVec3 *point) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(point)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PointConstraint, Point, joint);
+
+  JPH::EConstraintSpace jolt_space;
+  const ZJoltResult converted = ToJoltSpace(space, &jolt_space);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+  const ZJoltResult checked = CheckPoint(*point, "point must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+
+  joint->SetPoint2(jolt_space, zjolt::ToJoltR(*point));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPointConstraintGetLocalSpacePoint1(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PointConstraint, Point, joint);
+  *out = zjolt::ToC(joint->GetLocalSpacePoint1());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPointConstraintGetLocalSpacePoint2(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PointConstraint, Point, joint);
+  *out = zjolt::ToC(joint->GetLocalSpacePoint2());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPointConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(PointConstraint, Point, joint);
+  *out = zjolt::ToC(joint->GetTotalLambdaPosition());
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Hinge
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltHingeConstraintGetCurrentAngle(const ZJoltConstraint *constraint,
+                                                float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->GetCurrentAngle();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetLimits(ZJoltConstraint *constraint, float min,
+                                          float max) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  const ZJoltResult checked = CheckHingeLimits(min, max);
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  hinge->SetLimits(min, max);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLimits(const ZJoltConstraint *constraint,
+                                          float *out_min, float *out_max) {
+  ZJOLT_ENTER(out_min, out_max);
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  if (out_min != nullptr) *out_min = hinge->GetLimitsMin();
+  if (out_max != nullptr) *out_max = hinge->GetLimitsMax();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintHasLimits(const ZJoltConstraint *constraint,
+                                          bool *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->HasLimits();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, const ZJoltSpringSettings *spring) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(spring)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+
+  JPH::SpringSettings settings;
+  const ZJoltResult converted = ToJoltSpring(*spring, &settings);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  hinge->SetLimitsSpringSettings(settings);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSpringSettings *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = ToCSpring(hinge->GetLimitsSpringSettings());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(motor)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+
+  JPH::MotorSettings settings;
+  const ZJoltResult converted = ToJoltMotor(*motor, &settings);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  hinge->GetMotorSettings() = settings;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = ToCMotor(hinge->GetMotorSettings());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetMotorState(ZJoltConstraint *constraint,
+                                              ZJoltMotorState state) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+
+  JPH::EMotorState jolt_state;
+  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  // The assertion this stands in for. Every route to these settings validates
+  // them, so reaching this is a bug here rather than in the call — but a
+  // returned error is still the right way to say so.
+  if (jolt_state != JPH::EMotorState::Off && !hinge->GetMotorSettings().IsValid()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "the hinge's motor settings are not valid, so the "
+                           "motor cannot be switched on");
+  }
+
+  hinge->SetMotorState(jolt_state);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetMotorState(const ZJoltConstraint *constraint,
+                                              ZJoltMotorState *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = ToCMotorState(hinge->GetMotorState());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetTargetAngularVelocity(
+    ZJoltConstraint *constraint, float angular_velocity) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  const ZJoltResult checked =
+      CheckFloat(angular_velocity, "angular_velocity must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  hinge->SetTargetAngularVelocity(angular_velocity);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetTargetAngularVelocity(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->GetTargetAngularVelocity();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetTargetAngle(ZJoltConstraint *constraint,
+                                               float angle) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  const ZJoltResult checked = CheckFloat(angle, "angle must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  hinge->SetTargetAngle(angle);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetTargetAngle(const ZJoltConstraint *constraint,
+                                               float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->GetTargetAngle();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetTargetOrientation(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(orientation)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  hinge->SetTargetOrientationBS(zjolt::ToJoltRotation(*orientation));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintSetMaxFrictionTorque(ZJoltConstraint *constraint,
+                                                     float torque) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  const ZJoltResult checked = CheckFloat(torque, "torque must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  hinge->SetMaxFrictionTorque(torque);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetMaxFrictionTorque(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->GetMaxFrictionTorque();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = zjolt::ToC(hinge->GetTotalLambdaPosition());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHingeConstraintGetTotalLambdaMotor(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
+  *out = hinge->GetTotalLambdaMotor();
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Slider
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSliderConstraintGetCurrentPosition(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->GetCurrentPosition();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetLimits(ZJoltConstraint *constraint,
+                                           float min, float max) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  const ZJoltResult checked = CheckSliderLimits(min, max);
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  slider->SetLimits(min, max);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetLimits(const ZJoltConstraint *constraint,
+                                           float *out_min, float *out_max) {
+  ZJOLT_ENTER(out_min, out_max);
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  if (out_min != nullptr) *out_min = slider->GetLimitsMin();
+  if (out_max != nullptr) *out_max = slider->GetLimitsMax();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintHasLimits(const ZJoltConstraint *constraint,
+                                           bool *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->HasLimits();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, const ZJoltSpringSettings *spring) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(spring)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+
+  JPH::SpringSettings settings;
+  const ZJoltResult converted = ToJoltSpring(*spring, &settings);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  slider->SetLimitsSpringSettings(settings);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSpringSettings *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = ToCSpring(slider->GetLimitsSpringSettings());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(motor)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+
+  JPH::MotorSettings settings;
+  const ZJoltResult converted = ToJoltMotor(*motor, &settings);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  slider->GetMotorSettings() = settings;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = ToCMotor(slider->GetMotorSettings());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetMotorState(ZJoltConstraint *constraint,
+                                               ZJoltMotorState state) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+
+  JPH::EMotorState jolt_state;
+  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  if (jolt_state != JPH::EMotorState::Off &&
+      !slider->GetMotorSettings().IsValid()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "the slider's motor settings are not valid, so the "
+                           "motor cannot be switched on");
+  }
+
+  slider->SetMotorState(jolt_state);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetMotorState(const ZJoltConstraint *constraint,
+                                               ZJoltMotorState *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = ToCMotorState(slider->GetMotorState());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetTargetVelocity(ZJoltConstraint *constraint,
+                                                   float velocity) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  const ZJoltResult checked = CheckFloat(velocity, "velocity must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  slider->SetTargetVelocity(velocity);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetTargetVelocity(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->GetTargetVelocity();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetTargetPosition(ZJoltConstraint *constraint,
+                                                   float position) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  const ZJoltResult checked = CheckFloat(position, "position must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  slider->SetTargetPosition(position);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetTargetPosition(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->GetTargetPosition();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintSetMaxFrictionForce(ZJoltConstraint *constraint,
+                                                     float force) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  const ZJoltResult checked = CheckFloat(force, "force must be finite");
+  if (checked != ZJOLT_RESULT_OK) return checked;
+  slider->SetMaxFrictionForce(force);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetMaxFrictionForce(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->GetMaxFrictionForce();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSliderConstraintGetTotalLambdaMotor(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(SliderConstraint, Slider, slider);
+  *out = slider->GetTotalLambdaMotor();
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Distance
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltDistanceConstraintSetDistance(ZJoltConstraint *constraint,
+                                               float min, float max) {
+  ZJOLT_ENTER();
+  ZJOLT_NARROW(DistanceConstraint, Distance, distance);
+
+  if (!IsFinite(min) || !IsFinite(max)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "distance limits must be finite");
+  }
+  if (min > max) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "min distance exceeds max distance");
+  }
+
+  distance->SetDistance(min, max);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltDistanceConstraintGetDistance(const ZJoltConstraint *constraint,
+                                               float *out_min, float *out_max) {
+  ZJOLT_ENTER(out_min, out_max);
+  ZJOLT_NARROW(DistanceConstraint, Distance, distance);
+  if (out_min != nullptr) *out_min = distance->GetMinDistance();
+  if (out_max != nullptr) *out_max = distance->GetMaxDistance();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltDistanceConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, const ZJoltSpringSettings *spring) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(spring)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(DistanceConstraint, Distance, distance);
+
+  JPH::SpringSettings settings;
+  const ZJoltResult converted = ToJoltSpring(*spring, &settings);
+  if (converted != ZJOLT_RESULT_OK) return converted;
+
+  distance->SetLimitsSpringSettings(settings);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltDistanceConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSpringSettings *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(DistanceConstraint, Distance, distance);
+  *out = ToCSpring(distance->GetLimitsSpringSettings());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltDistanceConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_NARROW(DistanceConstraint, Distance, distance);
+  *out = distance->GetTotalLambdaPosition();
+  return ZJOLT_RESULT_OK;
+}
+
 }  // extern "C"
