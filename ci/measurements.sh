@@ -54,6 +54,11 @@ zig_tests=$(zig build test --summary all 2>&1 |
 printf 'zig tests (as run)                    %s\n' "${zig_tests:-unknown}"
 printf 'test files                            %s\n' \
   "$(ls src/*_test.zig 2>/dev/null | wc -l | tr -d ' ')"
+# Two debug-draw tests are gated on -Ddebug_renderer, so the default run skips
+# one half of each. Reported separately rather than left to look like a gap.
+printf 'zig tests (debug renderer on)         %s\n' \
+  "$(zig build test -Ddebug_renderer=true --summary all 2>&1 |
+      sed -n 's/.*run test zjolt-tests \([0-9]*\) pass.*/\1/p' | head -1)"
 printf 'C smoke assertions                    %s\n' \
   "$(grep -c 'CHECK\|assert' tests/c_smoke.c 2>/dev/null || echo 0)"
 
