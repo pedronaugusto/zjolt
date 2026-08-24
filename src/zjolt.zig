@@ -66,6 +66,8 @@ pub const Vec3 = math_mod.Vec3;
 pub const RVec3 = math_mod.RVec3;
 pub const Quat = math_mod.Quat;
 pub const Real = math_mod.Real;
+pub const Mat44 = math_mod.Mat44;
+pub const RMat44 = math_mod.RMat44;
 pub const AABox = math_mod.AABox;
 pub const MassProperties = math_mod.MassProperties;
 pub const ShapeStats = math_mod.ShapeStats;
@@ -77,6 +79,8 @@ pub const toRVec3 = math_mod.toRVec3;
 pub const vec3_zero = math_mod.vec3_zero;
 pub const rvec3_zero = math_mod.rvec3_zero;
 pub const quat_identity = math_mod.quat_identity;
+pub const mat44_identity = math_mod.mat44_identity;
+pub const rmat44_identity = math_mod.rmat44_identity;
 pub const gravity_earth = math_mod.gravity_earth;
 
 pub const Shape = shape_mod.Shape;

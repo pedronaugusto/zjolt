@@ -11,10 +11,6 @@ nobody can evaluate.
   set after creation through `zjoltBodySetCollisionGroup`. That is a real
   asymmetry with every other body property, and it applies to
   `ZJoltSoftBodyDesc` too.
-- **No `Mat44` in the ABI.** `BodyInterface::GetWorldTransform`,
-  `GetCenterOfMassTransform` and `GetInverseInertia` are unbindable without one.
-  A 4x4 matrix POD in `ffi/zjolt_core.h` unblocks all three, and the `Real`
-  variant has to follow `-Ddouble_precision` the way `ZJoltRVec3` does.
 - **Two spellings of one concept.** `ZJoltRagdollSwingType` and `ZJoltSwingType`
   both mirror `JPH::ESwingType`. They were added by separate changes and do not
   collide, but a caller should not have to know which one an entry point wants.
