@@ -38,6 +38,8 @@ const ShapeCastHit = query_mod.ShapeCastHit;
 const CollideShapeHit = query_mod.CollideShapeHit;
 const CollidePointHit = query_mod.CollidePointHit;
 const RayCastSettings = query_mod.RayCastSettings;
+const ShapeCastSettings = query_mod.ShapeCastSettings;
+const CollideShapeSettings = query_mod.CollideShapeSettings;
 
 /// The one filter a query against a single shape can still take. There is no
 /// body filter, no layer filter and no broad-phase filter here, because there
@@ -378,9 +380,10 @@ pub const TransformedShape = struct {
         rotation: math.Quat = math.quat_identity,
         /// Null means (1, 1, 1).
         scale: ?math.Vec3 = null,
-        /// Reports near misses too, with a negative penetration depth. Useful
-        /// for "is there anything within a metre of this".
-        max_separation_distance: f32 = 0,
+        /// Null takes Jolt's defaults. `max_separation_distance` is one of its
+        /// fields — above zero it reports near misses too, with a negative
+        /// penetration depth, for "is there anything within a metre of this".
+        settings: ?CollideShapeSettings = null,
         /// Contact points come back RELATIVE TO this — they are floats, and in
         /// a double-precision world an absolute contact point would not
         /// survive the conversion. Add it back if world space is what you
@@ -401,8 +404,8 @@ pub const TransformedShape = struct {
             optionalPtr(math.Vec3, &overlap.scale),
             &overlap.position,
             &overlap.rotation,
-            overlap.max_separation_distance,
             &overlap.base_offset,
+            optionalPtr(CollideShapeSettings, &overlap.settings),
             filter,
             null,
             0,
@@ -427,8 +430,8 @@ pub const TransformedShape = struct {
             optionalPtr(math.Vec3, &overlap.scale),
             &overlap.position,
             &overlap.rotation,
-            overlap.max_separation_distance,
             &overlap.base_offset,
+            optionalPtr(CollideShapeSettings, &overlap.settings),
             filter,
             buffer.ptr,
             @intCast(buffer.len),
@@ -455,15 +458,17 @@ pub const TransformedShape = struct {
         /// Contact points come back relative to this, for the reason
         /// `Overlap.base_offset` gives.
         base_offset: math.RVec3 = math.rvec3_zero,
+        /// Null takes Jolt's defaults, which IGNORE back faces — so a sweep
+        /// starting inside this shape reports nothing at all. Set
+        /// `back_face_mode_triangles` to `.collide` against a mesh, or
+        /// `back_face_mode_convex` against anything else, when the question is
+        /// whether the placement is clear.
+        settings: ?ShapeCastSettings = null,
     };
 
     /// Sweeps `cast.shape` along `cast.direction` and reports the nearest hit
     /// against this one. The centre of mass at the hit is the swept shape's
     /// starting centre of mass plus `hit.fraction * cast.direction`.
-    ///
-    /// Back faces are collided with or ignored by Jolt's own
-    /// `ShapeCastSettings` defaults; there is no settings parameter on this
-    /// side to override them with.
     pub fn castShapeClosest(
         self: TransformedShape,
         cast: ShapeCast,
@@ -479,6 +484,7 @@ pub const TransformedShape = struct {
             &cast.rotation,
             &cast.direction,
             &cast.base_offset,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filter,
             &hit,
             &did_hit,
@@ -500,6 +506,7 @@ pub const TransformedShape = struct {
             &cast.rotation,
             &cast.direction,
             &cast.base_offset,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filter,
             null,
             0,
@@ -525,6 +532,7 @@ pub const TransformedShape = struct {
             &cast.rotation,
             &cast.direction,
             &cast.base_offset,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filter,
             buffer.ptr,
             @intCast(buffer.len),

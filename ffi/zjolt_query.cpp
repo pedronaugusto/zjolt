@@ -464,18 +464,6 @@ ZJoltResult CheckShapePair(const JPH::Shape *shape1, JPH::Vec3Arg scale1,
   return ZJOLT_RESULT_OK;
 }
 
-/// EPA asserts its tolerance is at least FLT_EPSILON
-/// (EPAPenetrationDepth.h:154), and these settings structs are the first place
-/// in this ABI where a caller can set it at all.
-ZJoltResult CheckPenetrationTolerance(float tolerance) {
-  // Written as an accept rather than a reject so that a NaN is refused too.
-  if (tolerance >= FLT_EPSILON) return ZJOLT_RESULT_OK;
-  return zjolt::SetError(
-      ZJOLT_RESULT_INVALID_ARGUMENT,
-      "penetration_tolerance is below FLT_EPSILON; Jolt asserts on that "
-      "rather than honouring it, and a smaller one only buys iterations");
-}
-
 //===----------------------------------------------------------------------===//
 // Settings
 //===----------------------------------------------------------------------===//
@@ -784,20 +772,22 @@ ZJoltResult zjoltCastRayEach(const ZJoltPhysicsSystem *system,
 // exists to avoid losing.
 //===----------------------------------------------------------------------===//
 
-ZJoltResult zjoltCastShapeClosest(const ZJoltPhysicsSystem *system,
-                                  const ZJoltShape *shape,
-                                  const ZJoltVec3 *scale,
-                                  const ZJoltRVec3 *position,
-                                  const ZJoltQuat *rotation,
-                                  const ZJoltVec3 *direction,
-                                  const ZJoltQueryFilters *filters,
-                                  ZJoltShapeCastHit *out_hit,
-                                  bool *out_hit_any) {
+ZJoltResult zjoltCastShapeClosest(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHit *out_hit, bool *out_hit_any) {
   ZJOLT_ENTER(out_hit, out_hit_any);
   if (!zjolt::Present(system, shape, position, rotation, direction, out_hit,
                       out_hit_any)) {
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
+
+  const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   zjolt::QueryFilters adapters(filters);
   const JPH::RShapeCast cast = MakeShapeCast(zjolt::ToJolt(shape), scale,
@@ -807,7 +797,7 @@ ZJoltResult zjoltCastShapeClosest(const ZJoltPhysicsSystem *system,
   auto collector = MakeStream<JPH::CastShapeCollector, ZJoltShapeCastHit>(
       ProjectShapeCastHit{}, KeepBest<ZJoltShapeCastHit>{out_hit, &had_hit});
   system->system.GetNarrowPhaseQuery().CastShape(
-      cast, JPH::ShapeCastSettings(), zjolt::ToJoltR(*position), collector,
+      cast, jolt_settings, zjolt::ToJoltR(*position), collector,
       adapters.broad_phase, adapters.object_layer, adapters.body,
       adapters.shape);
 
@@ -815,17 +805,20 @@ ZJoltResult zjoltCastShapeClosest(const ZJoltPhysicsSystem *system,
   return ZJOLT_RESULT_OK;
 }
 
-ZJoltResult zjoltCastShapeAll(const ZJoltPhysicsSystem *system,
-                              const ZJoltShape *shape, const ZJoltVec3 *scale,
-                              const ZJoltRVec3 *position,
-                              const ZJoltQuat *rotation,
-                              const ZJoltVec3 *direction,
-                              const ZJoltQueryFilters *filters,
-                              ZJoltShapeCastHit *out_hits, uint32_t capacity,
-                              uint32_t *out_count) {
+ZJoltResult zjoltCastShapeAll(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHit *out_hits, uint32_t capacity, uint32_t *out_count) {
   ZJOLT_ENTER(out_count);
   if (!zjolt::Present(system, shape, position, rotation, direction, out_count))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   zjolt::QueryFilters adapters(filters);
   const JPH::RShapeCast cast = MakeShapeCast(zjolt::ToJolt(shape), scale,
@@ -834,24 +827,28 @@ ZJoltResult zjoltCastShapeAll(const ZJoltPhysicsSystem *system,
   auto collector = MakeStream<JPH::CastShapeCollector, ZJoltShapeCastHit>(
       ProjectShapeCastHit{}, FillBuffer<ZJoltShapeCastHit>{out_hits, capacity});
   system->system.GetNarrowPhaseQuery().CastShape(
-      cast, JPH::ShapeCastSettings(), zjolt::ToJoltR(*position), collector,
+      cast, jolt_settings, zjolt::ToJoltR(*position), collector,
       adapters.broad_phase, adapters.object_layer, adapters.body,
       adapters.shape);
 
   return ReportCount(collector.sink().count, out_hits, capacity, out_count);
 }
 
-ZJoltResult zjoltCastShapeEach(const ZJoltPhysicsSystem *system,
-                               const ZJoltShape *shape, const ZJoltVec3 *scale,
-                               const ZJoltRVec3 *position,
-                               const ZJoltQuat *rotation,
-                               const ZJoltVec3 *direction,
-                               const ZJoltQueryFilters *filters,
-                               ZJoltShapeCastHitFn on_hit, void *user) {
+ZJoltResult zjoltCastShapeEach(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHitFn on_hit, void *user) {
   ZJOLT_ENTER();
   if (!zjolt::Present(system, shape, position, rotation, direction))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (on_hit == nullptr) return MissingCallback();
+
+  const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   zjolt::QueryFilters adapters(filters);
   const JPH::RShapeCast cast = MakeShapeCast(zjolt::ToJolt(shape), scale,
@@ -861,7 +858,7 @@ ZJoltResult zjoltCastShapeEach(const ZJoltPhysicsSystem *system,
       ProjectShapeCastHit{},
       ForwardToHost<ZJoltShapeCastHit, ZJoltShapeCastHitFn>{on_hit, user});
   system->system.GetNarrowPhaseQuery().CastShape(
-      cast, JPH::ShapeCastSettings(), zjolt::ToJoltR(*position), collector,
+      cast, jolt_settings, zjolt::ToJoltR(*position), collector,
       adapters.broad_phase, adapters.object_layer, adapters.body,
       adapters.shape);
 
@@ -876,27 +873,27 @@ ZJoltResult zjoltCastShapeEach(const ZJoltPhysicsSystem *system,
 // float cannot hold precisely.
 //===----------------------------------------------------------------------===//
 
-ZJoltResult zjoltCollideShapeClosest(const ZJoltPhysicsSystem *system,
-                                     const ZJoltShape *shape,
-                                     const ZJoltVec3 *scale,
-                                     const ZJoltRVec3 *position,
-                                     const ZJoltQuat *rotation,
-                                     float max_separation_distance,
-                                     const ZJoltQueryFilters *filters,
-                                     ZJoltCollideShapeHit *out_hit,
-                                     bool *out_hit_any) {
+ZJoltResult zjoltCollideShapeClosest(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hit,
+    bool *out_hit_any) {
   ZJOLT_ENTER(out_hit, out_hit_any);
   if (!zjolt::Present(system, shape, position, rotation, out_hit,
                       out_hit_any)) {
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
 
+  const JPH::CollideShapeSettings jolt_settings =
+      MakeCollideShapeSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
+
   const JPH::Shape *impl = zjolt::ToJolt(shape);
   const JPH::Vec3 shape_scale =
       scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
-
-  JPH::CollideShapeSettings settings;
-  settings.mMaxSeparationDistance = max_separation_distance;
 
   bool had_hit = false;
   zjolt::QueryFilters adapters(filters);
@@ -904,33 +901,33 @@ ZJoltResult zjoltCollideShapeClosest(const ZJoltPhysicsSystem *system,
       ProjectCollideHit{}, KeepBest<ZJoltCollideShapeHit>{out_hit, &had_hit});
   system->system.GetNarrowPhaseQuery().CollideShape(
       impl, shape_scale,
-      MakeCollideTransform(impl, shape_scale, *position, *rotation), settings,
-      zjolt::ToJoltR(*position), collector, adapters.broad_phase,
+      MakeCollideTransform(impl, shape_scale, *position, *rotation),
+      jolt_settings, zjolt::ToJoltR(*position), collector, adapters.broad_phase,
       adapters.object_layer, adapters.body, adapters.shape);
 
   *out_hit_any = had_hit;
   return ZJOLT_RESULT_OK;
 }
 
-ZJoltResult zjoltCollideShapeAll(const ZJoltPhysicsSystem *system,
-                                 const ZJoltShape *shape,
-                                 const ZJoltVec3 *scale,
-                                 const ZJoltRVec3 *position,
-                                 const ZJoltQuat *rotation,
-                                 float max_separation_distance,
-                                 const ZJoltQueryFilters *filters,
-                                 ZJoltCollideShapeHit *out_hits,
-                                 uint32_t capacity, uint32_t *out_count) {
+ZJoltResult zjoltCollideShapeAll(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hits,
+    uint32_t capacity, uint32_t *out_count) {
   ZJOLT_ENTER(out_count);
   if (!zjolt::Present(system, shape, position, rotation, out_count))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
+  const JPH::CollideShapeSettings jolt_settings =
+      MakeCollideShapeSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
+
   const JPH::Shape *impl = zjolt::ToJolt(shape);
   const JPH::Vec3 shape_scale =
       scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
-
-  JPH::CollideShapeSettings settings;
-  settings.mMaxSeparationDistance = max_separation_distance;
 
   zjolt::QueryFilters adapters(filters);
   auto collector = MakeStream<JPH::CollideShapeCollector, ZJoltCollideShapeHit>(
@@ -938,32 +935,33 @@ ZJoltResult zjoltCollideShapeAll(const ZJoltPhysicsSystem *system,
       FillBuffer<ZJoltCollideShapeHit>{out_hits, capacity});
   system->system.GetNarrowPhaseQuery().CollideShape(
       impl, shape_scale,
-      MakeCollideTransform(impl, shape_scale, *position, *rotation), settings,
-      zjolt::ToJoltR(*position), collector, adapters.broad_phase,
+      MakeCollideTransform(impl, shape_scale, *position, *rotation),
+      jolt_settings, zjolt::ToJoltR(*position), collector, adapters.broad_phase,
       adapters.object_layer, adapters.body, adapters.shape);
 
   return ReportCount(collector.sink().count, out_hits, capacity, out_count);
 }
 
-ZJoltResult zjoltCollideShapeEach(const ZJoltPhysicsSystem *system,
-                                  const ZJoltShape *shape,
-                                  const ZJoltVec3 *scale,
-                                  const ZJoltRVec3 *position,
-                                  const ZJoltQuat *rotation,
-                                  float max_separation_distance,
-                                  const ZJoltQueryFilters *filters,
-                                  ZJoltCollideShapeHitFn on_hit, void *user) {
+ZJoltResult zjoltCollideShapeEach(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
+    void *user) {
   ZJOLT_ENTER();
   if (!zjolt::Present(system, shape, position, rotation))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (on_hit == nullptr) return MissingCallback();
 
+  const JPH::CollideShapeSettings jolt_settings =
+      MakeCollideShapeSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
+
   const JPH::Shape *impl = zjolt::ToJolt(shape);
   const JPH::Vec3 shape_scale =
       scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
-
-  JPH::CollideShapeSettings settings;
-  settings.mMaxSeparationDistance = max_separation_distance;
 
   zjolt::QueryFilters adapters(filters);
   auto collector = MakeStream<JPH::CollideShapeCollector, ZJoltCollideShapeHit>(
@@ -972,8 +970,8 @@ ZJoltResult zjoltCollideShapeEach(const ZJoltPhysicsSystem *system,
                                                                  user});
   system->system.GetNarrowPhaseQuery().CollideShape(
       impl, shape_scale,
-      MakeCollideTransform(impl, shape_scale, *position, *rotation), settings,
-      zjolt::ToJoltR(*position), collector, adapters.broad_phase,
+      MakeCollideTransform(impl, shape_scale, *position, *rotation),
+      jolt_settings, zjolt::ToJoltR(*position), collector, adapters.broad_phase,
       adapters.object_layer, adapters.body, adapters.shape);
 
   return ZJOLT_RESULT_OK;
@@ -1085,7 +1083,7 @@ ZJoltResult zjoltCollideShapeVsShapeClosest(
   const JPH::CollideShapeSettings jolt_settings =
       MakeCollideShapeSettings(settings);
   const ZJoltResult tolerance =
-      CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   ShapePair pair;
@@ -1126,7 +1124,7 @@ ZJoltResult zjoltCollideShapeVsShapeAll(
   const JPH::CollideShapeSettings jolt_settings =
       MakeCollideShapeSettings(settings);
   const ZJoltResult tolerance =
-      CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   ShapePair pair;
@@ -1164,7 +1162,7 @@ ZJoltResult zjoltCastShapeVsShapeClosest(
 
   const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
   const ZJoltResult tolerance =
-      CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   ShapePair pair;
@@ -1204,7 +1202,7 @@ ZJoltResult zjoltCastShapeVsShapeAll(
 
   const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
   const ZJoltResult tolerance =
-      CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   ShapePair pair;

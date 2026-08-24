@@ -11,15 +11,6 @@ nobody can evaluate.
   pre-init call; they prove nothing about behaviour. One characteristic test per
   subsystem is the bar: a hinge constrains to its axis, a ragdoll settles, a
   saved state restores bit-identically.
-- **Shape-cast and collide-shape settings are unreachable.** Ray casts take a
-  `ZJoltRayCastSettings`; shape casts and shape-vs-shape overlaps take none, at
-  both the system level (`zjolt_query.h`) and the per-shape level
-  (`zjolt_transformed.h`). So Jolt's `ShapeCastSettings` and
-  `CollideShapeSettings` — back-face mode per convex and per triangle, active
-  edge handling, whether the collector gets faces — are fixed at Jolt's
-  defaults with no way to say otherwise. That is a caller-visible gap, not an
-  implementation detail: back-face mode alone decides whether a sweep that
-  starts inside geometry reports a hit.
 - **`tools/coverage.sh` over-counts.** Its denominator includes Jolt internals
   that must never cross — SIMD helpers, quadtree nodes, per-class binary
   serialisation. Read the per-area lists; do not work the percentage.
