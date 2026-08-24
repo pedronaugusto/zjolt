@@ -311,38 +311,163 @@ ZJOLT_API ZJoltResult zjoltCastRayEach(const ZJoltPhysicsSystem *system,
                                        ZJoltRayCastHitFn on_hit, void *user);
 
 //===----------------------------------------------------------------------===//
+// Collision settings for shape casts and overlaps
+//
+// Declared here rather than beside the queries that were once the only ones to
+// take them: every shape cast and every overlap in this file takes one now, as
+// do zjolt_transformed.h's. A ray cast has its own, smaller, above.
+//===----------------------------------------------------------------------===//
+
+/// Whether a triangle edge that a neighbouring triangle already covers can
+/// produce a contact.
+///
+/// An edge is "active" when nothing sits on the other side of it at a shallow
+/// enough angle. Colliding with the inactive ones is what makes a box slid
+/// across a flat mesh catch on the seams between its triangles, so simulation
+/// wants only the active ones. A query asking what geometry is really there
+/// usually wants all of them.
+typedef enum ZJoltActiveEdgeMode {
+  /// Jolt's default. A contact on an edge a neighbour covers is dropped.
+  ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_ONLY_WITH_ACTIVE = 0,
+  ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_WITH_ALL = 1,
+} ZJoltActiveEdgeMode;
+
+/// Whether Jolt works out the colliding FACE as well as the contact point.
+///
+/// Note the numbering: collecting is 0 and not collecting is 1, so a
+/// zero-initialised settings struct asks for faces. Fill one through
+/// zjoltCollideShapeSettingsInit rather than with memset and the question does
+/// not come up.
+typedef enum ZJoltCollectFacesMode {
+  ZJOLT_COLLECT_FACES_MODE_COLLECT_FACES = 0,
+  /// Jolt's default.
+  ZJOLT_COLLECT_FACES_MODE_NO_FACES = 1,
+} ZJoltCollectFacesMode;
+
+/// Options for an overlap test, taken by every zjoltCollideShape* entry point
+/// here and by zjoltTransformedShapeCollideShapeAll. NULL takes Jolt's
+/// defaults, which are what zjoltCollideShapeSettingsInit writes.
+typedef struct ZJoltCollideShapeSettings {
+  /// @see ZJoltActiveEdgeMode.
+  ZJoltActiveEdgeMode active_edge_mode;
+  /// Faces are computed into Jolt's own result and ZJoltCollideShapeHit does
+  /// not carry them, so asking for them here buys nothing today and costs the
+  /// work of finding them. It is exposed because it is the other half of what
+  /// `active_edge_movement_direction` below is for, and because a settings
+  /// struct that quietly drops a field is worse than one that explains it.
+  /// Reach for zjoltTransformedShapeGetSupportingFace when the face itself is
+  /// the answer wanted.
+  ZJoltCollectFacesMode collect_faces_mode;
+  /// How close counts as touching inside GJK, in metres. Jolt's default is
+  /// 1e-4.
+  float collision_tolerance;
+  /// How precisely the penetration depth is resolved, as a dimensionless
+  /// factor: EPA stops once the squared distance moves by less than this times
+  /// the current depth squared. Jolt's default is 1e-4, and Jolt ASSERTS that
+  /// it is at least FLT_EPSILON — anything smaller only buys iterations — so
+  /// a smaller one is refused here with ZJOLT_RESULT_INVALID_ARGUMENT.
+  float penetration_tolerance;
+  /// Which way the first shape is moving, for the inactive edges
+  /// `active_edge_mode` kept. Jolt takes the triangle's own normal over the
+  /// calculated penetration axis when doing so impedes this direction less.
+  /// Zero, the default, leaves the calculated axis alone.
+  ZJoltVec3 active_edge_movement_direction;
+  /// Above zero, near misses are reported too, with a NEGATIVE
+  /// penetration_depth giving the gap — "is anything within a metre of here".
+  /// The contact points are then the closest points rather than touching ones.
+  float max_separation_distance;
+  /// Whether a triangle met from behind counts. Applies to mesh and height
+  /// field shapes; an overlap test has no direction of travel, which is why
+  /// this is one mode where a shape cast below has two.
+  ZJoltBackFaceMode back_face_mode;
+} ZJoltCollideShapeSettings;
+
+/// Options for a sweep, taken by every zjoltCastShape* entry point here and by
+/// the zjoltTransformedShapeCastShape* pair. NULL takes Jolt's defaults, which
+/// are what zjoltShapeCastSettingsInit writes.
+typedef struct ZJoltShapeCastSettings {
+  /// @see ZJoltCollideShapeSettings for these five. They are the same fields
+  /// on the same Jolt base class, and `penetration_tolerance` carries the same
+  /// refusal.
+  ZJoltActiveEdgeMode active_edge_mode;
+  ZJoltCollectFacesMode collect_faces_mode;
+  float collision_tolerance;
+  float penetration_tolerance;
+  ZJoltVec3 active_edge_movement_direction;
+  /// Grows the swept shape by this margin in every direction, in metres. A
+  /// character's skin width, without building a second shape to hold it.
+  float extra_convex_radius;
+  /// Whether the sweep reports passing through a triangle from behind. Mesh
+  /// and height field shapes.
+  ZJoltBackFaceMode back_face_mode_triangles;
+  /// Whether a sweep that STARTS inside a convex shape reports coming back out
+  /// of it. Ignoring back faces, which is Jolt's default, means such a sweep
+  /// reports nothing at all for that shape — rarely what a placement test
+  /// wants, and the usual reason a sweep from inside geometry comes back
+  /// empty.
+  ZJoltBackFaceMode back_face_mode_convex;
+  /// Shrink the swept shape by its convex radius and expand the result again.
+  /// Faster, and gives a more accurate normal, at the cost of rounding the
+  /// shape's corners.
+  bool use_shrunken_shape_and_convex_radius;
+  /// When the two already overlap where the sweep starts (fraction 0), work
+  /// out the deepest point rather than reporting the first one found. Costs an
+  /// extra EPA pass, and without it a hit at fraction 0 carries a penetration
+  /// depth that is not the deepest available.
+  bool return_deepest_point;
+} ZJoltShapeCastSettings;
+
+/// Fills `settings` with Jolt's defaults, which is the thing to change one
+/// field of. A zeroed struct is NOT the same — @see ZJoltCollectFacesMode.
+ZJOLT_API void zjoltCollideShapeSettingsInit(
+    ZJoltCollideShapeSettings *settings);
+
+/// @see zjoltCollideShapeSettingsInit.
+ZJOLT_API void zjoltShapeCastSettingsInit(ZJoltShapeCastSettings *settings);
+
+//===----------------------------------------------------------------------===//
 // Shape casts
 //===----------------------------------------------------------------------===//
 
 /// Sweeps `shape` from `position`/`rotation` along `direction` and reports the
 /// nearest hit. `scale` may be NULL for (1,1,1).
+///
+/// `settings` may be NULL for Jolt's defaults, which ignore back faces — so a
+/// sweep that STARTS inside geometry reports nothing at all until
+/// `back_face_mode_convex` or `back_face_mode_triangles` says otherwise. That
+/// is the usual reason a placement test comes back empty.
 ZJOLT_API ZJoltResult zjoltCastShapeClosest(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltQueryFilters *filters, ZJoltShapeCastHit *out_hit,
-    bool *out_hit_any);
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHit *out_hit, bool *out_hit_any);
 
-/// Every hit along the sweep. @see zjoltCastRayAll for the protocol.
+/// Every hit along the sweep. @see zjoltCastRayAll for the protocol and
+/// zjoltCastShapeClosest for `settings`.
 ZJOLT_API ZJoltResult zjoltCastShapeAll(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltQueryFilters *filters, ZJoltShapeCastHit *out_hits,
-    uint32_t capacity, uint32_t *out_count);
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHit *out_hits, uint32_t capacity, uint32_t *out_count);
 
 /// Every hit along the sweep, streamed. @see zjoltCastRayEach.
 ZJOLT_API ZJoltResult zjoltCastShapeEach(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltQueryFilters *filters, ZJoltShapeCastHitFn on_hit, void *user);
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHitFn on_hit, void *user);
 
 //===----------------------------------------------------------------------===//
 // Overlap
 //
-// A `max_separation_distance` above zero reports near misses too, with a
-// negative penetration depth — "is there anything within a metre of here".
+// A `settings->max_separation_distance` above zero reports near misses too,
+// with a negative penetration depth — "is there anything within a metre of
+// here". It used to be a parameter of its own on these three; it is a field of
+// ZJoltCollideShapeSettings as well, and one query cannot be given two answers
+// to the same question, so the parameter went and the field stayed.
 //===----------------------------------------------------------------------===//
 
 /// The single deepest overlap of `shape` placed at `position`/`rotation` —
@@ -351,7 +476,7 @@ ZJOLT_API ZJoltResult zjoltCastShapeEach(
 ZJOLT_API ZJoltResult zjoltCollideShapeClosest(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
-    const ZJoltQuat *rotation, float max_separation_distance,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
     const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hit,
     bool *out_hit_any);
 
@@ -360,7 +485,7 @@ ZJOLT_API ZJoltResult zjoltCollideShapeClosest(
 ZJOLT_API ZJoltResult zjoltCollideShapeAll(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
-    const ZJoltQuat *rotation, float max_separation_distance,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
     const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hits,
     uint32_t capacity, uint32_t *out_count);
 
@@ -370,7 +495,7 @@ ZJOLT_API ZJoltResult zjoltCollideShapeAll(
 ZJOLT_API ZJoltResult zjoltCollideShapeEach(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
-    const ZJoltQuat *rotation, float max_separation_distance,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
     const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
     void *user);
 
@@ -415,8 +540,8 @@ ZJOLT_API ZJoltResult zjoltCollidePointEach(const ZJoltPhysicsSystem *system,
 // no children both are ZJOLT_SUB_SHAPE_ID_EMPTY. `material` still resolves; it
 // comes off the second shape, as it does everywhere else here.
 //
-// These are also the only entry points in this file that take Jolt's collision
-// settings. The rest use its defaults with no way to say otherwise.
+// They take the same ZJoltCollideShapeSettings and ZJoltShapeCastSettings the
+// system-level queries above do, with NULL meaning Jolt's defaults there too.
 //
 // WHAT JOLT ASSERTS, AND WHAT IS REFUSED INSTEAD
 //
@@ -449,111 +574,6 @@ ZJOLT_API ZJoltResult zjoltCollidePointEach(const ZJoltPhysicsSystem *system,
 // same question ahead of time and zjoltShapeMakeScaleValid answers with the
 // nearest scale that passes; here it is ZJOLT_RESULT_INVALID_ARGUMENT.
 //===----------------------------------------------------------------------===//
-
-/// Whether a triangle edge that a neighbouring triangle already covers can
-/// produce a contact.
-///
-/// An edge is "active" when nothing sits on the other side of it at a shallow
-/// enough angle. Colliding with the inactive ones is what makes a box slid
-/// across a flat mesh catch on the seams between its triangles, so simulation
-/// wants only the active ones. A query asking what geometry is really there
-/// usually wants all of them.
-typedef enum ZJoltActiveEdgeMode {
-  /// Jolt's default. A contact on an edge a neighbour covers is dropped.
-  ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_ONLY_WITH_ACTIVE = 0,
-  ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_WITH_ALL = 1,
-} ZJoltActiveEdgeMode;
-
-/// Whether Jolt works out the colliding FACE as well as the contact point.
-///
-/// Note the numbering: collecting is 0 and not collecting is 1, so a
-/// zero-initialised settings struct asks for faces. Fill one through
-/// zjoltCollideShapeSettingsInit rather than with memset and the question does
-/// not come up.
-typedef enum ZJoltCollectFacesMode {
-  ZJOLT_COLLECT_FACES_MODE_COLLECT_FACES = 0,
-  /// Jolt's default.
-  ZJOLT_COLLECT_FACES_MODE_NO_FACES = 1,
-} ZJoltCollectFacesMode;
-
-/// Options for a shape-versus-shape overlap. NULL takes Jolt's defaults, which
-/// are what zjoltCollideShapeSettingsInit writes.
-typedef struct ZJoltCollideShapeSettings {
-  /// @see ZJoltActiveEdgeMode.
-  ZJoltActiveEdgeMode active_edge_mode;
-  /// Faces are computed into Jolt's own result and ZJoltCollideShapeHit does
-  /// not carry them, so asking for them here buys nothing today and costs the
-  /// work of finding them. It is exposed because it is the other half of what
-  /// `active_edge_movement_direction` below is for, and because a settings
-  /// struct that quietly drops a field is worse than one that explains it.
-  /// Reach for zjoltTransformedShapeGetSupportingFace when the face itself is
-  /// the answer wanted.
-  ZJoltCollectFacesMode collect_faces_mode;
-  /// How close counts as touching inside GJK, in metres. Jolt's default is
-  /// 1e-4.
-  float collision_tolerance;
-  /// How precisely the penetration depth is resolved, as a dimensionless
-  /// factor: EPA stops once the squared distance moves by less than this times
-  /// the current depth squared. Jolt's default is 1e-4, and Jolt ASSERTS that
-  /// it is at least FLT_EPSILON — anything smaller only buys iterations — so
-  /// a smaller one is refused here with ZJOLT_RESULT_INVALID_ARGUMENT.
-  float penetration_tolerance;
-  /// Which way the first shape is moving, for the inactive edges
-  /// `active_edge_mode` kept. Jolt takes the triangle's own normal over the
-  /// calculated penetration axis when doing so impedes this direction less.
-  /// Zero, the default, leaves the calculated axis alone.
-  ZJoltVec3 active_edge_movement_direction;
-  /// Above zero, near misses are reported too, with a NEGATIVE
-  /// penetration_depth giving the gap — "is anything within a metre of here".
-  /// The contact points are then the closest points rather than touching ones.
-  float max_separation_distance;
-  /// Whether a triangle met from behind counts. Applies to mesh and height
-  /// field shapes; an overlap test has no direction of travel, which is why
-  /// this is one mode where a shape cast below has two.
-  ZJoltBackFaceMode back_face_mode;
-} ZJoltCollideShapeSettings;
-
-/// Options for a shape-versus-shape sweep. NULL takes Jolt's defaults, which
-/// are what zjoltShapeCastSettingsInit writes.
-typedef struct ZJoltShapeCastSettings {
-  /// @see ZJoltCollideShapeSettings for these five. They are the same fields
-  /// on the same Jolt base class, and `penetration_tolerance` carries the same
-  /// refusal.
-  ZJoltActiveEdgeMode active_edge_mode;
-  ZJoltCollectFacesMode collect_faces_mode;
-  float collision_tolerance;
-  float penetration_tolerance;
-  ZJoltVec3 active_edge_movement_direction;
-  /// Grows the swept shape by this margin in every direction, in metres. A
-  /// character's skin width, without building a second shape to hold it.
-  float extra_convex_radius;
-  /// Whether the sweep reports passing through a triangle from behind. Mesh
-  /// and height field shapes.
-  ZJoltBackFaceMode back_face_mode_triangles;
-  /// Whether a sweep that STARTS inside a convex shape reports coming back out
-  /// of it. Ignoring back faces, which is Jolt's default, means such a sweep
-  /// reports nothing at all for that shape — rarely what a placement test
-  /// wants, and the usual reason a sweep from inside geometry comes back
-  /// empty.
-  ZJoltBackFaceMode back_face_mode_convex;
-  /// Shrink the swept shape by its convex radius and expand the result again.
-  /// Faster, and gives a more accurate normal, at the cost of rounding the
-  /// shape's corners.
-  bool use_shrunken_shape_and_convex_radius;
-  /// When the two already overlap where the sweep starts (fraction 0), work
-  /// out the deepest point rather than reporting the first one found. Costs an
-  /// extra EPA pass, and without it a hit at fraction 0 carries a penetration
-  /// depth that is not the deepest available.
-  bool return_deepest_point;
-} ZJoltShapeCastSettings;
-
-/// Fills `settings` with Jolt's defaults, which is the thing to change one
-/// field of. A zeroed struct is NOT the same — @see ZJoltCollectFacesMode.
-ZJOLT_API void zjoltCollideShapeSettingsInit(
-    ZJoltCollideShapeSettings *settings);
-
-/// @see zjoltCollideShapeSettingsInit.
-ZJOLT_API void zjoltShapeCastSettingsInit(ZJoltShapeCastSettings *settings);
 
 /// The deepest overlap between two placed shapes, or nothing.
 ///

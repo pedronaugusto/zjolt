@@ -180,29 +180,36 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeCollidePointAll(
 /// Everything in `shape` (at `scale`/`position`/`rotation`) overlapping `ts`.
 /// @see zjoltCollideShapeAll; contact points come back relative to
 /// `base_offset` for the same precision reason.
+///
+/// `settings` may be NULL for Jolt's defaults. The separation distance that
+/// used to be a parameter of its own here is `settings->max_separation_
+/// distance`, for the reason zjolt_query.h's Overlap section gives.
 ZJOLT_API ZJoltResult zjoltTransformedShapeCollideShapeAll(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
-    const ZJoltQuat *rotation, float max_separation_distance,
-    const ZJoltRVec3 *base_offset, const ZJoltShapeFilter *filter,
+    const ZJoltQuat *rotation, const ZJoltRVec3 *base_offset,
+    const ZJoltCollideShapeSettings *settings, const ZJoltShapeFilter *filter,
     ZJoltCollideShapeHit *out_hits, uint32_t capacity, uint32_t *out_count);
 
 /// Sweeps `shape` from `position`/`rotation` along `direction` and reports
-/// the nearest hit against `ts`. @see zjoltCastShapeClosest.
+/// the nearest hit against `ts`. @see zjoltCastShapeClosest, including for
+/// what a NULL `settings` costs a sweep that starts inside `ts`.
 ZJOLT_API ZJoltResult zjoltTransformedShapeCastShapeClosest(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltRVec3 *base_offset, const ZJoltShapeFilter *filter,
-    ZJoltShapeCastHit *out_hit, bool *out_hit_any);
+    const ZJoltRVec3 *base_offset, const ZJoltShapeCastSettings *settings,
+    const ZJoltShapeFilter *filter, ZJoltShapeCastHit *out_hit,
+    bool *out_hit_any);
 
 /// @see zjoltCastShapeAll for the two-call protocol.
 ZJOLT_API ZJoltResult zjoltTransformedShapeCastShapeAll(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltRVec3 *base_offset, const ZJoltShapeFilter *filter,
-    ZJoltShapeCastHit *out_hits, uint32_t capacity, uint32_t *out_count);
+    const ZJoltRVec3 *base_offset, const ZJoltShapeCastSettings *settings,
+    const ZJoltShapeFilter *filter, ZJoltShapeCastHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -29,6 +29,7 @@
 #include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <type_traits>
@@ -177,6 +178,22 @@ void ClearError();
 
 /// True once zjoltInit has completed and zjoltDeinit has not run.
 bool IsInitialized();
+
+/// Refuses a penetration tolerance Jolt would assert on rather than honour.
+///
+/// EPA asserts its tolerance is at least FLT_EPSILON
+/// (EPAPenetrationDepth.h:154), and the collide-shape and shape-cast settings
+/// structs are the only place in this ABI where a caller can set it at all.
+/// Shared rather than per-file because every entry point taking either struct
+/// owes the same refusal, and a second copy is a copy that can drift.
+inline ZJoltResult CheckPenetrationTolerance(float tolerance) {
+  // Written as an accept rather than a reject so that a NaN is refused too.
+  if (tolerance >= FLT_EPSILON) return ZJOLT_RESULT_OK;
+  return SetError(
+      ZJOLT_RESULT_INVALID_ARGUMENT,
+      "penetration_tolerance is below FLT_EPSILON; Jolt asserts on that "
+      "rather than honouring it, and a smaller one only buys iterations");
+}
 
 //===----------------------------------------------------------------------===//
 // Live-handle accounting

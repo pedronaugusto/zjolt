@@ -732,20 +732,47 @@ int main(void) {
   ZJoltShapeCastHit shape_hit;
   bool shape_did_hit = false;
   CHECK_OK(zjoltCastShapeClosest(system, sphere, NULL, &cast_start, &identity,
-                                 &cast_direction, NULL, &shape_hit,
+                                 &cast_direction, NULL, NULL, &shape_hit,
                                  &shape_did_hit));
   CHECK(shape_did_hit, "a sphere swept downward reaches the floor");
   CHECK(shape_hit.body == floor_id, "the sweep hit the floor");
+
+  /* The settings a sweep takes, driven through the header itself: the ABI
+     guard compares a pointee only by size and alignment, so only C proves the
+     struct crossing here is the struct the library reads. The floor is a
+     closed mesh, so a sweep starting inside it meets the top face from below —
+     a back face, which Jolt's defaults drop. */
+  ZJoltShape *probe = NULL;
+  CHECK_OK(zjoltShapeCreateSphere(0.1f, 1000.0f, NULL, &probe));
+  const ZJoltRVec3 inside_floor = {(ZJoltReal)5.0, (ZJoltReal)-0.5,
+                                   (ZJoltReal)0.0};
+  const ZJoltVec3 upward = {0.0f, 2.0f, 0.0f};
+  bool escaped = true;
+  CHECK_OK(zjoltCastShapeClosest(system, probe, NULL, &inside_floor, &identity,
+                                 &upward, NULL, NULL, &shape_hit, &escaped));
+  CHECK(!escaped, "by default a sweep out of a mesh reports nothing");
+
+  ZJoltShapeCastSettings sweep_settings;
+  zjoltShapeCastSettingsInit(&sweep_settings);
+  CHECK(sweep_settings.back_face_mode_triangles == ZJOLT_BACK_FACE_MODE_IGNORE,
+        "the sweep defaults ignore back faces");
+  sweep_settings.back_face_mode_triangles = ZJOLT_BACK_FACE_MODE_COLLIDE;
+  CHECK_OK(zjoltCastShapeClosest(system, probe, NULL, &inside_floor, &identity,
+                                 &upward, &sweep_settings, NULL, &shape_hit,
+                                 &escaped));
+  CHECK(escaped, "collecting back faces finds the way out of the mesh");
+  CHECK(shape_hit.body == floor_id, "and the way out is through the floor");
+  zjoltShapeRelease(probe);
 
   /* An overlap test where the ball is resting, both ways round. */
   ZJoltCollideShapeHit overlaps[8];
   uint32_t overlap_count = 0;
   CHECK_OK(zjoltCollideShapeAll(system, sphere, NULL, &rest_position, &identity,
-                                0.0f, NULL, overlaps, 8, &overlap_count));
+                                NULL, NULL, overlaps, 8, &overlap_count));
   CHECK(overlap_count > 0, "a sphere at the ball's position overlaps something");
 
   CHECK_OK(zjoltCollideShapeEach(system, sphere, NULL, &rest_position,
-                                 &identity, 0.0f, NULL, onOverlapHit, NULL));
+                                 &identity, NULL, NULL, onOverlapHit, NULL));
   CHECK(g_overlaps_streamed == overlap_count,
         "streaming an overlap saw the same hits: %u vs %u", g_overlaps_streamed,
         overlap_count);
