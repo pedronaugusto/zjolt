@@ -232,6 +232,8 @@ pub const SkeletonPose = ragdoll_mod.SkeletonPose;
 pub const RagdollSettings = ragdoll_mod.RagdollSettings;
 pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
 pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
+/// Deprecated alias for `SwingType`, which is the same type. Kept so existing
+/// callers build.
 pub const RagdollSwingType = ragdoll_mod.SwingType;
 pub const Ragdoll = ragdoll_mod.Ragdoll;
 /// Hair, and the compute backend it runs on. There is no renderer here: the

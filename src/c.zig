@@ -1531,11 +1531,6 @@ pub const SkeletonPose = opaque {};
 pub const RagdollSettings = opaque {};
 pub const Ragdoll = opaque {};
 
-pub const RagdollSwingType = enum(c_int) {
-    cone = 0,
-    pyramid = 1,
-};
-
 //=============================================================================
 // Constraints
 //=============================================================================
@@ -1597,7 +1592,7 @@ pub const RagdollConstraintDesc = extern struct {
     position2: RVec3,
     twist_axis2: Vec3,
     plane_axis2: Vec3,
-    swing_type: RagdollSwingType,
+    swing_type: SwingType,
     normal_half_cone_angle: f32,
     plane_half_cone_angle: f32,
     twist_min_angle: f32,

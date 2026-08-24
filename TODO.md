@@ -6,9 +6,6 @@ nobody can evaluate.
 
 ## Correctness
 
-- **Two spellings of one concept.** `ZJoltRagdollSwingType` and `ZJoltSwingType`
-  both mirror `JPH::ESwingType`. They were added by separate changes and do not
-  collide, but a caller should not have to know which one an entry point wants.
 - **`ZJOLT_SHAPE_SUB_TYPE_OTHER` still exists** even though every sub-type Jolt
   defines is now nameable. It remains the answer for a NULL handle and for the
   16 `User*` slots — so removing it needs a zero-valued "not a shape" first,

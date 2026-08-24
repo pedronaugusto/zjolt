@@ -161,9 +161,9 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   return ZJOLT_RESULT_OK;
 }
 
-JPH::ESwingType ToJoltSwingType(ZJoltRagdollSwingType type) {
-  return type == ZJOLT_RAGDOLL_SWING_TYPE_PYRAMID ? JPH::ESwingType::Pyramid
-                                                  : JPH::ESwingType::Cone;
+JPH::ESwingType ToJoltSwingType(ZJoltSwingType type) {
+  return type == ZJOLT_SWING_TYPE_PYRAMID ? JPH::ESwingType::Pyramid
+                                          : JPH::ESwingType::Cone;
 }
 
 /// Builds a swing-twist constraint settings object on the heap (it must
