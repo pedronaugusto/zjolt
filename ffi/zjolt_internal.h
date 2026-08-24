@@ -28,6 +28,8 @@
 #include <Jolt/Physics/Collision/Shape/SubShapeID.h>
 #include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
+#include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 
 #include <cfloat>
 #include <cmath>
@@ -1034,6 +1036,31 @@ class ZJoltBodyActivationListenerAdapter final
   ZJoltBodyActivationListener listener_;
 };
 
+/// Projects Jolt's soft-body contact callbacks into plain data.
+///
+/// Separate from ZJoltContactListenerAdapter rather than folded into it
+/// because Jolt keeps the two listeners in separate slots on the system and
+/// never calls one for the other's collisions — a soft body's contacts reach
+/// SoftBodyContactListener and nothing else. Methods are in
+/// zjolt_softbody.cpp, alongside the manifold projection they share.
+class ZJoltSoftBodyContactListenerAdapter final
+    : public JPH::SoftBodyContactListener {
+ public:
+  explicit ZJoltSoftBodyContactListenerAdapter(
+      const ZJoltSoftBodyContactListener &listener)
+      : listener_(listener) {}
+
+  JPH::SoftBodyValidateResult OnSoftBodyContactValidate(
+      const JPH::Body &inSoftBody, const JPH::Body &inOtherBody,
+      JPH::SoftBodyContactSettings &ioSettings) override;
+
+  void OnSoftBodyContactAdded(const JPH::Body &inSoftBody,
+                              const JPH::SoftBodyManifold &inManifold) override;
+
+ private:
+  ZJoltSoftBodyContactListener listener_;
+};
+
 /// One world.
 ///
 /// The layer adapters live here, by value, because PhysicsSystem::Init stores
@@ -1051,6 +1078,7 @@ struct ZJoltPhysicsSystem {
   /// Null until a listener is installed; owned when not.
   ZJoltContactListenerAdapter *contact_listener = nullptr;
   ZJoltBodyActivationListenerAdapter *activation_listener = nullptr;
+  ZJoltSoftBodyContactListenerAdapter *soft_body_contact_listener = nullptr;
 
   /// Step listeners still attached, owned. Jolt keeps its own list and asserts
   /// on a double add or a stranger's remove, so this is the list that answers

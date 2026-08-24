@@ -1,0 +1,98 @@
+# Physics/SoftBody — every name `tools/coverage.sh SoftBody` reports as unbound,
+# classified. One line per name: NAME  CATEGORY  reason.
+#
+# Two blind spots in coverage.sh's own `bound` extraction produced false gaps
+# here, and both are load-bearing for reading this list:
+#   1. its regex is `ZJOLT_API [A-Za-z_ *]*zjolt...`, whose character class
+#      excludes digits, so any declaration returning a fixed-width integer
+#      (`uint32_t zjoltShapeGetSubShapeIDBits`) is invisible;
+#   2. the grep is line-based, so a declaration whose return type sits on its
+#      own line (`ZJOLT_API ZJoltResult` \n `zjoltSoftBodySharedSettings...`)
+#      is invisible too. That one hides a name this very file's area binds.
+#
+# INTERNAL          Jolt's own soft-body update calls it; nothing outside does.
+# EXTENSION_POINT   a C++ subclassing hook zjolt already covers another way.
+# BOUND_ELSEWHERE   reachable today through a differently-named entry point.
+# REAL_GAP          a caller wants it and could not reach it — bound in this change.
+
+ApplyCollisionConstraintsAndUpdateVelocities  INTERNAL  per-substep solver loop, called only from SoftBodyMotionProperties::ParallelUpdate.
+ApplyDihedralBendConstraints  INTERNAL  per-substep solver loop; the constraint itself is authored through CreateConstraints.
+ApplyEdgeConstraints  INTERNAL  per-substep solver loop.
+ApplyLRAConstraints  INTERNAL  per-substep solver loop.
+ApplyPressure  INTERNAL  per-substep solver loop; the pressure value is bound as zjoltSoftBodyGetPressure/SetPressure.
+ApplyRodBendTwistConstraints  INTERNAL  per-substep solver loop; rod authoring is bound instead.
+ApplyRodStretchShearConstraints  INTERNAL  per-substep solver loop; rod authoring is bound instead.
+ApplySkinConstraints  INTERNAL  per-substep solver loop; skinning is driven through zjoltSoftBodySkinVertices.
+ApplyVolumeConstraints  INTERNAL  per-substep solver loop.
+CalculateBendConstraintConstants  BOUND_ELSEWHERE  zjoltSoftBodySharedSettingsCreateConstraints calls it (SoftBodySharedSettings.cpp:328); a caller has no way to author a dihedral bend constraint except through that call, so there is no state in which it would need to run it itself.
+CalculateLRALengths  BOUND_ELSEWHERE  zjoltSoftBodySharedSettingsCreateConstraints derives every LRA constraint AND its max distance inline (SoftBodySharedSettings.cpp:363), applying vertex_attributes[i].lra_max_distance_multiplier per vertex, which is strictly more than this one-multiplier-for-all entry point offers.
+CalculateRodProperties  REAL_GAP  bound as zjoltSoftBodySharedSettingsCalculateRodProperties. Mandatory for rods, not optional: it is what fills each rod's length, inverse mass and Bishop frame, and SoftBodyMotionProperties::Initialize seeds every rod's rotation from that Bishop frame, so a rod that never had it run starts at a zero quaternion.
+CalculateSkinnedConstraintNormals  BOUND_ELSEWHERE  already bound as zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals (ffi/zjolt_softbody.h:293) — a false gap, hidden from coverage.sh because that declaration's return type is on its own line.
+CalculateVolumeConstraintVolumes  REAL_GAP  bound as zjoltSoftBodySharedSettingsCalculateVolumeConstraintVolumes. Nothing else runs it: CreateConstraints does not author volume constraints at all, so every tetrahedron added through the already-bound AddVolumeConstraints kept Jolt's placeholder rest volume of 1 and the solver worked to force it there.
+Clone  REAL_GAP  bound as zjoltSoftBodySharedSettingsClone. There is no creation-time equivalent — the Add* calls only append, so making a variant of a finished topology meant rebuilding it from source data the host may no longer hold.
+CollideSoftBodyVertices  INTERNAL  narrow-phase callback Jolt's collision dispatch drives; it takes a CollideSoftBodyVertexIterator, which is a solver-internal view over a vertex array.
+Cross  INTERNAL  Vec3 math helper on CollidingShape::GetPointVelocity, matched by name only.
+CustomUpdate  REAL_GAP  bound as zjoltSoftBodyCustomUpdate. Upstream's own doc comment describes it as the way to settle a soft body that was just teleported, or to drive one that is not in the system at all; neither is reachable through zjoltPhysicsSystemStep.
+DetermineCollidingShapes  INTERNAL  broad-phase gather at the head of one soft-body update.
+DetermineCollisionPlanes  INTERNAL  per-substep solver loop.
+DetermineSensorCollisions  INTERNAL  per-substep solver loop; the sensor contacts it produces are reported through the manifold, which is bound.
+DihedralBend  BOUND_ELSEWHERE  the constraint type, authored by zjoltSoftBodySharedSettingsCreateConstraints with bend_type = ZJOLT_SOFT_BODY_BEND_TYPE_DIHEDRAL.
+DrawBendConstraints  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawEdgeConstraints  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawLRAConstraints  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawPredictedBounds  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawRodBendTwistConstraints  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawRods  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawRodStates  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation; the rod states themselves are bound as zjoltSoftBodyGetRodStates.
+DrawSkinConstraints  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawVertexVelocities  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation; velocities are bound as zjoltSoftBodyGetVertexStates.
+DrawVertices  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+DrawVolumeConstraints  INTERNAL  JPH_DEBUG_RENDERER-only solver visualisation.
+GetContactBodyID  REAL_GAP  SoftBodyManifold accessor, reachable only from inside OnSoftBodyContactAdded. Bound as ZJoltSoftBodyVertexContact::body, filled by zjoltSoftBodyManifoldGetVertexContacts.
+GetContactNormal  REAL_GAP  SoftBodyManifold accessor. Bound as ZJoltSoftBodyVertexContact::normal.
+GetFaceIndex  REAL_GAP  bound as zjoltSoftBodyGetFaceIndex. A ray cast against a soft body already comes back with a ZJoltSubShapeId, and nothing could turn one into the index of the face the host itself authored.
+GetInnerRadius  INTERNAL  Shape override that SoftBodyShape hard-codes to 0.0f (SoftBodyShape.h:37). It is the convex radius Jolt's own GJK uses; for a soft body it carries no information a caller could act on.
+GetLocalContactPoint  REAL_GAP  SoftBodyManifold accessor. Bound as ZJoltSoftBodyVertexContact::local_contact_point.
+GetMaterials  REAL_GAP  bound as zjoltSoftBodySharedSettingsGetMaterials, together with the SetMaterials it was useless without — ZJoltSoftBodyFace::material_index existed but every index other than 0 named a material no call could add.
+GetMinVertexIndex  INTERNAL  helper over data the caller supplied (min of a constraint's own vertex indices), used by Optimize's grouping pass.
+GetNumSensorContacts  REAL_GAP  SoftBodyManifold accessor. Bound as zjoltSoftBodyManifoldGetSensorContacts' count.
+GetRodAngularVelocity  REAL_GAP  bound as ZJoltSoftBodyRodState::angular_velocity. Rods were not bound as a concept at all before this change; they are now, so this is in scope rather than out of it.
+GetRodRotation  REAL_GAP  bound as ZJoltSoftBodyRodState::rotation — the whole point of a Cosserat rod over an edge, since it is what orients geometry attached to the rod.
+GetSensorContactBodyID  REAL_GAP  SoftBodyManifold accessor. Bound as zjoltSoftBodyManifoldGetSensorContacts' elements.
+GetSubmergedVolume  INTERNAL  Shape override Jolt's buoyancy path calls, and SoftBodyShape's implementation is a stub: it reports submerged volume 0 and a zero centre of buoyancy unconditionally (SoftBodyShape.cpp:162-167). Binding it would advertise soft-body buoyancy that Jolt 5.6.0 does not have. Real gap upstream, not a gap this binding can close.
+GetSubShapeIDBits  BOUND_ELSEWHERE  zjoltShapeGetSubShapeIDBits (ffi/zjolt_shape.h:386) — a false gap, invisible to coverage.sh because its return type is uint32_t.
+GetSubShapeIDBitsRecursive  BOUND_ELSEWHERE  same entry point: SoftBodyShape defines the recursive form as GetSubShapeIDBits (SoftBodyShape.h:35), and Shape::GetSubShapeIDBitsRecursive is what zjoltShapeGetSubShapeIDBits calls.
+GetVertices  BOUND_ELSEWHERE  zjoltSoftBodyGetVertexStates reads the same JPH::Array<SoftBodyVertex>, in the same order, under one lock.
+GetVolumeTimesSix  BOUND_ELSEWHERE  zjoltSoftBodyGetVolume is exactly this divided by six (SoftBodyMotionProperties.h:108).
+HasContact  REAL_GAP  SoftBodyManifold accessor. Bound as the filter zjoltSoftBodyManifoldGetVertexContacts applies: only vertices it reports true for appear in the output.
+InitializeUpdateContext  INTERNAL  upstream marks it "Not part of the public API"; it fills a SoftBodyUpdateContext, which is solver scratch.
+IntegratePositions  INTERNAL  per-substep solver loop.
+IsDegenerate  INTERNAL  pure predicate over a Face the caller supplied; zjoltSoftBodySharedSettingsAddFaces refuses a degenerate face on the caller's behalf already.
+LeafShape  INTERNAL  struct inside SoftBodyMotionProperties' private CollidingShape, below the "FOR INTERNAL USE ONLY" line.
+MarkCCDContact  INTERNAL  called only from PhysicsSystem.cpp:2370-2372, inside Jolt's own soft-body CCD pass.
+MustBeStatic  INTERNAL  Shape override returning a constant false; read by BodyManager when a body is created.
+NormalizeWeights  INTERNAL  arithmetic over a Skinned the caller supplied and can do before handing it over.
+OnSoftBodyContactAdded  REAL_GAP  the extension point checked first, and there was nothing covering it: ffi/zjolt_softbody.h had no soft-body contact callback struct of any kind, and neither did any other header. Bound as ZJoltSoftBodyContactListener::on_contact_added, installed with zjoltSoftBodySetContactListener.
+OnSoftBodyContactValidate  REAL_GAP  same listener; bound as ZJoltSoftBodyContactListener::on_contact_validate, returning ZJoltSoftBodyValidateResult and writing ZJoltSoftBodyContactSettings.
+ParallelApplyConstraints  INTERNAL  per-substep solver loop.
+ParallelDetermineCollisionPlanes  INTERNAL  per-substep solver loop.
+ParallelDetermineSensorCollisions  INTERNAL  per-substep solver loop.
+ParallelUpdate  INTERNAL  upstream marks it "Not part of the public API"; it is the job-thread body of one soft-body update.
+ProcessGroup  INTERNAL  private; solves one Optimize-produced constraint group.
+RequestContactCallback  INTERNAL  bookkeeping, not a caller-set flag: the only callers are Jolt's own collision passes (PhysicsSystem.cpp:2373, SoftBodyMotionProperties.cpp:288 and :728), and UpdateSoftBodyState clears it after firing the listener.
+ResetCollision  INTERNAL  clears a vertex's per-step collision scratch; called only from SoftBodyMotionProperties.cpp:78 and :874.
+RestoreBinaryState  BOUND_ELSEWHERE  zjoltSceneRestore reaches it through PhysicsScene::RestoreBinaryState -> SoftBodyCreationSettings::sRestoreWithChildren. The settings object itself does not cross, per BINDING.md's house rule.
+RodBendTwist  REAL_GAP  bound as ZJoltSoftBodyRodBendTwist plus zjoltSoftBodySharedSettingsAddRodBendTwistConstraints. Without it a rod's rotation about its own axis is unconstrained, which upstream warns leaves it spinning at constant velocity.
+RodStretchShear  REAL_GAP  bound as ZJoltSoftBodyRodStretchShear plus zjoltSoftBodySharedSettingsAddRodStretchShearConstraints — the Cosserat rod itself, which had no representation in this ABI.
+SaveBinaryState  BOUND_ELSEWHERE  zjoltSceneSave reaches it through PhysicsScene::SaveBinaryState -> SoftBodyCreationSettings::SaveWithChildren (PhysicsScene.cpp:137).
+SaveWithChildren  BOUND_ELSEWHERE  a save-format entry point, not the settings object: zjoltSceneSave is the call that runs it, with the shared-settings and material dedup maps PhysicsScene owns.
+SaveWithMaterials  BOUND_ELSEWHERE  same route, one level down: SoftBodyCreationSettings::SaveWithChildren calls it (SoftBodyCreationSettings.cpp:84).
+SignedDistance  INTERNAL  Plane math on a vertex's solver-internal collision plane.
+SkinWeight  BOUND_ELSEWHERE  ZJoltSoftBodySkinWeight, taken by zjoltSoftBodySharedSettingsAddSkinnedConstraints.
+SoftBodyContactListener  REAL_GAP  bound as ZJoltSoftBodyContactListener — a C callback-pointer struct plus void *user, per BINDING.md's Callbacks section — installed with zjoltSoftBodySetContactListener and owned by the system the way ZJoltContactListener is.
+SoftBodyCreationSettings  BOUND_ELSEWHERE  flattened into ZJoltSoftBodyDesc and consumed by zjoltSoftBodyCreate/CreateAndAdd; settings objects do not cross.
+SoftBodyShape  BOUND_ELSEWHERE  a soft body's shape is reachable through the ordinary shape surface and identifies itself as ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY.
+StartFirstIteration  INTERNAL  per-substep solver loop.
+StartNextIteration  INTERNAL  per-substep solver loop.
+UpdateRigidBodyVelocities  INTERNAL  upstream marks it "Not part of the public API"; it writes back the impulses a soft body applied to the rigid bodies it touched.
+UpdateSoftBodyState  INTERNAL  tail of one soft-body update; it is what fires OnSoftBodyContactAdded, which is bound.

@@ -16,6 +16,7 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/SoftBody/SoftBodyShape.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 
 namespace zjolt {
@@ -31,6 +32,18 @@ inline JPH::SoftBodySharedSettings *ToJolt(
 inline ZJoltSoftBodySharedSettings *ToC(
     JPH::SoftBodySharedSettings *settings) {
   return reinterpret_cast<ZJoltSoftBodySharedSettings *>(settings);
+}
+
+/// The manifold tag is the same never-completed, never-dereferenced kind, but
+/// it names something zjolt does not own at all: a SoftBodyManifold is built
+/// on the solver's stack and handed to one callback. There is deliberately no
+/// ToC for a non-const one — a host may read a manifold and may not write it.
+inline const JPH::SoftBodyManifold *ToJolt(
+    const ZJoltSoftBodyManifold *manifold) {
+  return reinterpret_cast<const JPH::SoftBodyManifold *>(manifold);
+}
+inline const ZJoltSoftBodyManifold *ToC(const JPH::SoftBodyManifold *manifold) {
+  return reinterpret_cast<const ZJoltSoftBodyManifold *>(manifold);
 }
 
 }  // namespace zjolt
@@ -188,6 +201,19 @@ ZJoltResult VertexRadiusIsValid(float vertex_radius) {
                          "are held OFF a surface, not a signed offset");
 }
 
+/// As VerticesExist, for the rod indices a bend-twist constraint carries.
+/// CalculateRodProperties indexes a connectivity array with them
+/// (SoftBodySharedSettings.cpp:389) and the solver indexes the rod array
+/// itself (:651), both unguarded.
+bool RodsExist(const JoltSettings &settings, const uint32_t *rods,
+               uint32_t count) {
+  const uint32_t have =
+      static_cast<uint32_t>(settings.mRodStretchShearConstraints.size());
+  for (uint32_t i = 0; i < count; ++i)
+    if (rods[i] >= have) return false;
+  return true;
+}
+
 ZJoltResult NumIterationsIsValid(uint32_t num_iterations) {
   if (num_iterations != 0) return ZJOLT_RESULT_OK;
   return zjolt::SetError(
@@ -248,6 +274,90 @@ uint32_t zjoltSoftBodySharedSettingsGetRefCount(
     const ZJoltSoftBodySharedSettings *settings) {
   if (settings == nullptr) return 0;
   return static_cast<uint32_t>(zjolt::ToJolt(settings)->GetRefCount());
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsClone(
+    const ZJoltSoftBodySharedSettings *settings,
+    ZJoltSoftBodySharedSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(settings, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // Jolt's Clone hands back a Ref, which already holds the one reference the
+  // fresh object has. Own() adds the one that compensates for that Ref
+  // dropping at the end of this scope — the same call as a fresh construction
+  // makes, for the other of its two reasons (BINDING.md, Reference counting).
+  JPH::Ref<JoltSettings> clone = zjolt::ToJolt(settings)->Clone();
+  if (clone == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
+                           "could not allocate the cloned shared settings");
+  }
+  *out = zjolt::ToC(zjolt::Own(clone.GetPtr()));
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Shared settings: materials
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSoftBodySharedSettingsSetMaterials(
+    ZJoltSoftBodySharedSettings *settings,
+    const ZJoltPhysicsMaterial *const *materials, uint32_t count) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings, materials))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // An empty list is not "no materials", it is an out-of-bounds read for
+  // every face: SoftBodyShape::GetMaterial indexes this with the face's
+  // material index and never checks it.
+  if (count == 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a soft body's material list must hold at least one material; pass "
+        "zjoltPhysicsMaterialDefault() rather than an empty list");
+  }
+  for (uint32_t i = 0; i < count; ++i) {
+    if (materials[i] == nullptr) {
+      return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                             "a material in the list is NULL; pass "
+                             "zjoltPhysicsMaterialDefault() for a slot with "
+                             "nothing of its own");
+    }
+  }
+
+  JoltSettings *jolt_settings = zjolt::ToJolt(settings);
+  for (const JoltSettings::Face &face : jolt_settings->mFaces) {
+    if (face.mMaterialIndex >= count) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a face already added names a material index past the end of the "
+          "new list; the list is not replaced");
+    }
+  }
+
+  JPH::PhysicsMaterialList replacement;
+  replacement.reserve(count);
+  for (uint32_t i = 0; i < count; ++i)
+    replacement.push_back(zjolt::ToJolt(materials[i]));
+  jolt_settings->mMaterials = std::move(replacement);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsGetMaterials(
+    const ZJoltSoftBodySharedSettings *settings,
+    const ZJoltPhysicsMaterial **out_materials, uint32_t capacity,
+    uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(settings, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::PhysicsMaterialList &list = zjolt::ToJolt(settings)->mMaterials;
+  const uint32_t count = static_cast<uint32_t>(list.size());
+  *out_count = count;
+  if (out_materials == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  for (uint32_t i = 0; i < count; ++i)
+    out_materials[i] = zjolt::ToC(list[i].GetPtr());
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//
@@ -375,6 +485,70 @@ ZJoltResult zjoltSoftBodySharedSettingsAddVolumeConstraints(
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltSoftBodySharedSettingsAddRodStretchShearConstraints(
+    ZJoltSoftBodySharedSettings *settings,
+    const ZJoltSoftBodyRodStretchShear *rods, uint32_t count) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (count != 0 && !zjolt::Present(rods))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  for (uint32_t i = 0; i < count; ++i) {
+    if (rods[i].vertex[0] == rods[i].vertex[1]) {
+      return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                             "a rod's two vertices must differ");
+    }
+    if (!VerticesExist(*zjolt::ToJolt(settings), rods[i].vertex, 2)) {
+      return NoSuchVertex(
+          "a rod names a vertex that has not been added yet; add every "
+          "vertex before the constraints that reference them");
+    }
+  }
+
+  JoltSettings *jolt_settings = zjolt::ToJolt(settings);
+  jolt_settings->mRodStretchShearConstraints.reserve(
+      jolt_settings->mRodStretchShearConstraints.size() + count);
+  for (uint32_t i = 0; i < count; ++i) {
+    jolt_settings->mRodStretchShearConstraints.push_back(
+        JoltSettings::RodStretchShear(rods[i].vertex[0], rods[i].vertex[1],
+                                      rods[i].compliance));
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsAddRodBendTwistConstraints(
+    ZJoltSoftBodySharedSettings *settings,
+    const ZJoltSoftBodyRodBendTwist *constraints, uint32_t count) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (count != 0 && !zjolt::Present(constraints))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  for (uint32_t i = 0; i < count; ++i) {
+    if (constraints[i].rod[0] == constraints[i].rod[1]) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a rod bend twist constraint must join two DIFFERENT rods");
+    }
+    if (!RodsExist(*zjolt::ToJolt(settings), constraints[i].rod, 2)) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a rod bend twist constraint names a rod that has not been added "
+          "yet; add every rod before the constraints that join them");
+    }
+  }
+
+  JoltSettings *jolt_settings = zjolt::ToJolt(settings);
+  jolt_settings->mRodBendTwistConstraints.reserve(
+      jolt_settings->mRodBendTwistConstraints.size() + count);
+  for (uint32_t i = 0; i < count; ++i) {
+    jolt_settings->mRodBendTwistConstraints.push_back(
+        JoltSettings::RodBendTwist(constraints[i].rod[0], constraints[i].rod[1],
+                                   constraints[i].compliance));
+  }
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltSoftBodySharedSettingsAddInvBindMatrices(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodyInvBind *inv_binds, uint32_t count) {
@@ -465,6 +639,44 @@ void zjoltSoftBodySharedSettingsCalculateEdgeLengths(
     ZJoltSoftBodySharedSettings *settings) {
   if (settings == nullptr) return;
   zjolt::ToJolt(settings)->CalculateEdgeLengths();
+}
+
+void zjoltSoftBodySharedSettingsCalculateVolumeConstraintVolumes(
+    ZJoltSoftBodySharedSettings *settings) {
+  if (settings == nullptr) return;
+  // Jolt asserts here that the four vertices differ. AddVolumeConstraints is
+  // the only way one gets in, and it already refused a repeat — so there is
+  // nothing left for this to check, unlike its rod sibling below.
+  zjolt::ToJolt(settings)->CalculateVolumeConstraintVolumes();
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsCalculateRodProperties(
+    ZJoltSoftBodySharedSettings *settings) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JoltSettings *jolt_settings = zjolt::ToJolt(settings);
+
+  // A rod's frame is built by normalising the vector between its two
+  // vertices, and its length is what that normalisation divides by
+  // (SoftBodySharedSettings.cpp:411-413). Two vertices at the same position
+  // give zero, which Jolt asserts on and, with asserts off, turns into a NaN
+  // quaternion that every rod downstream of it in the chain inherits. Checked
+  // before anything is written, so a refusal leaves the settings untouched.
+  for (const JoltSettings::RodStretchShear &rod :
+       jolt_settings->mRodStretchShearConstraints) {
+    const JPH::Vec3 a(jolt_settings->mVertices[rod.mVertex[0]].mPosition);
+    const JPH::Vec3 b(jolt_settings->mVertices[rod.mVertex[1]].mPosition);
+    if ((b - a).IsNearZero()) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a rod's two vertices are at the same position, so it has no "
+          "length and no direction to build a rest frame from");
+    }
+  }
+
+  jolt_settings->CalculateRodProperties();
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(
@@ -1017,4 +1229,259 @@ ZJoltResult zjoltSoftBodySetSkinnedMaxDistanceMultiplier(
       });
 }
 
+//===----------------------------------------------------------------------===//
+// Rod state
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSoftBodyGetRodStates(const ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body,
+                                      ZJoltSoftBodyRodState *out_states,
+                                      uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  return WithSoftBodyRead(
+      system, body, [&](const JPH::SoftBodyMotionProperties &motion) {
+        // The rod states are sized from, and stay parallel to, the shared
+        // settings' rod list (SoftBodyMotionProperties.cpp:86) — which is
+        // also where the vertex pair that identifies each rod lives, since
+        // the motion properties keep only rotation and angular velocity.
+        const JoltSettings &settings = *motion.GetSettings();
+        const uint32_t count =
+            static_cast<uint32_t>(settings.mRodStretchShearConstraints.size());
+        *out_count = count;
+        if (out_states == nullptr) return ZJOLT_RESULT_OK;
+        if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+        for (uint32_t i = 0; i < count; ++i) {
+          const JoltSettings::RodStretchShear &rod =
+              settings.mRodStretchShearConstraints[i];
+          out_states[i].vertex[0] = rod.mVertex[0];
+          out_states[i].vertex[1] = rod.mVertex[1];
+          out_states[i].rotation = zjolt::ToC(motion.GetRodRotation(i));
+          out_states[i].angular_velocity =
+              zjolt::ToC(motion.GetRodAngularVelocity(i));
+        }
+        return ZJOLT_RESULT_OK;
+      });
+}
+
+//===----------------------------------------------------------------------===//
+// Hit read-back and manual update
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSoftBodyGetFaceIndex(const ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body,
+                                      ZJoltSubShapeId sub_shape_id,
+                                      uint32_t *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                               zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return BodyNotFound();
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsSoftBody()) return NotASoftBody();
+
+  const JPH::SoftBodyMotionProperties &motion =
+      *static_cast<const JPH::SoftBodyMotionProperties *>(
+          jolt_body.GetMotionPropertiesUnchecked());
+  const uint32_t num_faces =
+      static_cast<uint32_t>(motion.GetSettings()->mFaces.size());
+
+  // GetSubShapeIDBits works out its width from `num_faces - 1`, which
+  // underflows to 0xffffffff for a body with no faces and asks for all 32
+  // bits back (SoftBodyShape.cpp:28). Refused here rather than decoded.
+  if (num_faces == 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "this soft body has no faces, so no sub shape id can name one");
+  }
+
+  // Decoded here rather than through SoftBodyShape::GetFaceIndex because
+  // that one asserts on a leftover remainder instead of reporting it, and a
+  // sub shape id from a different body's shape is exactly what leaves one.
+  const JPH::SoftBodyShape &shape =
+      static_cast<const JPH::SoftBodyShape &>(*jolt_body.GetShape());
+  JPH::SubShapeID remainder;
+  const uint32_t face_index = zjolt::ToJoltSubShapeId(sub_shape_id)
+                                  .PopID(shape.GetSubShapeIDBits(), remainder);
+  if (!remainder.IsEmpty() || face_index >= num_faces) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "sub shape id does not name a face of this soft body; it is the id "
+        "of some other shape, or was composed by hand");
+  }
+  *out = face_index;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodyCustomUpdate(ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body, float delta_time) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // The sub-step is delta_time divided by the iteration count, so a
+  // non-positive delta is a step backwards or an infinite one, and NaN is
+  // both. Jolt's own Update refuses this for the system as a whole; nothing
+  // refuses it on this path.
+  if (!(delta_time > 0.0f)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "delta_time must be greater than zero");
+  }
+
+  // Deliberately the NO-LOCK interface, which is what makes this the one
+  // entry point in this file that does not go through WithSoftBodyWrite.
+  // CustomUpdate takes body locks of its own — on the bodies it collides
+  // with, and on this one through BodyInterface::SetPosition
+  // (SoftBodyMotionProperties.cpp:1255). Holding a write lock across it would
+  // wait on a mutex this thread already owns, and Jolt's body mutexes are not
+  // recursive, so the deadlock would be permanent and would look like a hang
+  // in the physics step rather than a bad call here. The threading contract
+  // this shifts onto the caller is stated in the header.
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterfaceNoLock(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return BodyNotFound();
+  JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsSoftBody()) return NotASoftBody();
+
+  static_cast<JPH::SoftBodyMotionProperties *>(
+      jolt_body.GetMotionPropertiesUnchecked())
+      ->CustomUpdate(delta_time, jolt_body, system->system);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Contact listener
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSoftBodyManifoldGetVertexContacts(
+    const ZJoltSoftBodyManifold *manifold,
+    ZJoltSoftBodyVertexContact *out_contacts, uint32_t capacity,
+    uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(manifold, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::SoftBodyManifold &jolt_manifold = *zjolt::ToJolt(manifold);
+  const JPH::Array<JPH::SoftBodyVertex> &vertices = jolt_manifold.GetVertices();
+
+  // Counted rather than sized from the vertex count: a manifold reports the
+  // vertices that TOUCHED something, which for a cloth on a table is a small
+  // fraction of them, and sizing a buffer for the whole body to receive a
+  // dozen entries is the cost this avoids.
+  uint32_t count = 0;
+  for (const JPH::SoftBodyVertex &vertex : vertices)
+    if (jolt_manifold.HasContact(vertex)) ++count;
+  *out_count = count;
+  if (out_contacts == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  uint32_t written = 0;
+  for (uint32_t i = 0; i < static_cast<uint32_t>(vertices.size()); ++i) {
+    const JPH::SoftBodyVertex &vertex = vertices[i];
+    if (!jolt_manifold.HasContact(vertex)) continue;
+    ZJoltSoftBodyVertexContact &out = out_contacts[written++];
+    out.vertex = i;
+    out.body = zjolt::ToC(jolt_manifold.GetContactBodyID(vertex));
+    out.local_contact_point =
+        zjolt::ToC(jolt_manifold.GetLocalContactPoint(vertex));
+    out.normal = zjolt::ToC(jolt_manifold.GetContactNormal(vertex));
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodyManifoldGetSensorContacts(
+    const ZJoltSoftBodyManifold *manifold, ZJoltBodyId *out_bodies,
+    uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(manifold, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::SoftBodyManifold &jolt_manifold = *zjolt::ToJolt(manifold);
+  const uint32_t count =
+      static_cast<uint32_t>(jolt_manifold.GetNumSensorContacts());
+  *out_count = count;
+  if (out_bodies == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  for (uint32_t i = 0; i < count; ++i)
+    out_bodies[i] = zjolt::ToC(jolt_manifold.GetSensorContactBodyID(i));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodySetContactListener(
+    ZJoltPhysicsSystem *system,
+    const ZJoltSoftBodyContactListener *listener) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (listener == nullptr) {
+    system->system.SetSoftBodyContactListener(nullptr);
+    zjolt::Delete(system->soft_body_contact_listener);
+    system->soft_body_contact_listener = nullptr;
+    return ZJOLT_RESULT_OK;
+  }
+
+  ZJoltSoftBodyContactListenerAdapter *adapter =
+      zjolt::New<ZJoltSoftBodyContactListenerAdapter>(*listener);
+  if (adapter == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  // Install first, then free the old one, for the reason
+  // zjoltPhysicsSystemSetContactListener gives: the system must never point
+  // at a freed adapter, even for an instant.
+  system->system.SetSoftBodyContactListener(adapter);
+  zjolt::Delete(system->soft_body_contact_listener);
+  system->soft_body_contact_listener = adapter;
+  return ZJOLT_RESULT_OK;
+}
+
 }  // extern "C"
+
+//===----------------------------------------------------------------------===//
+// The adapter Jolt actually calls
+//
+// Outside extern "C": these are C++ virtual overrides, declared in
+// zjolt_internal.h next to their rigid-body sibling and defined here because
+// this is the translation unit that knows how a soft-body manifold is
+// projected.
+//===----------------------------------------------------------------------===//
+
+JPH::SoftBodyValidateResult
+ZJoltSoftBodyContactListenerAdapter::OnSoftBodyContactValidate(
+    const JPH::Body &inSoftBody, const JPH::Body &inOtherBody,
+    JPH::SoftBodyContactSettings &ioSettings) {
+  if (listener_.on_contact_validate == nullptr)
+    return JPH::SoftBodyValidateResult::AcceptContact;
+
+  // Copied out and back rather than aliased: ZJoltSoftBodyContactSettings is
+  // the ABI's own layout and Jolt's is free to grow a field.
+  ZJoltSoftBodyContactSettings settings;
+  settings.inv_mass_scale1 = ioSettings.mInvMassScale1;
+  settings.inv_mass_scale2 = ioSettings.mInvMassScale2;
+  settings.inv_inertia_scale2 = ioSettings.mInvInertiaScale2;
+  settings.is_sensor = ioSettings.mIsSensor;
+
+  const ZJoltSoftBodyValidateResult result = listener_.on_contact_validate(
+      listener_.user, zjolt::ToC(inSoftBody.GetID()),
+      zjolt::ToC(inOtherBody.GetID()), &settings);
+
+  ioSettings.mInvMassScale1 = settings.inv_mass_scale1;
+  ioSettings.mInvMassScale2 = settings.inv_mass_scale2;
+  ioSettings.mInvInertiaScale2 = settings.inv_inertia_scale2;
+  ioSettings.mIsSensor = settings.is_sensor;
+
+  // Anything that is not an explicit rejection accepts, so a host that
+  // returns a value this ABI does not define gets the safe half of the
+  // decision rather than an unmapped enumerator.
+  return result == ZJOLT_SOFT_BODY_VALIDATE_RESULT_REJECT_CONTACT
+             ? JPH::SoftBodyValidateResult::RejectContact
+             : JPH::SoftBodyValidateResult::AcceptContact;
+}
+
+void ZJoltSoftBodyContactListenerAdapter::OnSoftBodyContactAdded(
+    const JPH::Body &inSoftBody, const JPH::SoftBodyManifold &inManifold) {
+  if (listener_.on_contact_added == nullptr) return;
+  listener_.on_contact_added(listener_.user, zjolt::ToC(inSoftBody.GetID()),
+                             zjolt::ToC(&inManifold));
+}

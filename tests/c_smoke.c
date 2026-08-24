@@ -234,6 +234,66 @@ static void onDeactivated(void *user, ZJoltBodyId body, uint64_t user_data) {
 }
 
 //===----------------------------------------------------------------------===//
+// Soft body contact callbacks
+//
+// Jolt keeps these in a slot of their own: a soft body's collisions never
+// reach ZJoltContactListener, so nothing above sees them. Driving them from C
+// is also the only thing that checks ZJoltSoftBodyVertexContact's field order,
+// which the ABI guard compares by size and alignment alone.
+//===----------------------------------------------------------------------===//
+
+static int g_soft_validates = 0;
+static int g_soft_default_settings = 0;
+static int g_soft_contacts_added = 0;
+static uint32_t g_soft_touching_vertices = 0;
+static uint32_t g_soft_sensor_contacts = 0;
+static float g_soft_contact_normal_y = 0.0f;
+static ZJoltBodyId g_soft_contact_body = ZJOLT_BODY_ID_INVALID;
+static ZJoltBodyId g_soft_body_seen = ZJOLT_BODY_ID_INVALID;
+
+static ZJoltSoftBodyValidateResult onSoftValidate(
+    void *user, ZJoltBodyId soft_body, ZJoltBodyId other_body,
+    ZJoltSoftBodyContactSettings *settings) {
+  (void)user;
+  (void)other_body;
+  ++g_soft_validates;
+  g_soft_body_seen = soft_body;
+  /* Filled in with its defaults before the call, which is what lets a
+     listener that only accepts or rejects leave it alone. Counting the times
+     it arrives that way is what proves the struct crossed at all. */
+  if (settings->inv_mass_scale1 == 1.0f && settings->inv_mass_scale2 == 1.0f &&
+      settings->inv_inertia_scale2 == 1.0f)
+    ++g_soft_default_settings;
+  return ZJOLT_SOFT_BODY_VALIDATE_RESULT_ACCEPT_CONTACT;
+}
+
+static void onSoftContactAdded(void *user, ZJoltBodyId soft_body,
+                               const ZJoltSoftBodyManifold *manifold) {
+  (void)user;
+  ++g_soft_contacts_added;
+  g_soft_body_seen = soft_body;
+
+  ZJoltSoftBodyVertexContact contacts[32];
+  uint32_t count = 0;
+  if (zjoltSoftBodyManifoldGetVertexContacts(manifold, contacts, 32, &count) !=
+      ZJOLT_RESULT_OK)
+    return;
+  if (count > g_soft_touching_vertices) g_soft_touching_vertices = count;
+  if (count > 0) {
+    g_soft_contact_body = contacts[0].body;
+    g_soft_contact_normal_y = contacts[0].normal.y;
+  }
+
+  ZJoltBodyId sensors[8];
+  uint32_t sensor_count = 0;
+  if (zjoltSoftBodyManifoldGetSensorContacts(manifold, sensors, 8,
+                                             &sensor_count) == ZJOLT_RESULT_OK) {
+    if (sensor_count > g_soft_sensor_contacts)
+      g_soft_sensor_contacts = sensor_count;
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Streaming query callbacks
 //
 // The point of driving these from C is not that the Zig suite cannot: it is
@@ -1428,6 +1488,408 @@ int main(void) {
 
     zjoltBodyDestroy(system, soft_id);
     zjoltSoftBodySharedSettingsRelease(cloth);
+  }
+
+  //-------------------------------------------------------------------------
+  // A soft body's second half: rods, materials, the manifold, and the update
+  // that does not go through the system
+  //
+  // Every one of these carries a pointer or a struct the Zig ABI guard only
+  // measures. The contact listener in particular is a slot of its own — a
+  // soft body's collisions never reach ZJoltContactListener — and the sensor
+  // list below does not merely go unheard without one installed, it is not
+  // gathered at all.
+  //-------------------------------------------------------------------------
+
+  {
+    ZJoltSoftBodySharedSettings *rope = NULL;
+    CHECK_OK(zjoltSoftBodySharedSettingsCreate(&rope));
+
+    /* Four vertices along +X, the first pinned, joined by three rods. */
+    ZJoltSoftBodyVertex rope_vertices[4];
+    for (int i = 0; i < 4; ++i) {
+      rope_vertices[i].position.x = (float)i;
+      rope_vertices[i].position.y = 0.0f;
+      rope_vertices[i].position.z = 0.0f;
+      rope_vertices[i].velocity.x = 0.0f;
+      rope_vertices[i].velocity.y = 0.0f;
+      rope_vertices[i].velocity.z = 0.0f;
+      rope_vertices[i].inv_mass = (i == 0) ? 0.0f : 1.0f;
+    }
+    CHECK_OK(zjoltSoftBodySharedSettingsAddVertices(rope, rope_vertices, 4));
+
+    ZJoltSoftBodyRodStretchShear rods[3];
+    for (int i = 0; i < 3; ++i) {
+      rods[i].vertex[0] = (uint32_t)i;
+      rods[i].vertex[1] = (uint32_t)(i + 1);
+      rods[i].compliance = 0.0f;
+    }
+    CHECK_OK(
+        zjoltSoftBodySharedSettingsAddRodStretchShearConstraints(rope, rods, 3));
+
+    /* A rod naming a vertex nobody added reaches Jolt's array unguarded. */
+    ZJoltSoftBodyRodStretchShear bad_rod = rods[0];
+    bad_rod.vertex[1] = 9;
+    CHECK(zjoltSoftBodySharedSettingsAddRodStretchShearConstraints(
+              rope, &bad_rod, 1) == ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a rod naming a vertex that does not exist is refused");
+
+    ZJoltSoftBodyRodBendTwist twists[2];
+    for (int i = 0; i < 2; ++i) {
+      twists[i].rod[0] = (uint32_t)i;
+      twists[i].rod[1] = (uint32_t)(i + 1);
+      twists[i].compliance = 0.01f;
+    }
+    CHECK_OK(zjoltSoftBodySharedSettingsAddRodBendTwistConstraints(rope, twists,
+                                                                   2));
+
+    ZJoltSoftBodyRodBendTwist bad_twist = twists[0];
+    bad_twist.rod[1] = 7;
+    CHECK(zjoltSoftBodySharedSettingsAddRodBendTwistConstraints(
+              rope, &bad_twist, 1) == ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a bend twist constraint naming a rod that does not exist is refused");
+
+    CHECK_OK(zjoltSoftBodySharedSettingsCalculateRodProperties(rope));
+    zjoltSoftBodySharedSettingsOptimize(rope);
+
+    ZJoltSoftBodyDesc rope_desc;
+    zjoltSoftBodyDescInit(&rope_desc);
+    rope_desc.shared_settings = rope;
+    rope_desc.object_layer = LAYER_MOVING;
+    rope_desc.position.y = (ZJoltReal)6.0;
+    rope_desc.update_position = false;
+    rope_desc.allow_sleeping = false;
+
+    ZJoltBodyId rope_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltSoftBodyCreateAndAdd(system, &rope_desc,
+                                       ZJOLT_ACTIVATION_ACTIVATE, &rope_id));
+
+    uint32_t rod_count = 0;
+    CHECK_OK(zjoltSoftBodyGetRodStates(system, rope_id, NULL, 0, &rod_count));
+    CHECK(rod_count == 3, "the rope has its three rods");
+
+    for (int i = 0; i < 30; ++i)
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+
+    ZJoltSoftBodyRodState rod_states[3];
+    CHECK_OK(
+        zjoltSoftBodyGetRodStates(system, rope_id, rod_states, 3, &rod_count));
+    CHECK(rod_count == 3, "and reads all three back");
+
+    ZJoltSoftBodyVertexState rope_states[4];
+    uint32_t rope_vertex_count = 0;
+    CHECK_OK(zjoltSoftBodyGetVertexStates(system, rope_id, rope_states, 4,
+                                          &rope_vertex_count));
+    CHECK(rope_vertex_count == 4, "and its four vertices");
+
+    /* A rod's rotation takes its local +Z onto the direction between its two
+       vertices. That is the contract, and the whole reason a rod is worth
+       more than an edge. */
+    for (uint32_t i = 0; i < rod_count; ++i) {
+      ZJoltVec3 a = rope_states[rod_states[i].vertex[0]].position;
+      ZJoltVec3 b = rope_states[rod_states[i].vertex[1]].position;
+      ZJoltVec3 delta = {b.x - a.x, b.y - a.y, b.z - a.z};
+      float length =
+          sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+      CHECK(length > 0.5f, "rod %u kept its length", i);
+
+      ZJoltVec3 z_axis = {0.0f, 0.0f, 1.0f};
+      ZJoltVec3 tangent;
+      CHECK_OK(zjoltQuatRotateVector(&rod_states[i].rotation, &z_axis,
+                                     &tangent));
+      CHECK_NEAR(tangent.x, delta.x / length, 0.05f);
+      CHECK_NEAR(tangent.y, delta.y / length, 0.05f);
+      CHECK_NEAR(tangent.z, delta.z / length, 0.05f);
+    }
+
+    zjoltBodyDestroy(system, rope_id);
+    zjoltSoftBodySharedSettingsRelease(rope);
+  }
+
+  {
+    /* A tetrahedron whose six-times-volume is 2, so Jolt's placeholder rest
+       volume of 1 is visibly wrong until it is measured. */
+    static const float kTet[4][3] = {
+        {0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 1.0f},
+    };
+    static const uint32_t kTetFaces[4][3] = {
+        {0, 2, 1}, {0, 3, 2}, {0, 1, 3}, {1, 2, 3},
+    };
+
+    ZJoltSoftBodyVertex tet_vertices[4];
+    ZJoltSoftBodyFace tet_faces[4];
+    for (int i = 0; i < 4; ++i) {
+      tet_vertices[i].position.x = kTet[i][0];
+      tet_vertices[i].position.y = kTet[i][1];
+      tet_vertices[i].position.z = kTet[i][2];
+      tet_vertices[i].velocity.x = 0.0f;
+      tet_vertices[i].velocity.y = 0.0f;
+      tet_vertices[i].velocity.z = 0.0f;
+      tet_vertices[i].inv_mass = 1.0f;
+      tet_faces[i].vertex[0] = kTetFaces[i][0];
+      tet_faces[i].vertex[1] = kTetFaces[i][1];
+      tet_faces[i].vertex[2] = kTetFaces[i][2];
+      tet_faces[i].material_index = 0;
+    }
+
+    ZJoltSoftBodyVolumeConstraint tet_volume;
+    tet_volume.vertex[0] = 0;
+    tet_volume.vertex[1] = 1;
+    tet_volume.vertex[2] = 2;
+    tet_volume.vertex[3] = 3;
+    tet_volume.compliance = 1.0e-5f;
+
+    ZJoltSoftBodySharedSettings *jelly = NULL;
+    CHECK_OK(zjoltSoftBodySharedSettingsCreate(&jelly));
+    CHECK_OK(zjoltSoftBodySharedSettingsAddVertices(jelly, tet_vertices, 4));
+    CHECK_OK(zjoltSoftBodySharedSettingsAddFaces(jelly, tet_faces, 4));
+    CHECK_OK(
+        zjoltSoftBodySharedSettingsAddVolumeConstraints(jelly, &tet_volume, 1));
+
+    /* The clone is taken BEFORE the rest volumes are measured, so the two
+       differ by exactly the one call this is here to show. */
+    ZJoltSoftBodySharedSettings *unmeasured = NULL;
+    CHECK_OK(zjoltSoftBodySharedSettingsClone(jelly, &unmeasured));
+    CHECK(zjoltSoftBodySharedSettingsGetRefCount(unmeasured) == 1,
+          "a clone comes back with one reference of its own");
+    CHECK(zjoltSoftBodySharedSettingsGetRefCount(jelly) == 1,
+          "and does not take one from the original");
+    zjoltSoftBodySharedSettingsOptimize(unmeasured);
+
+    zjoltSoftBodySharedSettingsCalculateVolumeConstraintVolumes(jelly);
+    zjoltSoftBodySharedSettingsOptimize(jelly);
+
+    ZJoltSoftBodyDesc jelly_desc;
+    zjoltSoftBodyDescInit(&jelly_desc);
+    jelly_desc.shared_settings = jelly;
+    jelly_desc.object_layer = LAYER_MOVING;
+    jelly_desc.position.y = (ZJoltReal)20.0;
+    jelly_desc.gravity_factor = 0.0f;
+    jelly_desc.allow_sleeping = false;
+
+    ZJoltBodyId measured_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltSoftBodyCreateAndAdd(system, &jelly_desc,
+                                       ZJOLT_ACTIVATION_ACTIVATE,
+                                       &measured_id));
+
+    jelly_desc.shared_settings = unmeasured;
+    jelly_desc.position.x = (ZJoltReal)30.0;
+    ZJoltBodyId unmeasured_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltSoftBodyCreateAndAdd(system, &jelly_desc,
+                                       ZJOLT_ACTIVATION_ACTIVATE,
+                                       &unmeasured_id));
+
+    for (int i = 0; i < 60; ++i)
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+
+    float measured_volume = 0.0f;
+    float unmeasured_volume = 0.0f;
+    CHECK_OK(zjoltSoftBodyGetVolume(system, measured_id, &measured_volume));
+    CHECK_OK(zjoltSoftBodyGetVolume(system, unmeasured_id, &unmeasured_volume));
+    CHECK_NEAR(measured_volume, 2.0f / 6.0f, 0.05f);
+    CHECK_NEAR(unmeasured_volume, 1.0f / 6.0f, 0.02f);
+
+    zjoltBodyDestroy(system, measured_id);
+    zjoltBodyDestroy(system, unmeasured_id);
+    zjoltSoftBodySharedSettingsRelease(unmeasured);
+    zjoltSoftBodySharedSettingsRelease(jelly);
+  }
+
+  {
+    /* Materials, the face index a hit resolves to, the contact listener, and
+       an update that never goes through the system. */
+    static const float kCorners[8][3] = {
+        {-0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, -0.5f}, {0.5f, -0.5f, 0.5f},
+        {-0.5f, -0.5f, 0.5f},  {-0.5f, 0.5f, -0.5f}, {0.5f, 0.5f, -0.5f},
+        {0.5f, 0.5f, 0.5f},    {-0.5f, 0.5f, 0.5f},
+    };
+    static const uint32_t kTriangles[12][3] = {
+        {0, 1, 2}, {0, 2, 3}, {4, 6, 5}, {4, 7, 6}, {3, 2, 6}, {3, 6, 7},
+        {0, 4, 5}, {0, 5, 1}, {0, 3, 7}, {0, 7, 4}, {1, 5, 6}, {1, 6, 2},
+    };
+
+    ZJoltSoftBodyVertex cube_vertices[8];
+    ZJoltSoftBodyFace cube_faces[12];
+    for (int i = 0; i < 8; ++i) {
+      cube_vertices[i].position.x = kCorners[i][0];
+      cube_vertices[i].position.y = kCorners[i][1];
+      cube_vertices[i].position.z = kCorners[i][2];
+      cube_vertices[i].velocity.x = 0.0f;
+      cube_vertices[i].velocity.y = 0.0f;
+      cube_vertices[i].velocity.z = 0.0f;
+      cube_vertices[i].inv_mass = 1.0f;
+    }
+    for (int i = 0; i < 12; ++i) {
+      cube_faces[i].vertex[0] = kTriangles[i][0];
+      cube_faces[i].vertex[1] = kTriangles[i][1];
+      cube_faces[i].vertex[2] = kTriangles[i][2];
+      /* Faces 2 and 3 are the top of the cube. */
+      cube_faces[i].material_index = (i == 2 || i == 3) ? 1u : 0u;
+    }
+
+    ZJoltPhysicsMaterial *canvas = NULL;
+    ZJoltPhysicsMaterial *lid = NULL;
+    CHECK_OK(zjoltPhysicsMaterialCreate("canvas", NULL, &canvas));
+    CHECK_OK(zjoltPhysicsMaterialCreate("lid", NULL, &lid));
+    const ZJoltPhysicsMaterial *const material_list[2] = {canvas, lid};
+
+    ZJoltSoftBodySharedSettings *skin = NULL;
+    CHECK_OK(zjoltSoftBodySharedSettingsCreate(&skin));
+    CHECK_OK(zjoltSoftBodySharedSettingsAddVertices(skin, cube_vertices, 8));
+    CHECK_OK(zjoltSoftBodySharedSettingsSetMaterials(skin, material_list, 2));
+    CHECK_OK(zjoltSoftBodySharedSettingsAddFaces(skin, cube_faces, 12));
+
+    /* An empty list is an out-of-bounds read for every face, not a clear. */
+    CHECK(zjoltSoftBodySharedSettingsSetMaterials(skin, material_list, 0) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "an empty material list is refused");
+
+    uint32_t material_count = 0;
+    CHECK_OK(zjoltSoftBodySharedSettingsGetMaterials(skin, NULL, 0,
+                                                     &material_count));
+    CHECK(material_count == 2, "both materials are on the settings");
+    const ZJoltPhysicsMaterial *read_back[2] = {NULL, NULL};
+    CHECK_OK(zjoltSoftBodySharedSettingsGetMaterials(skin, read_back, 2,
+                                                     &material_count));
+    CHECK(read_back[0] == canvas && read_back[1] == lid,
+          "and come back in the order they went in");
+
+    ZJoltSoftBodyVertexAttributes attributes;
+    zjoltSoftBodyVertexAttributesInit(&attributes);
+    CHECK_OK(zjoltSoftBodySharedSettingsCreateConstraints(
+        skin, &attributes, 1, ZJOLT_SOFT_BODY_BEND_TYPE_DIHEDRAL, 0.1396f));
+    zjoltSoftBodySharedSettingsOptimize(skin);
+
+    ZJoltSoftBodyDesc skin_desc;
+    zjoltSoftBodyDescInit(&skin_desc);
+    skin_desc.shared_settings = skin;
+    skin_desc.object_layer = LAYER_MOVING;
+    skin_desc.position.x = (ZJoltReal)50.0;
+    skin_desc.position.y = (ZJoltReal)10.0;
+    skin_desc.pressure = 20.0f;
+    skin_desc.vertex_radius = 0.01f;
+    skin_desc.allow_sleeping = false;
+
+    ZJoltBodyId skin_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltSoftBodyCreateAndAdd(system, &skin_desc,
+                                       ZJOLT_ACTIVATION_ACTIVATE, &skin_id));
+
+    /* Straight down the middle from above, so the first thing in the way is
+       one of the two faces carrying the second material. */
+    ZJoltRVec3 ray_origin = {(ZJoltReal)50.0, (ZJoltReal)15.0, (ZJoltReal)0.0};
+    ZJoltVec3 ray_direction = {0.0f, -10.0f, 0.0f};
+    ZJoltRayCastHit hit;
+    bool did_hit = false;
+    CHECK_OK(zjoltCastRayClosest(system, &ray_origin, &ray_direction, NULL,
+                                 NULL, &hit, &did_hit));
+    CHECK(did_hit, "the ray found the soft body");
+    if (did_hit) {
+      CHECK(hit.body == skin_id, "and it is the soft body it found");
+
+      uint32_t face_index = 0xffffffffu;
+      CHECK_OK(zjoltSoftBodyGetFaceIndex(system, skin_id, hit.sub_shape_id,
+                                         &face_index));
+      CHECK(face_index == 2 || face_index == 3,
+            "the sub shape id resolves to one of the two top faces (got %u)",
+            face_index);
+      CHECK(hit.material == lid,
+            "and the material on it is the one that face was given");
+    }
+
+    /* A sub shape id from nothing in this body is refused rather than
+       decoded into a plausible-looking face index. */
+    uint32_t nowhere_face = 0;
+    CHECK(zjoltSoftBodyGetFaceIndex(system, skin_id, ZJOLT_SUB_SHAPE_ID_EMPTY,
+                                    &nowhere_face) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "an empty sub shape id names no face");
+    CHECK(zjoltSoftBodyGetFaceIndex(system, ball_id, 0, &nowhere_face) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "and a rigid body has no faces to name");
+
+    /* An update that never goes through the system at all: no step, no job
+       system, and the body still falls. */
+    ZJoltRVec3 before_update;
+    ZJoltRVec3 after_update;
+    zjoltBodyGetCenterOfMassPosition(system, skin_id, &before_update);
+    for (int i = 0; i < 30; ++i)
+      CHECK_OK(zjoltSoftBodyCustomUpdate(system, skin_id, 1.0f / 60.0f));
+    zjoltBodyGetCenterOfMassPosition(system, skin_id, &after_update);
+    CHECK((double)after_update.y < (double)before_update.y - 0.5,
+          "a manual update moved the body without a step (%.3f -> %.3f)",
+          (double)before_update.y, (double)after_update.y);
+    CHECK((double)after_update.y > (double)before_update.y - 2.0,
+          "by about half a second of free fall, and no more");
+
+    CHECK(zjoltSoftBodyCustomUpdate(system, skin_id, 0.0f) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a zero delta time is refused");
+    CHECK(zjoltSoftBodyCustomUpdate(system, ball_id, 1.0f / 60.0f) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "and a rigid body has no soft body update to run");
+
+    /* The listener, and a floor and a sensor for it to have something to say
+       about. */
+    ZJoltShape *slab = NULL;
+    CHECK_OK(zjoltShapeCreateBox(&(ZJoltVec3){4.0f, 0.5f, 4.0f}, 0.05f, 0.0f,
+                                 NULL, &slab));
+
+    ZJoltBodyDesc slab_desc;
+    zjoltBodyDescInit(&slab_desc);
+    slab_desc.shape = slab;
+    slab_desc.motion_type = ZJOLT_MOTION_TYPE_STATIC;
+    slab_desc.object_layer = LAYER_STATIC;
+    slab_desc.position.x = (ZJoltReal)50.0;
+    slab_desc.position.y = (ZJoltReal)-0.5;
+    ZJoltBodyId slab_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltBodyCreateAndAdd(system, &slab_desc,
+                                   ZJOLT_ACTIVATION_DONT_ACTIVATE, &slab_id));
+
+    slab_desc.position.y = (ZJoltReal)4.0;
+    slab_desc.is_sensor = true;
+    ZJoltBodyId sensor_id = ZJOLT_BODY_ID_INVALID;
+    CHECK_OK(zjoltBodyCreateAndAdd(system, &slab_desc,
+                                   ZJOLT_ACTIVATION_DONT_ACTIVATE, &sensor_id));
+
+    ZJoltSoftBodyContactListener soft_listener;
+    soft_listener.on_contact_validate = onSoftValidate;
+    soft_listener.on_contact_added = onSoftContactAdded;
+    soft_listener.user = NULL;
+    CHECK_OK(zjoltSoftBodySetContactListener(system, &soft_listener));
+
+    for (int i = 0; i < 150; ++i)
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+
+    CHECK(g_soft_validates > 0, "the soft body validate callback fired");
+    CHECK(g_soft_default_settings == g_soft_validates,
+          "with its contact settings filled in with their defaults");
+    CHECK(g_soft_contacts_added > 0, "and the contact-added callback fired");
+    CHECK(g_soft_body_seen == skin_id, "naming the soft body it was about");
+    CHECK(g_soft_touching_vertices > 0, "with vertices actually touching");
+    CHECK(g_soft_touching_vertices <= 8, "no more than the body has");
+    CHECK(g_soft_contact_body == slab_id, "and they touched the floor");
+    /* Pointing down, into the floor: the normal is the direction the soft
+       body pushes, not the direction it is pushed. */
+    CHECK(g_soft_contact_normal_y < -0.5f,
+          "the contact normal points into what was touched (%.3f)",
+          (double)g_soft_contact_normal_y);
+    CHECK(g_soft_sensor_contacts > 0,
+          "and the sensor it fell through was reported");
+
+    CHECK_OK(zjoltSoftBodySetContactListener(system, NULL));
+    int validates_before = g_soft_validates;
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK(g_soft_validates == validates_before,
+          "a cleared listener stops being called");
+
+    zjoltBodyDestroy(system, skin_id);
+    zjoltBodyDestroy(system, slab_id);
+    zjoltBodyDestroy(system, sensor_id);
+    zjoltShapeRelease(slab);
+    zjoltSoftBodySharedSettingsRelease(skin);
+    zjoltPhysicsMaterialRelease(canvas);
+    zjoltPhysicsMaterialRelease(lid);
   }
 
   //-------------------------------------------------------------------------
