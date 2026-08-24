@@ -21,6 +21,7 @@
 #ifndef ZJOLT_VEHICLE_H_
 #define ZJOLT_VEHICLE_H_
 
+#include "zjolt_constraint.h"
 #include "zjolt_core.h"
 
 #ifdef __cplusplus
@@ -52,9 +53,9 @@ typedef enum ZJoltVehicleCollisionTesterKind {
 typedef enum ZJoltVehicleTransmissionMode {
   /// Shifts on its own from engine RPM; see ZJoltVehicleTransmissionDesc.
   ZJOLT_VEHICLE_TRANSMISSION_MODE_AUTO = 0,
-  /// Gear and clutch are whatever they were last set to; nothing in this ABI
-  /// yet sets them for a manual transmission, so manual mode idles in neutral
-  /// until a future entry point drives it.
+  /// Gear and clutch are whatever they were last set to, through
+  /// zjoltVehicleConstraintSetGear — auto mode's shift points and timers are
+  /// not consulted at all.
   ZJOLT_VEHICLE_TRANSMISSION_MODE_MANUAL = 1,
 } ZJoltVehicleTransmissionMode;
 
@@ -403,6 +404,51 @@ ZJOLT_API void zjoltVehicleConstraintGetWheelContactPointVelocity(
     ZJoltVec3 *out);
 
 //===----------------------------------------------------------------------===//
+// Driver input and drivetrain readback — every controller kind
+//
+// forward/brake, engine RPM, current gear, clutch friction and gear ratio
+// mean the same thing whichever controller a constraint has (a
+// WheeledVehicleController and a TrackedVehicleController each carry their
+// own VehicleEngine and VehicleTransmission), so each is one entry point
+// that switches on zjoltVehicleConstraintGetControllerKind internally rather
+// than two spellings a caller could pick the wrong one of. Called against a
+// constraint with no driveable controller (there is none today, but the
+// check is here for whatever is added next) each returns
+// ZJOLT_RESULT_INVALID_ARGUMENT, or the same default a NULL constraint would
+// give for the infallible readbacks.
+//===----------------------------------------------------------------------===//
+
+ZJOLT_API float
+zjoltVehicleConstraintGetForwardInput(const ZJoltVehicleConstraint *constraint);
+ZJOLT_API float
+zjoltVehicleConstraintGetBrakeInput(const ZJoltVehicleConstraint *constraint);
+
+ZJOLT_API float
+zjoltVehicleConstraintGetEngineRpm(const ZJoltVehicleConstraint *constraint);
+/// -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
+ZJOLT_API int32_t
+zjoltVehicleConstraintGetCurrentGear(const ZJoltVehicleConstraint *constraint);
+ZJOLT_API bool
+zjoltVehicleConstraintIsSwitchingGear(const ZJoltVehicleConstraint *constraint);
+ZJOLT_API float
+zjoltVehicleConstraintGetClutchFriction(const ZJoltVehicleConstraint *constraint);
+/// Current gear ratio times the differential ratio (transmission's
+/// VehicleTransmission::GetCurrentRatio); 0 in neutral.
+ZJOLT_API float
+zjoltVehicleConstraintGetGearRatio(const ZJoltVehicleConstraint *constraint);
+
+/// Drives a manual transmission (ZJOLT_VEHICLE_TRANSMISSION_MODE_MANUAL):
+/// sets the current gear and the clutch's friction fraction directly,
+/// bypassing auto mode's shift points and timers entirely. Also accepted
+/// (harmlessly overwritten on the next auto shift) against an auto
+/// transmission.
+/// @param gear -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
+/// @param clutch_friction [0, 1]: 0 = clutch fully disengaged (no torque
+/// reaches the wheels), 1 = fully engaged.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintSetGear(
+    ZJoltVehicleConstraint *constraint, int32_t gear, float clutch_friction);
+
+//===----------------------------------------------------------------------===//
 // Wheeled and motorcycle controller — driver input and readback
 //
 // Every entry point here also accepts ZJOLT_VEHICLE_CONTROLLER_KIND_MOTORCYCLE,
@@ -419,21 +465,9 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintSetWheeledDriverInput(
     ZJoltVehicleConstraint *constraint, float forward, float right,
     float brake, float hand_brake);
 
-ZJOLT_API float zjoltVehicleConstraintGetWheeledForwardInput(
-    const ZJoltVehicleConstraint *constraint);
 ZJOLT_API float zjoltVehicleConstraintGetWheeledRightInput(
     const ZJoltVehicleConstraint *constraint);
-ZJOLT_API float zjoltVehicleConstraintGetWheeledBrakeInput(
-    const ZJoltVehicleConstraint *constraint);
 ZJOLT_API float zjoltVehicleConstraintGetWheeledHandBrakeInput(
-    const ZJoltVehicleConstraint *constraint);
-
-ZJOLT_API float
-zjoltVehicleConstraintGetWheeledEngineRpm(const ZJoltVehicleConstraint *constraint);
-/// -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
-ZJOLT_API int32_t zjoltVehicleConstraintGetWheeledCurrentGear(
-    const ZJoltVehicleConstraint *constraint);
-ZJOLT_API bool zjoltVehicleConstraintIsWheeledSwitchingGear(
     const ZJoltVehicleConstraint *constraint);
 
 //===----------------------------------------------------------------------===//
@@ -448,9 +482,9 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintSetTrackedDriverInput(
     ZJoltVehicleConstraint *constraint, float forward, float left_ratio,
     float right_ratio, float brake);
 
-ZJOLT_API float
-zjoltVehicleConstraintGetTrackedEngineRpm(const ZJoltVehicleConstraint *constraint);
-ZJOLT_API int32_t zjoltVehicleConstraintGetTrackedCurrentGear(
+ZJOLT_API float zjoltVehicleConstraintGetTrackedLeftRatio(
+    const ZJoltVehicleConstraint *constraint);
+ZJOLT_API float zjoltVehicleConstraintGetTrackedRightRatio(
     const ZJoltVehicleConstraint *constraint);
 
 //===----------------------------------------------------------------------===//
@@ -461,6 +495,124 @@ ZJOLT_API int32_t zjoltVehicleConstraintGetTrackedCurrentGear(
 ZJOLT_API ZJoltResult zjoltVehicleConstraintSetMotorcycleLeanControllerEnabled(
     ZJoltVehicleConstraint *constraint, bool enabled);
 ZJOLT_API bool zjoltVehicleConstraintIsMotorcycleLeanControllerEnabled(
+    const ZJoltVehicleConstraint *constraint);
+
+/// Caps how far the steering angle can go as the motorcycle leans, so it
+/// cannot steer into itself. Disabling is for a bike that should behave like
+/// a car with two wheels close together rather than lean into its turns.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintSetMotorcycleLeanSteeringLimitEnabled(
+    ZJoltVehicleConstraint *constraint, bool enabled);
+ZJOLT_API bool zjoltVehicleConstraintIsMotorcycleLeanSteeringLimitEnabled(
+    const ZJoltVehicleConstraint *constraint);
+
+/// Distance between the front and rear wheel's ground contact, used by the
+/// lean controller's own geometry; 0 against a non-motorcycle constraint.
+ZJOLT_API float zjoltVehicleConstraintGetMotorcycleWheelBase(
+    const ZJoltVehicleConstraint *constraint);
+
+//===----------------------------------------------------------------------===//
+// Gravity override
+//
+// Replaces PhysicsSystem::GetGravity() for this vehicle only — for a stunt,
+// a low-gravity moon buggy, or any per-vehicle deviation from the world's
+// own gravity. Infallible: a NULL constraint is a no-op / returns a zero
+// vector / reports "not overridden", the same as every other getter here.
+//===----------------------------------------------------------------------===//
+
+ZJOLT_API void zjoltVehicleConstraintOverrideGravity(
+    ZJoltVehicleConstraint *constraint, const ZJoltVec3 *gravity);
+/// Also restores the vehicle body's gravity factor to 1.
+ZJOLT_API void zjoltVehicleConstraintResetGravityOverride(
+    ZJoltVehicleConstraint *constraint);
+ZJOLT_API bool zjoltVehicleConstraintIsGravityOverridden(
+    const ZJoltVehicleConstraint *constraint);
+ZJOLT_API void zjoltVehicleConstraintGetGravityOverride(
+    const ZJoltVehicleConstraint *constraint, ZJoltVec3 *out);
+
+//===----------------------------------------------------------------------===//
+// Wheel-ground collision test frequency
+//
+// Skipping steps between wheel-ground collision tests is a cheap way to
+// spend less time on vehicles that are far from the camera or barely
+// moving; the wheels keep their last contact between tests. Defaults come
+// from VehicleConstraintSettings's own construction and are not part of
+// ZJoltVehicleConstraintDesc, so they start at Jolt's built-in values (1 for
+// both) until set here.
+//===----------------------------------------------------------------------===//
+
+ZJOLT_API uint32_t zjoltVehicleConstraintGetNumStepsBetweenCollisionTestActive(
+    const ZJoltVehicleConstraint *constraint);
+ZJOLT_API void zjoltVehicleConstraintSetNumStepsBetweenCollisionTestActive(
+    ZJoltVehicleConstraint *constraint, uint32_t steps);
+ZJOLT_API uint32_t
+zjoltVehicleConstraintGetNumStepsBetweenCollisionTestInactive(
+    const ZJoltVehicleConstraint *constraint);
+ZJOLT_API void zjoltVehicleConstraintSetNumStepsBetweenCollisionTestInactive(
+    ZJoltVehicleConstraint *constraint, uint32_t steps);
+
+//===----------------------------------------------------------------------===//
+// Wheel force and pose readback
+//
+// The lambdas are the constraint solver's own accumulated impulses for the
+// wheel this step, divided by delta time to read as a force: how hard the
+// suspension is pushing, and how much grip the tire is actually using in
+// each direction. All four (sub-shape id included) share the contact
+// getters' convention above: zero, or ZJOLT_SUB_SHAPE_ID_EMPTY, without
+// contact or past the wheel count.
+//===----------------------------------------------------------------------===//
+
+ZJOLT_API ZJoltSubShapeId zjoltVehicleConstraintGetWheelContactSubShapeId(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+/// True when the suspension has bottomed out against its hard limit at
+/// suspension_min_length this step.
+ZJOLT_API bool zjoltVehicleConstraintHasWheelHitHardPoint(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+ZJOLT_API float zjoltVehicleConstraintGetWheelSuspensionLambda(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+ZJOLT_API float zjoltVehicleConstraintGetWheelLongitudinalLambda(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+ZJOLT_API float zjoltVehicleConstraintGetWheelLateralLambda(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+
+/// The wheel's forward/up/right axes in the vehicle body's local space,
+/// after steering — feed `out_up`/`out_right` into the two transforms below
+/// to place a wheel mesh whose own local axes do not match theirs. All-zero
+/// past the wheel count.
+ZJOLT_API void zjoltVehicleConstraintGetWheelLocalBasis(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    ZJoltVec3 *out_forward, ZJoltVec3 *out_up, ZJoltVec3 *out_right);
+
+/// The wheel's pose in the vehicle body's local space — suspension travel,
+/// steering and spin all folded in. `wheel_right`/`wheel_up` are the wheel
+/// mesh's own local axes (typically the `out_right`/`out_up` a prior
+/// zjoltVehicleConstraintGetWheelLocalBasis call gave you); identity/zero
+/// past the wheel count.
+ZJOLT_API void zjoltVehicleConstraintGetWheelLocalTransform(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    const ZJoltVec3 *wheel_right, const ZJoltVec3 *wheel_up,
+    ZJoltVec3 *out_position, ZJoltQuat *out_rotation);
+
+/// The wheel's pose in world space: the vehicle body's own world transform
+/// composed with zjoltVehicleConstraintGetWheelLocalTransform. This is what
+/// a wheel mesh should be drawn at each frame.
+ZJOLT_API void zjoltVehicleConstraintGetWheelWorldTransform(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    const ZJoltVec3 *wheel_right, const ZJoltVec3 *wheel_up,
+    ZJoltRVec3 *out_position, ZJoltQuat *out_rotation);
+
+//===----------------------------------------------------------------------===//
+// Viewed as a plain constraint
+//===----------------------------------------------------------------------===//
+
+/// A vehicle constraint IS a JPH::Constraint underneath — it sits in the
+/// same system constraint list zjoltPhysicsSystemGetNumConstraints counts
+/// and zjoltPhysicsSystemDrawConstraints draws — so the generic accessors
+/// (zjoltConstraintSetEnabled, zjoltConstraintGetSubType,
+/// zjoltConstraintIsAdded, zjoltConstraintSetPriority, ...) work on it
+/// through this borrowed view. Borrowed: never zjoltConstraintRelease it,
+/// and it is valid only as long as `constraint` is — do not use it past
+/// zjoltVehicleConstraintDestroy. NULL for a NULL constraint.
+ZJOLT_API ZJoltConstraint *zjoltVehicleConstraintAsConstraint(
     const ZJoltVehicleConstraint *constraint);
 
 #ifdef __cplusplus

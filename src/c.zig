@@ -1423,21 +1423,50 @@ pub extern fn zjoltVehicleConstraintGetWheelContactLongitudinal(constraint: *con
 pub extern fn zjoltVehicleConstraintGetWheelContactLateral(constraint: *const VehicleConstraint, wheel_index: u32, out: *Vec3) void;
 pub extern fn zjoltVehicleConstraintGetWheelContactPointVelocity(constraint: *const VehicleConstraint, wheel_index: u32, out: *Vec3) void;
 
+pub extern fn zjoltVehicleConstraintGetForwardInput(constraint: *const VehicleConstraint) f32;
+pub extern fn zjoltVehicleConstraintGetBrakeInput(constraint: *const VehicleConstraint) f32;
+pub extern fn zjoltVehicleConstraintGetEngineRpm(constraint: *const VehicleConstraint) f32;
+pub extern fn zjoltVehicleConstraintGetCurrentGear(constraint: *const VehicleConstraint) i32;
+pub extern fn zjoltVehicleConstraintIsSwitchingGear(constraint: *const VehicleConstraint) bool;
+pub extern fn zjoltVehicleConstraintGetClutchFriction(constraint: *const VehicleConstraint) f32;
+pub extern fn zjoltVehicleConstraintGetGearRatio(constraint: *const VehicleConstraint) f32;
+pub extern fn zjoltVehicleConstraintSetGear(constraint: *VehicleConstraint, gear: i32, clutch_friction: f32) Result;
+
 pub extern fn zjoltVehicleConstraintSetWheeledDriverInput(constraint: *VehicleConstraint, forward: f32, right: f32, brake: f32, hand_brake: f32) Result;
-pub extern fn zjoltVehicleConstraintGetWheeledForwardInput(constraint: *const VehicleConstraint) f32;
 pub extern fn zjoltVehicleConstraintGetWheeledRightInput(constraint: *const VehicleConstraint) f32;
-pub extern fn zjoltVehicleConstraintGetWheeledBrakeInput(constraint: *const VehicleConstraint) f32;
 pub extern fn zjoltVehicleConstraintGetWheeledHandBrakeInput(constraint: *const VehicleConstraint) f32;
-pub extern fn zjoltVehicleConstraintGetWheeledEngineRpm(constraint: *const VehicleConstraint) f32;
-pub extern fn zjoltVehicleConstraintGetWheeledCurrentGear(constraint: *const VehicleConstraint) i32;
-pub extern fn zjoltVehicleConstraintIsWheeledSwitchingGear(constraint: *const VehicleConstraint) bool;
 
 pub extern fn zjoltVehicleConstraintSetTrackedDriverInput(constraint: *VehicleConstraint, forward: f32, left_ratio: f32, right_ratio: f32, brake: f32) Result;
-pub extern fn zjoltVehicleConstraintGetTrackedEngineRpm(constraint: *const VehicleConstraint) f32;
-pub extern fn zjoltVehicleConstraintGetTrackedCurrentGear(constraint: *const VehicleConstraint) i32;
+pub extern fn zjoltVehicleConstraintGetTrackedLeftRatio(constraint: *const VehicleConstraint) f32;
+pub extern fn zjoltVehicleConstraintGetTrackedRightRatio(constraint: *const VehicleConstraint) f32;
 
 pub extern fn zjoltVehicleConstraintSetMotorcycleLeanControllerEnabled(constraint: *VehicleConstraint, enabled: bool) Result;
 pub extern fn zjoltVehicleConstraintIsMotorcycleLeanControllerEnabled(constraint: *const VehicleConstraint) bool;
+pub extern fn zjoltVehicleConstraintSetMotorcycleLeanSteeringLimitEnabled(constraint: *VehicleConstraint, enabled: bool) Result;
+pub extern fn zjoltVehicleConstraintIsMotorcycleLeanSteeringLimitEnabled(constraint: *const VehicleConstraint) bool;
+pub extern fn zjoltVehicleConstraintGetMotorcycleWheelBase(constraint: *const VehicleConstraint) f32;
+
+pub extern fn zjoltVehicleConstraintOverrideGravity(constraint: *VehicleConstraint, gravity: *const Vec3) void;
+pub extern fn zjoltVehicleConstraintResetGravityOverride(constraint: *VehicleConstraint) void;
+pub extern fn zjoltVehicleConstraintIsGravityOverridden(constraint: *const VehicleConstraint) bool;
+pub extern fn zjoltVehicleConstraintGetGravityOverride(constraint: *const VehicleConstraint, out: *Vec3) void;
+
+pub extern fn zjoltVehicleConstraintGetNumStepsBetweenCollisionTestActive(constraint: *const VehicleConstraint) u32;
+pub extern fn zjoltVehicleConstraintSetNumStepsBetweenCollisionTestActive(constraint: *VehicleConstraint, steps: u32) void;
+pub extern fn zjoltVehicleConstraintGetNumStepsBetweenCollisionTestInactive(constraint: *const VehicleConstraint) u32;
+pub extern fn zjoltVehicleConstraintSetNumStepsBetweenCollisionTestInactive(constraint: *VehicleConstraint, steps: u32) void;
+
+pub extern fn zjoltVehicleConstraintGetWheelContactSubShapeId(constraint: *const VehicleConstraint, wheel_index: u32) SubShapeId;
+pub extern fn zjoltVehicleConstraintHasWheelHitHardPoint(constraint: *const VehicleConstraint, wheel_index: u32) bool;
+pub extern fn zjoltVehicleConstraintGetWheelSuspensionLambda(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+pub extern fn zjoltVehicleConstraintGetWheelLongitudinalLambda(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+pub extern fn zjoltVehicleConstraintGetWheelLateralLambda(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+pub extern fn zjoltVehicleConstraintGetWheelLocalBasis(constraint: *const VehicleConstraint, wheel_index: u32, out_forward: *Vec3, out_up: *Vec3, out_right: *Vec3) void;
+pub extern fn zjoltVehicleConstraintGetWheelLocalTransform(constraint: *const VehicleConstraint, wheel_index: u32, wheel_right: *const Vec3, wheel_up: *const Vec3, out_position: *Vec3, out_rotation: *Quat) void;
+pub extern fn zjoltVehicleConstraintGetWheelWorldTransform(constraint: *const VehicleConstraint, wheel_index: u32, wheel_right: *const Vec3, wheel_up: *const Vec3, out_position: *RVec3, out_rotation: *Quat) void;
+
+pub extern fn zjoltVehicleConstraintAsConstraint(constraint: *const VehicleConstraint) ?*Constraint;
+
 pub extern fn zjoltPhysicsSystemSaveBodyStateLocked(system: *const PhysicsSystem, body: *const Body, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 pub extern fn zjoltPhysicsSystemRestoreBodyStateLocked(system: *PhysicsSystem, body: *Body, data: [*]const u8, size: usize) Result;
 
