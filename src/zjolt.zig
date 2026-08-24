@@ -50,6 +50,7 @@ const state_mod = @import("state.zig");
 const softbody_mod = @import("softbody.zig");
 const vehicle_mod = @import("vehicle.zig");
 const debug_mod = @import("debug.zig");
+const ragdoll_mod = @import("ragdoll.zig");
 
 //=============================================================================
 // Public surface
@@ -213,6 +214,13 @@ pub const defaultVehicleDifferentialDesc = vehicle_mod.defaultDifferentialDesc;
 pub const defaultVehicleAntiRollBarDesc = vehicle_mod.defaultAntiRollBarDesc;
 pub const defaultVehicleCollisionTesterDesc = vehicle_mod.defaultCollisionTesterDesc;
 pub const defaultVehicleMotorcycleDesc = vehicle_mod.defaultMotorcycleDesc;
+pub const Skeleton = ragdoll_mod.Skeleton;
+pub const SkeletonPose = ragdoll_mod.SkeletonPose;
+pub const RagdollSettings = ragdoll_mod.RagdollSettings;
+pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
+pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
+pub const RagdollSwingType = ragdoll_mod.SwingType;
+pub const Ragdoll = ragdoll_mod.Ragdoll;
 
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
