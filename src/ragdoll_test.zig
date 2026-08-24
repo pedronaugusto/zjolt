@@ -1,12 +1,12 @@
 //! Behavioural tests for ragdolls: a two-part chain (root and child, joined
-//! by a swing-twist constraint) that either falls under gravity or is driven
-//! toward a target pose by its motors.
+//! by a swing-twist constraint) that falls under gravity, is driven toward a
+//! target pose by its motors, or is released while still in the world.
 //!
 //! Reuses `integration_test.zig`'s layer map and floor fixture rather than
 //! building its own — see `BINDING.md`.
 //!
 //! `RagdollSettings.createRagdoll` hands back a `Ragdoll`, not the body ids
-//! it spawned, so both tests below recover them the same way: read every
+//! it spawned, so every test below recovers them the same way: read every
 //! body id in the system before spawning, read them again after, and the new
 //! ones are the ragdoll's parts. `zjoltPhysicsSystemGetBodies` promises no
 //! order, so this diff — not position in the list — is what ties an id back
@@ -74,8 +74,8 @@ const Chain = struct {
                     .position2 = joint_position,
                     .twist_axis2 = zjolt.vec3(0, 1, 0),
                     .plane_axis2 = zjolt.vec3(1, 0, 0),
-                    // Generous on purpose: wide enough that neither test
-                    // below is really exercising the limits, only the
+                    // Generous on purpose: wide enough that no test below
+                    // is really exercising the limits, only the
                     // settle-or-drive behaviour the limits sit around.
                     .normal_half_cone_angle = 1.0,
                     .plane_half_cone_angle = 1.0,
@@ -142,12 +142,7 @@ test "a ragdoll added to a world settles under gravity without exploding" {
     const before = try world.system.getBodies(&before_buf);
 
     var ragdoll = try chain.settings.createRagdoll(world.system, 1, 0);
-    // NOT just `ragdoll.release()`: see the defect note by the same defer in
-    // the driving test below. Removing first is what makes this safe.
-    defer {
-        ragdoll.removeFromPhysicsSystem(true);
-        ragdoll.release();
-    }
+    defer ragdoll.release();
     ragdoll.addToPhysicsSystem(.activate, true);
 
     var after_buf: [8]zjolt.BodyId = undefined;
@@ -210,18 +205,7 @@ test "driveToPoseUsingMotors moves the pose toward the target rather than away" 
     const before = try world.system.getBodies(&before_buf);
 
     var ragdoll = try chain.settings.createRagdoll(world.system, 1, 0);
-    // DEFECT: `Ragdoll.release` is documented as "removing [bodies] from
-    // their system first if still added", but Jolt's `~Ragdoll()` just calls
-    // `BodyInterface::DestroyBodies` directly — no removal step — and
-    // `DestroyBodies` asserts every body is already inactive and out of the
-    // broad phase. Releasing a still-added, still-awake ragdoll (as both
-    // tests in this file do) trips that assert instead of behaving as
-    // documented. Removing explicitly first, as done here, is the only way
-    // that actually works.
-    defer {
-        ragdoll.removeFromPhysicsSystem(true);
-        ragdoll.release();
-    }
+    defer ragdoll.release();
     ragdoll.addToPhysicsSystem(.activate, true);
 
     var after_buf: [8]zjolt.BodyId = undefined;
@@ -270,6 +254,79 @@ test "driveToPoseUsingMotors moves the pose toward the target rather than away" 
     // headed in its direction.
     try std.testing.expect(after_angle < before_angle * 0.5);
     try std.testing.expect(after_angle < 0.15);
+}
+
+//=============================================================================
+// Teardown
+//=============================================================================
+
+test "releasing a still-added ragdoll removes it before destroying its bodies" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    var chain = try Chain.build(.dynamic);
+    defer chain.deinit();
+
+    const handles_before = zjolt.liveHandleCount();
+    var before_buf: [8]zjolt.BodyId = undefined;
+    const before = try world.system.getBodies(&before_buf);
+    const bodies_before = world.system.numBodies();
+
+    // The other side of the same decision first, because it is what makes
+    // the removal conditional rather than unconditional: a ragdoll that never
+    // reached the simulation must not be removed on the way out. Jolt takes
+    // the constraints out before the bodies and asserts each one was added,
+    // so removing a never-added ragdoll is its own abort.
+    var never_added = try chain.settings.createRagdoll(world.system, 2, 0);
+    never_added.release();
+    try std.testing.expectEqual(handles_before, zjolt.liveHandleCount());
+    try std.testing.expectEqual(bodies_before, world.system.numBodies());
+
+    var ragdoll = try chain.settings.createRagdoll(world.system, 1, 0);
+    // A ragdoll is a counted live handle now, not only a Jolt reference
+    // count, because the wrapper that carries its physics system is storage
+    // zjolt owns. `deinit` refuses while one is outstanding.
+    try std.testing.expectEqual(handles_before + 1, zjolt.liveHandleCount());
+
+    ragdoll.addToPhysicsSystem(.activate, true);
+
+    var after_buf: [8]zjolt.BodyId = undefined;
+    const after = try world.system.getBodies(&after_buf);
+    var parts: [2]zjolt.BodyId = undefined;
+    try newBodyIds(before, after, &parts);
+
+    const bodies = world.system.bodies();
+    for (parts) |id| try std.testing.expect(bodies.isAdded(id));
+
+    // Added, awake, and stepped, which is the state the old contract said to
+    // release out of only after `removeFromPhysicsSystem`. No such call here:
+    // this is the whole test.
+    try world.stepFor(0.5);
+    try std.testing.expect(ragdoll.isActive(true));
+    ragdoll.release();
+
+    try std.testing.expectEqual(handles_before, zjolt.liveHandleCount());
+
+    // The parts are gone, not merely removed — the release destroyed them
+    // after taking them out, so the system's body list is back to what it
+    // held before.
+    try std.testing.expectEqual(bodies_before, world.system.numBodies());
+    var left_buf: [8]zjolt.BodyId = undefined;
+    const left = try world.system.getBodies(&left_buf);
+    try std.testing.expectEqual(before.len, left.len);
+    for (parts) |part| {
+        for (left) |id| try std.testing.expect(id != part);
+    }
+
+    // And the world is still a world. This is what says the broad phase is
+    // intact: destroying the parts where they stood would have left it
+    // holding freed bodies, which a build without assertions only ever shows
+    // as a corrupt step some time later.
+    try world.stepFor(0.5);
+    try std.testing.expect(world.system.bodies().isAdded(world.floor));
 }
 
 //=============================================================================
