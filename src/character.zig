@@ -556,6 +556,20 @@ fn returnsError(comptime Fn: type) bool {
 /// `context` must outlive the listener, and the value returned here must not
 /// move once `attach`ed — the C side holds a pointer to it.
 pub fn ContactListener(comptime T: type) type {
+    system_mod.requireAnyDecl(T, &.{
+        "onAdjustBodyVelocity",
+        "onContactValidate",
+        "onContactAdded",
+        "onContactPersisted",
+        "onContactRemoved",
+        "onCharacterContactValidate",
+        "onCharacterContactAdded",
+        "onCharacterContactPersisted",
+        "onCharacterContactRemoved",
+        "onContactSolve",
+        "onCharacterContactSolve",
+    });
+
     return struct {
         const Self = @This();
 

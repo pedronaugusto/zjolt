@@ -363,14 +363,21 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
         static_cast<JPH::ObjectLayer>(desc->inner_body_layer);
   }
 
-  // The supporting volume is a plane below the character's centre; anything
-  // contacted above it does not count as ground. Jolt's default is effectively
-  // "everything supports", which reports a wall as ground. Placing it at the
-  // bottom of the shape is what makes GetGroundState mean what its name says.
-  const JPH::AABox local_bounds = settings.mShape->GetLocalBounds();
-  const JPH::Vec3 up = settings.mUp.NormalizedOr(JPH::Vec3::sAxisY());
-  settings.mSupportingVolume =
-      JPH::Plane(up, -up.Dot(local_bounds.mMin) - desc->character_padding);
+  // The supporting volume is a plane through the character; a contact above
+  // it cannot count as ground however flat it is. Jolt's own default is
+  // effectively "everything supports", which reports a wall the character is
+  // pressed against as the ground it is standing on.
+  //
+  // The plane goes one inner radius above the shape's lowest point, which for
+  // a capsule or a sphere is the centre of its bottom cap — Jolt's own
+  // samples use exactly that height, spelled as the standing radius. Placing
+  // it at the lowest point instead is the tempting mistake and it breaks
+  // every slope: a capsule resting on a ramp touches it on the SIDE of its
+  // bottom cap, above the lowest point, so a floor-level plane discards that
+  // contact and the character reports itself unsupported on ground it is
+  // plainly standing on.
+  settings.mSupportingVolume = zjolt::SupportingVolumeFor(
+      settings.mShape, settings.mUp);
 
   ZJoltCharacter *handle = zjolt::New<ZJoltCharacter>();
   if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
@@ -1000,11 +1007,9 @@ ZJoltResult zjoltRigidCharacterCreate(ZJoltPhysicsSystem *system,
   settings.mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc->allowed_dofs);
 
   // Mirrors zjoltCharacterCreate's override of the same field, for the same
-  // reason: Jolt's own default ("everything supports") reports a wall as
-  // ground, which is not what GetGroundState's name promises.
-  const JPH::AABox local_bounds = settings.mShape->GetLocalBounds();
-  const JPH::Vec3 up = settings.mUp.NormalizedOr(JPH::Vec3::sAxisY());
-  settings.mSupportingVolume = JPH::Plane(up, -up.Dot(local_bounds.mMin));
+  // reason and by the same rule — see the comment there.
+  settings.mSupportingVolume = zjolt::SupportingVolumeFor(
+      settings.mShape, settings.mUp);
 
   ZJoltRigidCharacter *handle = zjolt::New<ZJoltRigidCharacter>();
   if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;

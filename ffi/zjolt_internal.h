@@ -880,6 +880,27 @@ void AbortPendingBatches(ZJoltPhysicsSystem *system);
 
 }  // namespace zjolt
 
+namespace zjolt {
+
+/// The plane below which a contact may count as ground, for a character of
+/// the given shape.
+///
+/// One inner radius above the shape's lowest point: for a capsule or a sphere
+/// that is the centre of its bottom cap, which is the height Jolt's own
+/// samples use (spelled there as the standing radius). Both character kinds
+/// share it, because both answer the same question with it and a host that
+/// swaps one for the other should not find "on the ground" means something
+/// different afterwards.
+inline JPH::Plane SupportingVolumeFor(const JPH::Shape *shape,
+                                      JPH::Vec3Arg up_hint) {
+  const JPH::Vec3 up = up_hint.NormalizedOr(JPH::Vec3::sAxisY());
+  const JPH::AABox local_bounds = shape->GetLocalBounds();
+  const float lowest = up.Dot(local_bounds.mMin);
+  return JPH::Plane(up, -(lowest + shape->GetInnerRadius()));
+}
+
+}  // namespace zjolt
+
 /// A character controller, plus the system it queries against.
 struct ZJoltCharacter {
   JPH::Ref<JPH::CharacterVirtual> impl;
