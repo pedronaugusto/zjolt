@@ -21,6 +21,7 @@
 #include "zjolt_internal.h"
 
 #include <Jolt/Core/QuickSort.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/StateRecorder.h>
 
 namespace {
@@ -187,6 +188,29 @@ uint32_t BodySetDigest(const JPH::PhysicsSystem &system, uint32_t *out_count) {
   return hash;
 }
 
+//===----------------------------------------------------------------------===//
+// Per-body container
+//
+// A different magic tag from both the whole-system state container above and
+// the shape container in zjolt_shape.cpp, for the same reason those two
+// differ from each other: a buffer meant for one restore has to be refused by
+// the other rather than parsed.
+//===----------------------------------------------------------------------===//
+
+constexpr uint8_t kBodyMagic[4] = {'Z', 'J', 'B', 'S'};
+constexpr uint32_t kBodyFormatVersion = 1;
+constexpr size_t kBodyHeaderSize = 32;
+
+/// What Body::SaveState / RestoreState's byte count actually depends on:
+/// whether there are motion properties to read at all, and, if so, whether
+/// they belong to a soft body. Folded into one number purely so a restore has
+/// something to compare against the body it is about to write into.
+uint32_t BodyCategory(const JPH::Body &body) {
+  uint32_t category = static_cast<uint32_t>(body.GetMotionType());
+  if (body.IsSoftBody()) category |= 0x100u;
+  return category;
+}
+
 }  // namespace
 
 extern "C" {
@@ -314,6 +338,105 @@ ZJoltResult zjoltPhysicsSystemRestoreState(ZJoltPhysicsSystem *system,
   if (!stream.ConsumedAll()) {
     return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
                            "trailing bytes after the state");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPhysicsSystemSaveBodyStateLocked(
+    const ZJoltPhysicsSystem *system, const ZJoltBody *body, void *buffer,
+    size_t capacity, size_t *out_size) {
+  ZJOLT_ENTER(out_size);
+  if (!zjolt::Present(system, body, out_size)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::Body *jbody = zjolt::ToJolt(body);
+  uint8_t *bytes = static_cast<uint8_t *>(buffer);
+  const bool count_only = bytes == nullptr || capacity < kBodyHeaderSize;
+
+  StateRecorderOut stream(count_only ? nullptr : bytes + kBodyHeaderSize,
+                          count_only ? 0 : capacity - kBodyHeaderSize);
+  system->system.SaveBodyState(*jbody, stream);
+
+  const size_t payload_size = stream.Size();
+  *out_size = kBodyHeaderSize + payload_size;
+  if (bytes == nullptr) return ZJOLT_RESULT_OK;
+  if (count_only || capacity < *out_size || stream.IsFailed())
+    return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  std::memcpy(bytes, kBodyMagic, sizeof(kBodyMagic));
+  WriteU32(bytes + 4, kBodyFormatVersion);
+  WriteU32(bytes + 8, static_cast<uint32_t>(ZJOLT_CONFIG_ID));
+  WriteU32(bytes + 12, JoltVersionStamp());
+  WriteU64(bytes + 16, static_cast<uint64_t>(payload_size));
+  WriteU32(bytes + 24, Crc32(bytes + kBodyHeaderSize, payload_size));
+  WriteU32(bytes + 28, BodyCategory(*jbody));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltPhysicsSystemRestoreBodyStateLocked(ZJoltPhysicsSystem *system,
+                                                     ZJoltBody *body,
+                                                     const void *data,
+                                                     size_t size) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system, body, data)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const uint8_t *bytes = static_cast<const uint8_t *>(data);
+  if (size < kBodyHeaderSize) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "too short to be a saved body state");
+  }
+  if (std::memcmp(bytes, kBodyMagic, sizeof(kBodyMagic)) != 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "not a body state saved by zjoltPhysicsSystemSaveBodyStateLocked");
+  }
+  if (ReadU32(bytes + 4) != kBodyFormatVersion) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "saved by a different zjolt container version");
+  }
+  if (ReadU32(bytes + 8) != static_cast<uint32_t>(ZJOLT_CONFIG_ID)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "saved by a zjolt built with different layout-affecting settings");
+  }
+  if (ReadU32(bytes + 12) != JoltVersionStamp()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "saved against a different Jolt version");
+  }
+
+  const uint64_t payload_size = ReadU64(bytes + 16);
+  if (payload_size != static_cast<uint64_t>(size - kBodyHeaderSize)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "the recorded payload length does not match the buffer");
+  }
+  if (ReadU32(bytes + 24) !=
+      Crc32(bytes + kBodyHeaderSize, static_cast<size_t>(payload_size))) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the body state payload failed its checksum");
+  }
+
+  JPH::Body *jbody = zjolt::ToJolt(body);
+  if (ReadU32(bytes + 28) != BodyCategory(*jbody)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "saved from a body of a different motion type; a body state restore "
+        "puts motion back onto the same kind of body it was saved from");
+  }
+
+  StateRecorderIn stream(bytes + kBodyHeaderSize,
+                         static_cast<size_t>(payload_size));
+  system->system.RestoreBodyState(*jbody, stream);
+  if (stream.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the body state data ended before the state did");
+  }
+  if (!stream.ConsumedAll()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "trailing bytes after the body state");
   }
   return ZJOLT_RESULT_OK;
 }

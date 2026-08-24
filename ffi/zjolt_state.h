@@ -94,6 +94,41 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveState(
 ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreState(
     ZJoltPhysicsSystem *system, const void *data, size_t size);
 
+//===----------------------------------------------------------------------===//
+// One body at a time
+//
+// PhysicsSystem::SaveBodyState / RestoreBodyState, for a caller that only
+// wants to roll one body back rather than the whole simulation — a grabbed
+// object dropped by a networking correction, say, without touching anything
+// else's contacts. Position, rotation, velocity and sleep state; nothing a
+// whole-system restore's body-set digest needs to guard, since there is only
+// ever the one body named here.
+//
+// `body` must already be locked — see zjoltBodyLockRead / zjoltBodyLockWrite
+// in zjolt_body.h. Jolt's own Body::RestoreState reads a different number of
+// bytes for a body with motion properties than for one without, so restoring
+// a dynamic body's saved state onto a static body (or the reverse) would
+// misread the stream rather than fail cleanly; the container records the
+// body's motion type and rejects that case before Jolt reads a byte.
+//===----------------------------------------------------------------------===//
+
+/// Two-call protocol, as zjoltPhysicsSystemSaveState.
+///
+/// Do not call this during a step, for the same reason as
+/// zjoltPhysicsSystemSaveState: it reads the body without taking a fresh
+/// lock, on the assumption that the caller's lock already has it still.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveBodyStateLocked(
+    const ZJoltPhysicsSystem *system, const ZJoltBody *body, void *buffer,
+    size_t capacity, size_t *out_size);
+
+/// Puts one body's saved state back. See zjoltPhysicsSystemSaveBodyStateLocked
+/// for the container, and zjoltBodyLockWrite for the lock this needs — a
+/// write lock, since restoring can move the body between the active and
+/// sleeping lists.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreBodyStateLocked(
+    ZJoltPhysicsSystem *system, ZJoltBody *body, const void *data,
+    size_t size);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

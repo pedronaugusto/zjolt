@@ -68,6 +68,9 @@ pub const collision_group_invalid: u32 = 0xffff_ffff;
 /// Past this, Jolt's `(n * (n - 1)) / 2` table sizing overflows 32 bits.
 pub const group_filter_max_sub_groups: u32 = 65535;
 
+/// Bytes of `DebugText.text`, including the terminator.
+pub const debug_text_max_length: u32 = 64;
+
 pub const build_flag_double_precision: u32 = 1 << 0;
 pub const build_flag_object_layer_32: u32 = 1 << 1;
 pub const build_flag_asserts_enabled: u32 = 1 << 2;
@@ -296,6 +299,7 @@ pub const Character = opaque {};
 pub const GroupFilter = opaque {};
 pub const StepListener = opaque {};
 pub const BodyAddBatch = opaque {};
+pub const DebugRenderer = opaque {};
 
 //=============================================================================
 // Allocator and hooks
@@ -1264,3 +1268,71 @@ pub extern fn zjoltVehicleConstraintGetTrackedCurrentGear(constraint: *const Veh
 
 pub extern fn zjoltVehicleConstraintSetMotorcycleLeanControllerEnabled(constraint: *VehicleConstraint, enabled: bool) Result;
 pub extern fn zjoltVehicleConstraintIsMotorcycleLeanControllerEnabled(constraint: *const VehicleConstraint) bool;
+pub extern fn zjoltPhysicsSystemSaveBodyStateLocked(system: *const PhysicsSystem, body: *const Body, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
+pub extern fn zjoltPhysicsSystemRestoreBodyStateLocked(system: *PhysicsSystem, body: *Body, data: [*]const u8, size: usize) Result;
+
+//=============================================================================
+// Debug draw
+//=============================================================================
+
+pub const DebugLine = extern struct {
+    from: RVec3,
+    to: RVec3,
+    color: Color,
+};
+
+pub const DebugTriangle = extern struct {
+    v1: RVec3,
+    v2: RVec3,
+    v3: RVec3,
+    color: Color,
+    cast_shadow: bool,
+};
+
+pub const DebugText = extern struct {
+    position: RVec3,
+    color: Color,
+    height: f32,
+    text: [debug_text_max_length]u8,
+    text_length: u32,
+};
+
+/// Mirrors JPH::BodyManager::EShapeColor.
+pub const ShapeColor = enum(c_int) {
+    instance_color = 0,
+    shape_type_color = 1,
+    motion_type_color = 2,
+    sleep_color = 3,
+    island_color = 4,
+    material_color = 5,
+};
+
+/// Subset of JPH::BodyManager::DrawSettings — see ffi/zjolt_debug.h for what
+/// was left out and why.
+pub const DebugDrawBodiesSettings = extern struct {
+    draw_get_support_function: bool,
+    draw_support_direction: bool,
+    draw_get_supporting_face: bool,
+    draw_shape: bool,
+    draw_shape_wireframe: bool,
+    shape_color: ShapeColor,
+    draw_bounding_box: bool,
+    draw_center_of_mass_transform: bool,
+    draw_world_transform: bool,
+    draw_velocity: bool,
+    draw_mass_and_inertia: bool,
+    draw_sleep_stats: bool,
+};
+
+pub extern fn zjoltDebugRendererCreate(out: **DebugRenderer) Result;
+pub extern fn zjoltDebugRendererDestroy(renderer: ?*DebugRenderer) Result;
+pub extern fn zjoltDebugRendererClear(renderer: *DebugRenderer) Result;
+pub extern fn zjoltDebugRendererSetCameraPosition(renderer: *DebugRenderer, position: *const RVec3) Result;
+pub extern fn zjoltDebugRendererGetLines(renderer: *const DebugRenderer, lines: ?[*]DebugLine, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltDebugRendererGetTriangles(renderer: *const DebugRenderer, triangles: ?[*]DebugTriangle, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltDebugRendererGetTexts(renderer: *const DebugRenderer, texts: ?[*]DebugText, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltDebugDrawBodiesSettingsInit(settings: *DebugDrawBodiesSettings) Result;
+pub extern fn zjoltPhysicsSystemDrawBodies(system: *PhysicsSystem, settings: *const DebugDrawBodiesSettings, renderer: *DebugRenderer) Result;
+pub extern fn zjoltPhysicsSystemDrawConstraints(system: *PhysicsSystem, renderer: *DebugRenderer) Result;
+pub extern fn zjoltPhysicsSystemDrawConstraintLimits(system: *PhysicsSystem, renderer: *DebugRenderer) Result;
+pub extern fn zjoltPhysicsSystemDrawConstraintReferenceFrame(system: *PhysicsSystem, renderer: *DebugRenderer) Result;
