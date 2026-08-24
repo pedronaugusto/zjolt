@@ -47,6 +47,7 @@ const broadphase_mod = @import("broadphase.zig");
 const batch_mod = @import("batch.zig");
 const group_mod = @import("group.zig");
 const state_mod = @import("state.zig");
+const ragdoll_mod = @import("ragdoll.zig");
 
 //=============================================================================
 // Public surface
@@ -158,6 +159,14 @@ pub const GroundState = character_mod.GroundState;
 pub const BackFaceMode = character_mod.BackFaceMode;
 pub const CharacterUpdateSettings = character_mod.UpdateSettings;
 pub const defaultCharacterUpdateSettings = character_mod.defaultUpdateSettings;
+
+pub const Skeleton = ragdoll_mod.Skeleton;
+pub const SkeletonPose = ragdoll_mod.SkeletonPose;
+pub const RagdollSettings = ragdoll_mod.RagdollSettings;
+pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
+pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
+pub const RagdollSwingType = ragdoll_mod.SwingType;
+pub const Ragdoll = ragdoll_mod.Ragdoll;
 
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
