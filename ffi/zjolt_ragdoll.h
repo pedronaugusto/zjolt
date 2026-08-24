@@ -38,6 +38,7 @@
 #define ZJOLT_RAGDOLL_H_
 
 #include "zjolt_body.h"
+#include "zjolt_constraint.h"
 #include "zjolt_core.h"
 
 #ifdef __cplusplus
@@ -181,14 +182,16 @@ ZJOLT_API ZJoltResult zjoltSkeletonPoseCalculateJointStates(
 // RagdollSettings
 //===----------------------------------------------------------------------===//
 
-/// The shape Jolt itself documents as built for humanoid ragdolls, and the
-/// only non-hinge constraint zjoltRagdollDriveToPoseUsingMotors knows how to
-/// drive. See Jolt's SwingTwistConstraint for the geometry these limits
-/// describe.
-typedef enum ZJoltRagdollSwingType {
-  ZJOLT_RAGDOLL_SWING_TYPE_CONE = 0,
-  ZJOLT_RAGDOLL_SWING_TYPE_PYRAMID = 1,
-} ZJoltRagdollSwingType;
+/// Deprecated spellings of ZJoltSwingType and its enumerators, which
+/// zjolt_constraint.h declares.
+///
+/// There was one enum per subsystem mirroring JPH::ESwingType, added by
+/// separate changes, and a caller should not have to know which one an entry
+/// point wants. These aliases keep existing code building; write ZJoltSwingType
+/// in anything new.
+#define ZJoltRagdollSwingType ZJoltSwingType
+#define ZJOLT_RAGDOLL_SWING_TYPE_CONE ZJOLT_SWING_TYPE_CONE
+#define ZJOLT_RAGDOLL_SWING_TYPE_PYRAMID ZJOLT_SWING_TYPE_PYRAMID
 
 /// The swing-twist constraint attaching one part to its parent, in WORLD
 /// space — the same space as the parts' ZJoltBodyDesc::position/rotation.
@@ -203,7 +206,11 @@ typedef struct ZJoltRagdollConstraintDesc {
   ZJoltRVec3 position2;
   ZJoltVec3 twist_axis2;
   ZJoltVec3 plane_axis2;
-  ZJoltRagdollSwingType swing_type;
+  /// The shape of this joint's swing limit. Jolt's SwingTwistConstraint is
+  /// what it documents as built for humanoid ragdolls, and the only non-hinge
+  /// constraint zjoltRagdollDriveToPoseUsingMotors knows how to drive; see it
+  /// for the geometry these limits describe.
+  ZJoltSwingType swing_type;
   /// Angle in radians. See SwingTwistConstraintSettings::mNormalHalfConeAngle.
   float normal_half_cone_angle;
   float plane_half_cone_angle;
