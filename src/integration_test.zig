@@ -2336,3 +2336,56 @@ fn makeBoxMesh(
         indices[i * 3 + 2] = face[2];
     }
 }
+
+test "a compound reports which child was hit" {
+    // The regression this pins: `sub_shape_id` was documented as *always*
+    // empty, which was true only while no compound shape could be built. That
+    // stopped being true the moment compound constructors landed, and nothing
+    // failed — no test queried against a compound, so a doc comment quietly
+    // became false. Adding a capability re-opens every assumption that was
+    // resting on its absence.
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const left = try zjolt.Shape.initSphere(0.5, .{});
+    defer left.release();
+    const right = try zjolt.Shape.initSphere(0.5, .{});
+    defer right.release();
+
+    const compound = try zjolt.Shape.initStaticCompound(&.{
+        .{ .shape = left.handle, .position = zjolt.vec3(-1, 0, 0) },
+        .{ .shape = right.handle, .position = zjolt.vec3(1, 0, 0) },
+    });
+    defer compound.release();
+
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = compound,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 1, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const queries = world.system.queries();
+    const hit_left = (try queries.castRayClosest(
+        zjolt.rvec3(-1, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    const hit_right = (try queries.castRayClosest(
+        zjolt.rvec3(1, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+
+    // Both rays hit the same body, and the sub-shape id is what tells them
+    // apart. If either were empty, the child would be unidentifiable.
+    try std.testing.expectEqual(hit_left.body, hit_right.body);
+    try std.testing.expect(hit_left.sub_shape_id != zjolt.c.sub_shape_id_empty);
+    try std.testing.expect(hit_left.sub_shape_id != hit_right.sub_shape_id);
+}

@@ -42,14 +42,12 @@ typedef struct ZJoltBodyFilter {
 /// Rejects individual shapes, after the body carrying them has been accepted.
 ///
 /// Jolt asks this once per SHAPE, never once per triangle: a mesh is accepted
-/// or rejected whole, and a compound is asked about each of its children. None
-/// of the shapes this ABI can build today is a compound, so `sub_shape_id` is
-/// always ZJOLT_SUB_SHAPE_ID_EMPTY and the answer is one a ZJoltBodyFilter
-/// could have given. It is here anyway for two reasons: that stops being true
-/// the moment compound shapes are exposed, and Jolt takes a shape filter on
-/// every narrow-phase entry point, so leaving it out made those calls
-/// unrepresentable from C. To drop individual triangles of a mesh, reject them
-/// in the hit callback by `sub_shape_id`, which is where Jolt reports them.
+/// or rejected whole, and a compound is asked about each of its children, so
+/// `sub_shape_id` names the child. Against a shape with no children it is
+/// ZJOLT_SUB_SHAPE_ID_EMPTY and the answer is one a ZJoltBodyFilter could have
+/// given; against a compound it is the only way to reject one child and keep
+/// the rest. To drop individual triangles of a mesh, reject them in the hit
+/// callback by `sub_shape_id`, which is where Jolt reports them.
 ///
 /// `query_sub_shape_id` names the sub-shape of the shape being cast or
 /// overlapped. A ray and a point have no shape of their own, so they pass
