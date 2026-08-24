@@ -138,9 +138,31 @@ fi
 
 section 'Silent defaults — a failure path that looks like success'
 
+# Named defaults: sDefault, sZero, sIdentity and friends.
 quiet=$(grep -nE 'return[[:space:]]+.*(sDefault|sZero|sIdentity|Default\(\)|sInvalid)' \
   ${source_file:+"$source_file"} "$header" 2>/dev/null | head -15)
-if [ -z "$quiet" ]; then none; else printf '%s\n' "$quiet" | sed 's/^/  /'; fi
+
+# And the shape those miss, which is the common one in this library: a getter
+# takes a body lock and returns a bare literal when it fails.
+#
+#     BodyLockRead lock(...);
+#     if (lock.Succeeded() && ...) return real_answer;
+#     else                         return 500.0f;
+#
+# `500.0f` is not a symbol, so no name-based scan finds it — and it is exactly
+# the case that matters, because a stale body id comes back looking like a
+# successful answer. Found by reading the source, so read it here.
+locked=$(grep -nA 6 -E 'lock\.Succeeded\(\)|\.Succeeded\(\)' \
+  ${source_file:+"$source_file"} 2>/dev/null |
+  grep -E '^[0-9]+.[[:space:]]*(else[[:space:]]+)?return' | head -20)
+
+if [ -z "$quiet" ] && [ -z "$locked" ]; then none; else
+  [ -n "$quiet" ] && printf '%s\n' "$quiet" | sed 's/^/  /'
+  if [ -n "$locked" ]; then
+    printf '  %son a failed lock:%s\n' "$Y" "$O"
+    printf '%s\n' "$locked" | sed 's/^/    /'
+  fi
+fi
 
 #-----------------------------------------------------------------------------
 # What is out of reach
