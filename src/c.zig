@@ -914,3 +914,147 @@ pub extern fn zjoltBodyInvalidateContactCache(system: *PhysicsSystem, body: Body
 
 pub extern fn zjoltPhysicsSystemSaveState(system: *const PhysicsSystem, state: StateRecorderState, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 pub extern fn zjoltPhysicsSystemRestoreState(system: *PhysicsSystem, data: [*]const u8, size: usize) Result;
+
+//=============================================================================
+// Hair, and the compute backend it runs on
+//
+// Declared unconditionally, like everything else here. `options.cpu_compute`
+// says whether the CPU backend has any contents; it does not say whether these
+// functions exist, because a header that changes shape with a `-D` flag cannot
+// be checked against this file at all.
+//=============================================================================
+
+pub const ComputeSystem = opaque {};
+pub const Hair = opaque {};
+
+pub const ComputeBufferType = enum(c_int) {
+    upload = 0,
+    readback = 1,
+    constant = 2,
+    read_only = 3,
+    read_write = 4,
+};
+
+pub const ComputeMapMode = enum(c_int) {
+    read = 0,
+    write = 1,
+};
+
+pub const ComputeBarrier = enum(c_int) {
+    insert = 0,
+    skip = 1,
+};
+
+/// A host compute backend, as a flat table. The `?*anyopaque` handles are the
+/// host's own; nothing on this side ever dereferences one.
+pub const ComputeInterface = extern struct {
+    create_shader: ?*const fn (user: ?*anyopaque, name: [*:0]const u8, group_size_x: u32, group_size_y: u32, group_size_z: u32, out_shader: *?*anyopaque) callconv(.c) Result = null,
+    create_buffer: ?*const fn (user: ?*anyopaque, kind: ComputeBufferType, size: u64, stride: u32, data: ?*const anyopaque, out_buffer: *?*anyopaque) callconv(.c) Result = null,
+    create_readback_buffer: ?*const fn (user: ?*anyopaque, buffer: ?*anyopaque, out_buffer: *?*anyopaque) callconv(.c) Result = null,
+    create_queue: ?*const fn (user: ?*anyopaque, out_queue: *?*anyopaque) callconv(.c) Result = null,
+    destroy_shader: ?*const fn (user: ?*anyopaque, shader: ?*anyopaque) callconv(.c) void = null,
+    destroy_buffer: ?*const fn (user: ?*anyopaque, buffer: ?*anyopaque) callconv(.c) void = null,
+    destroy_queue: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque) callconv(.c) void = null,
+    map_buffer: ?*const fn (user: ?*anyopaque, buffer: ?*anyopaque, mode: ComputeMapMode) callconv(.c) ?*anyopaque = null,
+    unmap_buffer: ?*const fn (user: ?*anyopaque, buffer: ?*anyopaque) callconv(.c) void = null,
+    queue_set_shader: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque, shader: ?*anyopaque) callconv(.c) void = null,
+    queue_set_constant_buffer: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque, name: [*:0]const u8, buffer: ?*anyopaque) callconv(.c) void = null,
+    queue_set_buffer: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque, name: [*:0]const u8, buffer: ?*anyopaque) callconv(.c) void = null,
+    queue_set_rw_buffer: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque, name: [*:0]const u8, buffer: ?*anyopaque, barrier: ComputeBarrier) callconv(.c) void = null,
+    queue_dispatch: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque, groups_x: u32, groups_y: u32, groups_z: u32) callconv(.c) void = null,
+    queue_schedule_readback: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque, dst: ?*anyopaque, src: ?*anyopaque) callconv(.c) void = null,
+    queue_execute: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque) callconv(.c) void = null,
+    queue_wait: ?*const fn (user: ?*anyopaque, queue: ?*anyopaque) callconv(.c) void = null,
+    destroy: ?*const fn (user: ?*anyopaque) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
+pub const HairVertex = extern struct {
+    position: Vec3,
+    inv_mass: f32,
+};
+
+pub const HairStrand = extern struct {
+    start_vertex: u32,
+    end_vertex: u32,
+    material_index: u32,
+};
+
+pub const HairGradient = extern struct {
+    min: f32,
+    max: f32,
+    min_fraction: f32,
+    max_fraction: f32,
+};
+
+pub const HairSkinWeight = extern struct {
+    joint_index: u32,
+    weight: f32,
+};
+
+pub const HairMaterial = extern struct {
+    enable_collision: bool,
+    enable_lra: bool,
+    linear_damping: f32,
+    angular_damping: f32,
+    max_linear_velocity: f32,
+    max_angular_velocity: f32,
+    gravity_factor: HairGradient,
+    friction: f32,
+    bend_compliance: f32,
+    bend_compliance_multiplier: [4]f32,
+    stretch_compliance: f32,
+    inertia_multiplier: f32,
+    hair_radius: HairGradient,
+    world_transform_influence: HairGradient,
+    grid_velocity_factor: HairGradient,
+    grid_density_force_factor: f32,
+    global_pose: HairGradient,
+    skin_global_pose: HairGradient,
+    simulation_strands_fraction: f32,
+    gravity_preload_factor: f32,
+};
+
+pub const HairDesc = extern struct {
+    vertices: ?[*]const HairVertex,
+    strands: ?[*]const HairStrand,
+    materials: ?[*]const HairMaterial,
+    vertex_count: u32,
+    strand_count: u32,
+    material_count: u32,
+    scalp_vertices: ?[*]const Vec3,
+    scalp_triangles: ?[*]const u32,
+    scalp_skin_weights: ?[*]const HairSkinWeight,
+    scalp_inverse_bind_pose: ?[*]const f32,
+    scalp_vertex_count: u32,
+    scalp_triangle_count: u32,
+    skin_weights_per_vertex: u32,
+    joint_count: u32,
+    initial_gravity: Vec3,
+    simulation_bounds_padding: Vec3,
+    grid_size_x: u32,
+    grid_size_y: u32,
+    grid_size_z: u32,
+    iterations_per_second: u32,
+    max_delta_time: f32,
+    position: RVec3,
+    rotation: Quat,
+    object_layer: ObjectLayer,
+};
+
+pub extern fn zjoltComputeIsCpuSupported() bool;
+pub extern fn zjoltComputeSystemCreateCpu(out: **ComputeSystem) Result;
+pub extern fn zjoltComputeSystemCreate(iface: *const ComputeInterface, out: **ComputeSystem) Result;
+pub extern fn zjoltComputeSystemDestroy(compute: ?*ComputeSystem) void;
+
+pub extern fn zjoltHairMaterialInit(out: *HairMaterial) void;
+pub extern fn zjoltHairCreate(compute: *ComputeSystem, desc: *const HairDesc, out: **Hair) Result;
+pub extern fn zjoltHairDestroy(hair: ?*Hair) void;
+pub extern fn zjoltHairSetTransform(hair: *Hair, position: ?*const RVec3, rotation: ?*const Quat) Result;
+pub extern fn zjoltHairFollowBody(hair: *Hair, system: *const PhysicsSystem, body: BodyId) Result;
+pub extern fn zjoltHairSetPose(hair: *Hair, joint_to_hair: [*]const f32, joint_matrices: [*]const f32, joint_count: u32) Result;
+pub extern fn zjoltHairGetJointCount(hair: *const Hair, out_count: *u32) Result;
+pub extern fn zjoltHairOnTeleported(hair: *Hair) Result;
+pub extern fn zjoltHairUpdate(hair: *Hair, system: *PhysicsSystem, delta_time: f32) Result;
+pub extern fn zjoltHairReadBackPositions(hair: *Hair, out_positions: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltHairReadBackRenderPositions(hair: *Hair, out_positions: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
