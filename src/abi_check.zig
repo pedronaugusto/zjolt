@@ -127,8 +127,76 @@ fn sameSizeAndAlign(
     }
 }
 
+/// The scalar a type really is at the boundary, with the Zig-side wrapper
+/// removed.
+///
+/// translate-c renders every C enum as a plain integer alias, and this side
+/// deliberately keeps enums as `enum(c_int)` and bit masks as
+/// `packed struct(u32)` — that is what the wrapper is FOR. Comparing those to
+/// an integer as they stand would report drift on every one of them, so each
+/// is resolved to its backing integer first and what remains is a comparison
+/// of what actually crosses.
+///
+/// This is not a loosening. An `enum(u32)` paired with a C enum the compiler
+/// gave `int` is a real disagreement about signedness, and resolving both to
+/// their backing integers is what surfaces it.
+fn scalarIdentity(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .@"enum" => |e| e.tag_type,
+        .@"struct" => |st| st.backing_integer orelse T,
+        else => T,
+    };
+}
+
+/// Size and alignment, plus the part of a scalar's identity they do not carry.
+///
+/// Two integers of the same width are interchangeable to `@sizeOf`, so a
+/// `uint32_t` field declared as `i32` — or a `float` parameter declared as
+/// `u32` — passes a size-and-alignment comparison and then silently
+/// reinterprets every value that crosses. Comparing signedness, and
+/// int-versus-float, is what closes that.
+///
+/// It is applied wherever a type crosses the boundary — struct fields,
+/// function parameters, return values — rather than only to the top-level
+/// scalar typedefs, because those are not where the mistake gets made.
+fn sameScalar(
+    comptime what: []const u8,
+    comptime Ours: type,
+    comptime Theirs: type,
+) void {
+    sameSizeAndAlign(what, Ours, Theirs);
+
+    const oi = @typeInfo(scalarIdentity(Ours));
+    const ti = @typeInfo(scalarIdentity(Theirs));
+
+    // Signedness, EXCEPT across an enum. C leaves an enum's underlying type to
+    // the implementation, and the implementations disagree: clang and gcc pick
+    // an unsigned type when no enumerator is negative, MSVC uses `int`. So the
+    // signedness of `ZJoltMotionType` is a property of the compiler, not of
+    // this ABI, and comparing it would fail a correct binding on one toolchain
+    // and pass it on another.
+    //
+    // What makes that safe to skip is not tolerance, it is a precondition:
+    // every enumerator in this ABI is non-negative, so every value represents
+    // identically either way. `checkEnumValues` asserts that precondition
+    // rather than assuming it — a negative enumerator would make the
+    // implementation's choice observable, and it fails the build.
+    const across_enum = scalarIdentity(Ours) != Ours or scalarIdentity(Theirs) != Theirs;
+    if (!across_enum and oi == .int and ti == .int and
+        oi.int.signedness != ti.int.signedness)
+    {
+        fail(what ++ " is " ++ @tagName(oi.int.signedness) ++ " in src/c.zig but " ++
+            @tagName(ti.int.signedness) ++ " in ffi/zjolt.h");
+    }
+    if ((oi == .int) != (ti == .int) or (oi == .float) != (ti == .float)) {
+        fail(what ++ " is a " ++ @tagName(oi) ++ " in src/c.zig but a " ++
+            @tagName(ti) ++ " in ffi/zjolt.h");
+    }
+}
+
 /// Compares two function types by the only things translate-c preserves:
-/// how many parameters there are and how each one is passed.
+/// how many parameters there are, how each one is passed, and whether the
+/// signature is variadic.
 fn checkFnType(
     comptime what: []const u8,
     comptime Ours: type,
@@ -142,11 +210,14 @@ fn checkFnType(
             " parameters in src/c.zig but " ++ std.fmt.comptimePrint("{d}", .{theirs.params.len}) ++
             " in ffi/zjolt.h");
     }
+    if (ours.is_var_args != theirs.is_var_args) {
+        fail(what ++ " is variadic on one side of the boundary only");
+    }
 
     inline for (ours.params, theirs.params, 0..) |op, tp, i| {
         const OP = op.type orelse fail(what ++ " has an untyped parameter in src/c.zig");
         const TP = tp.type orelse fail(what ++ " has an untyped parameter in ffi/zjolt.h");
-        sameSizeAndAlign(
+        sameScalar(
             what ++ " parameter " ++ std.fmt.comptimePrint("{d}", .{i}),
             OP,
             TP,
@@ -155,7 +226,7 @@ fn checkFnType(
 
     const OR = ours.return_type orelse fail(what ++ " has no return type in src/c.zig");
     const TR = theirs.return_type orelse fail(what ++ " has no return type in ffi/zjolt.h");
-    sameSizeAndAlign(what ++ " return value", OR, TR);
+    sameScalar(what ++ " return value", OR, TR);
 }
 
 /// Struct layout, compared field by NAME rather than by position.
@@ -193,7 +264,7 @@ fn checkStructLayout(
                 std.fmt.comptimePrint("{d}", .{@offsetOf(Ours, f.name)}) ++ " in src/c.zig but " ++
                 std.fmt.comptimePrint("{d}", .{@offsetOf(Theirs, f.name)}) ++ " in ffi/zjolt.h");
         }
-        sameSizeAndAlign(
+        sameScalar(
             what ++ "." ++ f.name,
             f.type,
             @FieldType(Theirs, f.name),
@@ -215,6 +286,17 @@ fn checkEnumValues(
     inline for (@typeInfo(Ours).@"enum".fields) |f| {
         const cname = fieldCName(ours_name, f.name);
         _ = theirDecl(cname, what ++ "." ++ f.name);
+        // The precondition that lets sameScalar skip signedness across an
+        // enum. C leaves the underlying type to the implementation, and the
+        // implementations disagree; that is only unobservable while every
+        // enumerator is non-negative. One negative value and the same
+        // declaration means different things on MSVC and on clang.
+        if (f.value < 0) {
+            fail(what ++ "." ++ f.name ++ " is negative, which makes the enum's " ++
+                "underlying type observable — C leaves that to the implementation " ++
+                "and MSVC and clang choose differently. Use an explicit " ++
+                "fixed-width field instead of an enum here.");
+        }
         if (@as(i128, @field(h, cname)) != @as(i128, f.value)) {
             fail(what ++ "." ++ f.name ++ " is " ++
                 std.fmt.comptimePrint("{d}", .{f.value}) ++ " in src/c.zig but " ++ cname ++
@@ -353,8 +435,20 @@ fn sweepOurs() Counts {
             // ---- functions -------------------------------------------------
             if (@typeInfo(Decl) == .@"fn") {
                 if (@typeInfo(Decl).@"fn".calling_convention == .auto) {
-                    // A Zig helper, not part of the C ABI. c.zig should not
-                    // really have these, but one is not drift.
+                    // A Zig helper, not an extern. Skipping it is right — it
+                    // has no counterpart in the header — but skipping it
+                    // SILENTLY is not, because the reverse sweep asks only
+                    // whether a name exists. A helper written on an exported
+                    // symbol's name would be skipped here and satisfy the
+                    // reverse sweep there, and the extern it displaced would
+                    // vanish with neither direction noticing. So: a helper is
+                    // allowed, a helper wearing a boundary name is not.
+                    if (std.mem.startsWith(u8, d.name, "zjolt")) {
+                        fail("src/c.zig declares `" ++ d.name ++ "` as a Zig function, not an " ++
+                            "extern. The `zjolt` prefix is reserved for the C boundary here: a " ++
+                            "helper on that name hides the extern it replaced from both " ++
+                            "directions of this check. Rename the helper.");
+                    }
                     continue;
                 }
                 const what = "function " ++ d.name;
@@ -420,6 +514,24 @@ fn sweepTheirs() usize {
             if (!@hasDecl(c, d.name)) {
                 missing += 1;
                 fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig never declares it");
+            }
+            // Existence is not enough: the name has to resolve to something
+            // that actually links. A Zig helper or a type sitting on the name
+            // satisfies `@hasDecl` while the extern is gone.
+            //
+            // The forward sweep now rejects those first, so in practice this
+            // is the backstop rather than the catch — which is the point. The
+            // forward sweep's rejection depends on its name filter; this one
+            // depends on nothing but the header, so a future change that
+            // widens that filter cannot reopen the hole silently.
+            const Ours = @TypeOf(@field(c, d.name));
+            if (@typeInfo(Ours) != .@"fn") {
+                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++
+                    "as a " ++ @tagName(@typeInfo(Ours)) ++ " rather than a function");
+            }
+            if (@typeInfo(Ours).@"fn".calling_convention == .auto) {
+                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++
+                    "as a Zig function rather than an extern, so nothing binds the symbol");
             }
         }
         return found;

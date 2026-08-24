@@ -233,11 +233,26 @@ on one side and not the other is silent corruption, not a build error.
 
 A test `@cImport`s `zjolt.h` and compares the two namespaces declaration by
 declaration: every struct field paired **by name** with its offset, every
-function's parameter count and per-parameter size, every enumerator's value,
-every constant. Nothing is listed by hand — the check discovers what to compare
-by reflecting over `c.zig`, and a declaration it cannot classify is a compile
-error rather than a silent pass, so it cannot quietly stop covering something.
-The `@cImport` is test-only; the shipped module never runs translate-c.
+function's parameter count and variadic-ness, every enumerator's value, every
+constant. Wherever a type crosses — field, parameter, return value — it is
+compared by size, alignment **and scalar identity**: signedness, and
+int-versus-float. Two integers of the same width are interchangeable to
+`@sizeOf`, so a `uint32_t` declared as `i32` passes a layout comparison and
+then reinterprets every value above 2^31. Nothing is listed by hand — the
+check discovers what to compare by reflecting over `c.zig`, and a declaration
+it cannot classify is a compile error rather than a silent pass, so it cannot
+quietly stop covering something. The `@cImport` is test-only; the shipped
+module never runs translate-c.
+
+Signedness is the one comparison skipped across an enum, and skipped for a
+reason rather than out of tolerance: C leaves an enum's underlying type to the
+implementation, and the implementations disagree — clang and gcc pick an
+unsigned type when no enumerator is negative, MSVC uses `int`. Comparing it
+would fail a correct binding on one toolchain and pass it on another. What
+makes skipping it safe is a precondition, and the check asserts the
+precondition instead of assuming it: **no enumerator in this ABI may be
+negative**, because that is exactly when the implementation's choice becomes
+observable.
 
 Pairing fields *by name* is the part that matters. Two same-sized adjacent
 fields swapping places leaves the sequence of offsets identical, so a positional
@@ -246,11 +261,13 @@ reinterprets both fields.
 
 A check that guards everything else cannot be trusted on its own word: a
 refactor that quietly makes it vacuous looks exactly like a passing build. So
-`ci/check-abi-drift.sh` applies nine kinds of deliberate drift one at a time —
+`ci/check-abi-drift.sh` applies twelve kinds of deliberate drift one at a time —
 that swap, a dropped parameter, a widened parameter, a renumbered enumerator, a
 narrowed enum tag, a moved mask bit, a drifted constant, an extern deleted from
-the Zig side, a field added to the header alone — and asserts each is refused
-with a `zjolt ABI drift:` message. It runs under `ci/run.sh --full`.
+the Zig side, a field added to the header alone, a field's signedness flipped, a
+negative enumerator, and an extern replaced by a Zig helper wearing the same
+name — and asserts each is refused with a `zjolt ABI drift:` message. It runs
+under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
 types are compared only by size and alignment — a `float *` declared as `*i32`
