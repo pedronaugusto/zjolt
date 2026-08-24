@@ -436,6 +436,14 @@ ZJOLT_API ZJoltResult zjoltCollidePointEach(const ZJoltPhysicsSystem *system,
 // Wrapping does not rescue a pair. What decides the answer is the leaves, and
 // the rule is that one side has to be convex all the way down.
 //
+// That rule is deliberately all-or-nothing per side. A compound holding one
+// convex child and one mesh child is refused against a mesh, even though the
+// convex child on its own would have dispatched — because the mesh child
+// would reach the unregistered cell, and a partial answer to "do these
+// overlap" is worse than a refusal. Split the compound if you want the half
+// that works. A shape tree deeper than 64 levels is refused for the same
+// reason: the walk stops rather than the stack.
+//
 // A scale the shape cannot take is the other assert: a sphere insists on a
 // uniform one, every shape refuses a zero one. zjoltShapeIsValidScale asks the
 // same question ahead of time and zjoltShapeMakeScaleValid answers with the
