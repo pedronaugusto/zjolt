@@ -226,6 +226,23 @@ the end of the array in a release one. `ffi/zjolt_softbody.cpp` validates each
 batch against the vertex count before appending any of it, which is the last
 point at which the index is still known to have come from outside.
 
+**Vehicle braking differs materially between the precision builds.** From
+19 m/s under full brakes for five seconds, a float build stops dead and a
+`-Ddouble_precision` build is still doing about 7 m/s. It is not solver
+convergence: raising the velocity iterations from 30 to 120 moved the
+double-precision figure the wrong way, 0.37 to 0.41 of the starting speed.
+
+Not chased to a root cause, and recorded rather than explained. Jolt's own
+vehicle collision testers take `RVec3` and handle the precision themselves,
+and this ABI passes only directions and settings into that path, so there is
+no obvious conversion on this side to blame — but "no obvious" is not the same
+as "checked". `src/vehicle_test.zig` asserts the property that survives both
+(the brakes do something) rather than the figure that does not, and says why
+at the assertion.
+
+A host shipping double precision should not assume a vehicle brakes the same
+as the float build it was tuned on.
+
 ## Re-vendoring procedure
 
 `ci/verify-vendor.sh` fetches the pinned commit and diffs it against `libs/`,
