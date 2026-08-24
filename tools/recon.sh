@@ -96,7 +96,11 @@ if grep -q "JPH_DECLARE_RTTI" "$header" ||
   printf '  Carries Jolt RTTI — a subclass needs Jolt'"'"'s OWN RTTI macros,\n'
   printf '    plus Factory::Register. NOT C++ RTTI: zjolt compiles -fno-rtti.\n'
 fi
-grep -qE '=[[:space:]]*0[[:space:]]*;' "$header" &&
+# A pure virtual is `virtual ... = 0;`. Matching a bare `= 0;` also matches
+# every default member initialiser — `float mFoo = 0;` — which reported
+# concrete settings structs as abstract and sent a binder looking for a
+# factory that does not exist. The `virtual` is the whole signal.
+grep -qE 'virtual[^;]*=[[:space:]]*0[[:space:]]*;' "$header" &&
   printf '  %sABSTRACT%s — has pure virtuals; it cannot be constructed directly.\n' "$Y" "$O"
 if [ -f "$JOLT/Jolt/Physics/${name}Settings.h" ] ||
    grep -qE "^[[:space:]]*(class|struct)[[:space:]]+(JPH_EXPORT[[:space:]]+)?${name}Settings\b" \
