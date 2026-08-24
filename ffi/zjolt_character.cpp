@@ -9,9 +9,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
+#include "zjolt_transformed.h"
 
 #include <Jolt/Physics/Character/Character.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
+#include <Jolt/Physics/Collision/TransformedShape.h>
 
 /// RigidCharacter — Jolt's Character, a rigid-body-backed character. Defined
 /// at global scope, ahead of the anonymous namespace below, because its
@@ -82,6 +85,107 @@ void FillContact(ZJoltCharacterContact *out, const JPH::CharacterContact &contac
   out->was_discarded = contact.mWasDiscarded;
   out->can_push_character = contact.mCanPushCharacter;
   out->is_back_facing_contact = contact.mIsBackFacingContact;
+}
+
+/// Hands a JPH::TransformedShape out as a zjolt_transformed.h handle.
+///
+/// Goes through the public entry point rather than reaching into that file's
+/// struct: the concrete type is declared only in zjolt_transformed.cpp on
+/// purpose, and every field this needs to set is a parameter of Create.
+ZJoltResult OwnTransformedShape(const JPH::TransformedShape &ts,
+                                ZJoltTransformedShape **out) {
+  if (ts.mShape == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this character has no shape to hand out");
+  }
+  // Create takes the CENTRE OF MASS position, which is what mShapePositionCOM
+  // is — not the character's position, which sits an offset away from it.
+  const ZJoltRVec3 position = zjolt::ToCR(ts.mShapePositionCOM);
+  const ZJoltQuat rotation = zjolt::ToC(ts.mShapeRotation);
+  const ZJoltVec3 scale = zjolt::ToC(ts.GetShapeScale());
+  return zjoltTransformedShapeCreate(zjolt::ToC(ts.mShape.GetPtr()), &position,
+                                     &rotation, &scale, zjolt::ToC(ts.mBodyID),
+                                     out);
+}
+
+/// Collects zjoltCharacterCheckCollision's hits.
+///
+/// Two of its three jobs arrive through the base class rather than through
+/// AddHit, and neither is optional. Jolt sets the collector's CONTEXT to the
+/// TransformedShape a body hit came from, which is the only place the hit's
+/// material can be read and is valid for exactly the duration of the call.
+/// And it sets the collector's USER DATA to the other CharacterVirtual when
+/// the hit came from the character-vs-character list instead of the broad
+/// phase — nothing else distinguishes the two, because a virtual character
+/// has no body id to report.
+class CharacterHitCollector final : public JPH::CollideShapeCollector {
+ public:
+  CharacterHitCollector(ZJoltCharacterCollisionHit *out, uint32_t capacity)
+      : out_(out), capacity_(capacity) {}
+
+  void SetUserData(JPH::uint64 user_data) override {
+    other_character_ =
+        reinterpret_cast<const JPH::CharacterVirtual *>(user_data);
+  }
+
+  void AddHit(const JPH::CollideShapeResult &result) override {
+    // Counting past the capacity is deliberate: the count is the answer to
+    // the size query and has to be true even when the buffer could not hold
+    // the hits, which is what keeps this to one traversal instead of two.
+    if (out_ != nullptr && count_ < capacity_) {
+      ZJoltCharacterCollisionHit &hit = out_[count_];
+      hit = ZJoltCharacterCollisionHit{};
+      hit.body = zjolt::ToC(result.mBodyID2);
+      hit.character_id = CharacterIdOf(other_character_);
+      hit.sub_shape_id = zjolt::ToC(result.mSubShapeID2);
+      hit.contact_point_on_1 = zjolt::ToC(result.mContactPointOn1);
+      hit.contact_point_on_2 = zjolt::ToC(result.mContactPointOn2);
+      hit.penetration_axis = zjolt::ToC(result.mPenetrationAxis);
+      hit.penetration_depth = result.mPenetrationDepth;
+      const JPH::TransformedShape *context = GetContext();
+      hit.material =
+          context != nullptr
+              ? zjolt::ToC(context->GetMaterial(result.mSubShapeID2))
+              : nullptr;
+    }
+    ++count_;
+  }
+
+  uint32_t count() const { return count_; }
+
+ private:
+  ZJoltCharacterCollisionHit *out_;
+  uint32_t capacity_;
+  uint32_t count_ = 0;
+  const JPH::CharacterVirtual *other_character_ = nullptr;
+};
+
+/// The tail of a count-then-fill entry point: report the true count, and say
+/// so when the buffer could not hold it.
+ZJoltResult ReportHitCount(uint32_t count,
+                           const ZJoltCharacterCollisionHit *out_hits,
+                           uint32_t capacity, uint32_t *out_count) {
+  *out_count = count;
+  if (out_hits == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  return ZJOLT_RESULT_OK;
+}
+
+/// A supporting-volume plane with no side is a character that never reports
+/// ground again, and the symptom shows up frames later as "it will not walk".
+ZJoltResult MakeSupportingVolume(const ZJoltVec3 *normal, float distance,
+                                 JPH::Plane *out) {
+  const JPH::Vec3 direction = zjolt::ToJolt(*normal);
+  if (direction.IsNearZero()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "normal is zero-length: a supporting volume plane needs a direction");
+  }
+  // Stored as given, NOT normalised: `distance` is measured in units of
+  // `normal`'s length, so scaling one without the other would move the plane
+  // rather than tidy it. Only the sign of the signed distance is read.
+  *out = JPH::Plane(direction, distance);
+  return ZJOLT_RESULT_OK;
 }
 
 JPH::Character *Impl(ZJoltRigidCharacter *character) {
@@ -583,6 +687,27 @@ ZJoltBodyId zjoltCharacterGetInnerBodyId(const ZJoltCharacter *character) {
   return zjolt::ToC(impl->GetInnerBodyID());
 }
 
+ZJoltResult zjoltCharacterSetInnerBodyShape(ZJoltCharacter *character,
+                                            const ZJoltShape *shape) {
+  ZJOLT_ENTER();
+  JPH::CharacterVirtual *impl = Impl(character);
+  if (!zjolt::Present(impl, shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // Jolt's SetInnerBodyShape does not check first; it would call
+  // BodyInterface::SetShape with an invalid id, whose body lock simply fails
+  // and returns. Silently doing nothing is the wrong answer to "make the
+  // inner body this shape" when there is no inner body to make.
+  if (impl->GetInnerBodyID().IsInvalid()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "this character has no inner body: it was created with a NULL "
+        "inner_body_shape, and one cannot be added afterwards");
+  }
+
+  impl->SetInnerBodyShape(zjolt::ToJolt(shape));
+  return ZJOLT_RESULT_OK;
+}
+
 //===----------------------------------------------------------------------===//
 // CharacterBase, on the virtual character
 //===----------------------------------------------------------------------===//
@@ -621,6 +746,34 @@ bool zjoltCharacterIsSlopeTooSteep(const ZJoltCharacter *character,
   const JPH::CharacterVirtual *impl = Impl(character);
   if (impl == nullptr || normal == nullptr) return false;
   return impl->IsSlopeTooSteep(zjolt::ToJolt(*normal));
+}
+
+void zjoltCharacterGetSupportingVolume(const ZJoltCharacter *character,
+                                       ZJoltVec3 *out_normal,
+                                       float *out_distance) {
+  const JPH::CharacterVirtual *impl = Impl(character);
+  if (impl == nullptr) {
+    if (out_normal != nullptr) *out_normal = ZJoltVec3{0, 0, 0};
+    if (out_distance != nullptr) *out_distance = 0.0f;
+    return;
+  }
+  const JPH::Plane &plane = impl->GetSupportingVolume();
+  if (out_normal != nullptr) zjolt::WriteVec3(out_normal, plane.GetNormal());
+  if (out_distance != nullptr) *out_distance = plane.GetConstant();
+}
+
+ZJoltResult zjoltCharacterSetSupportingVolume(ZJoltCharacter *character,
+                                              const ZJoltVec3 *normal,
+                                              float distance) {
+  ZJOLT_ENTER();
+  JPH::CharacterVirtual *impl = Impl(character);
+  if (!zjolt::Present(impl, normal)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::Plane plane;
+  const ZJoltResult built = MakeSupportingVolume(normal, distance, &plane);
+  if (built != ZJOLT_RESULT_OK) return built;
+  impl->SetSupportingVolume(plane);
+  return ZJOLT_RESULT_OK;
 }
 
 const ZJoltPhysicsMaterial *zjoltCharacterGetGroundMaterial(
@@ -867,6 +1020,58 @@ bool zjoltCharacterHasCollidedWithCharacter(const ZJoltCharacter *character,
 }
 
 //===----------------------------------------------------------------------===//
+// Asking about a placement the character is not at
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltCharacterGetTransformedShape(const ZJoltCharacter *character,
+                                              ZJoltTransformedShape **out) {
+  ZJOLT_ENTER(out);
+  const JPH::CharacterVirtual *impl = Impl(character);
+  if (!zjolt::Present(impl, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return OwnTransformedShape(impl->GetTransformedShape(), out);
+}
+
+ZJoltResult zjoltCharacterCheckCollision(
+    const ZJoltCharacter *character, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *movement_direction,
+    float max_separation_distance, const ZJoltShape *shape,
+    const ZJoltQueryFilters *filters, ZJoltCharacterCollisionHit *out_hits,
+    uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  const JPH::CharacterVirtual *impl = Impl(character);
+  if (!zjolt::Present(impl, position, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Shape *test_shape =
+      shape != nullptr ? zjolt::ToJolt(shape) : impl->GetShape();
+  if (test_shape == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is NULL and the character has none either");
+  }
+
+  const JPH::Quat test_rotation = rotation != nullptr
+                                      ? zjolt::ToJoltRotation(*rotation)
+                                      : impl->GetRotation();
+  const JPH::Vec3 direction = movement_direction != nullptr
+                                  ? zjolt::ToJolt(*movement_direction)
+                                  : JPH::Vec3::sZero();
+
+  zjolt::QueryFilters adapters(filters);
+  CharacterHitCollector collector(out_hits, capacity);
+  // Hits come back relative to `position` rather than the world origin, the
+  // same base offset every query in zjolt_query.h uses: floats are most
+  // accurate near zero, and a character far from the origin loses that
+  // precision on every contact point otherwise.
+  impl->CheckCollision(zjolt::ToJoltR(*position), test_rotation, direction,
+                       max_separation_distance, test_shape,
+                       zjolt::ToJoltR(*position), collector,
+                       adapters.broad_phase, adapters.object_layer,
+                       adapters.body, adapters.shape);
+
+  return ReportHitCount(collector.count(), out_hits, capacity, out_count);
+}
+
+//===----------------------------------------------------------------------===//
 // CharacterContactListener
 //===----------------------------------------------------------------------===//
 
@@ -898,6 +1103,15 @@ ZJoltResult zjoltCharacterSetListener(ZJoltCharacter *character,
   if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   impl->SetListener(listener);
   return ZJOLT_RESULT_OK;
+}
+
+ZJoltCharacterContactListener *zjoltCharacterGetListener(
+    const ZJoltCharacter *character) {
+  const JPH::CharacterVirtual *impl = Impl(character);
+  if (impl == nullptr) return nullptr;
+  // The downcast is sound because zjoltCharacterSetListener is the only way
+  // to install one, and it only ever installs a ZJoltCharacterContactListener.
+  return static_cast<ZJoltCharacterContactListener *>(impl->GetListener());
 }
 
 //===----------------------------------------------------------------------===//
@@ -1315,6 +1529,80 @@ uint64_t zjoltRigidCharacterGetGroundUserData(
   const JPH::Character *impl = Impl(character);
   if (impl == nullptr) return 0;
   return impl->GetGroundUserData();
+}
+
+void zjoltRigidCharacterGetSupportingVolume(
+    const ZJoltRigidCharacter *character, ZJoltVec3 *out_normal,
+    float *out_distance) {
+  const JPH::Character *impl = Impl(character);
+  if (impl == nullptr) {
+    if (out_normal != nullptr) *out_normal = ZJoltVec3{0, 0, 0};
+    if (out_distance != nullptr) *out_distance = 0.0f;
+    return;
+  }
+  const JPH::Plane &plane = impl->GetSupportingVolume();
+  if (out_normal != nullptr) zjolt::WriteVec3(out_normal, plane.GetNormal());
+  if (out_distance != nullptr) *out_distance = plane.GetConstant();
+}
+
+ZJoltResult zjoltRigidCharacterSetSupportingVolume(
+    ZJoltRigidCharacter *character, const ZJoltVec3 *normal, float distance) {
+  ZJOLT_ENTER();
+  JPH::Character *impl = Impl(character);
+  if (!zjolt::Present(impl, normal)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::Plane plane;
+  const ZJoltResult built = MakeSupportingVolume(normal, distance, &plane);
+  if (built != ZJOLT_RESULT_OK) return built;
+  impl->SetSupportingVolume(plane);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRigidCharacterGetTransformedShape(
+    const ZJoltRigidCharacter *character, ZJoltTransformedShape **out) {
+  ZJOLT_ENTER(out);
+  const JPH::Character *impl = Impl(character);
+  if (!zjolt::Present(impl, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  // Reads the body under a lock, so it is a shape with no body behind it
+  // (mShape null) if the body has already been destroyed — OwnTransformedShape
+  // reports that rather than handing back a handle that queries nothing.
+  return OwnTransformedShape(impl->GetTransformedShape(), out);
+}
+
+ZJoltResult zjoltRigidCharacterCheckCollision(
+    const ZJoltRigidCharacter *character, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *movement_direction,
+    float max_separation_distance, const ZJoltShape *shape,
+    ZJoltCharacterCollisionHit *out_hits, uint32_t capacity,
+    uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  const JPH::Character *impl = Impl(character);
+  if (!zjolt::Present(impl, position, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Shape *test_shape =
+      shape != nullptr ? zjolt::ToJolt(shape) : impl->GetShape();
+  if (test_shape == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is NULL and the character has none either");
+  }
+
+  const JPH::Quat test_rotation =
+      rotation != nullptr ? zjolt::ToJoltRotation(*rotation) : impl->GetRotation();
+  const JPH::Vec3 direction = movement_direction != nullptr
+                                  ? zjolt::ToJolt(*movement_direction)
+                                  : JPH::Vec3::sZero();
+
+  CharacterHitCollector collector(out_hits, capacity);
+  // @see zjoltCharacterCheckCollision for why `position` is also the base
+  // offset. Nothing here ever sets the collector's user data, so every hit
+  // reports ZJOLT_CHARACTER_ID_INVALID: a rigid character has no
+  // character-vs-character list.
+  impl->CheckCollision(zjolt::ToJoltR(*position), test_rotation, direction,
+                       max_separation_distance, test_shape,
+                       zjolt::ToJoltR(*position), collector);
+
+  return ReportHitCount(collector.count(), out_hits, capacity, out_count);
 }
 
 }  // extern "C"
