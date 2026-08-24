@@ -247,6 +247,11 @@ pub const Desc = struct {
     }
 };
 
+/// Used by `scene.zig`, for the same reason `body.zig`'s `descToC` is.
+pub fn descToC(desc: Desc) c.SoftBodyDesc {
+    return desc.toC();
+}
+
 /// Creates a soft body without adding it to the simulation.
 pub fn create(system: system_mod.PhysicsSystem, desc: Desc) err.Error!body_mod.BodyId {
     const c_desc = desc.toC();
