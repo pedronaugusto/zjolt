@@ -92,6 +92,31 @@ pub const Layers = struct {
 /// The functions are stateless, which is what a layer map almost always is: a
 /// compile-time table. For a layer map that has to be built at run time, fill
 /// in `Layers` by hand with a `user` pointer.
+/// Refuses a callback type that declares NONE of the names a factory looks for.
+///
+/// Every callback here is optional and discovered by `@hasDecl`, which only
+/// sees `pub` declarations from another file. So a perfectly good listener
+/// whose methods are not `pub` — or whose names are misspelled — installs an
+/// all-null vtable and silently never fires, which reads as "the physics is
+/// wrong" rather than "the listener is not wired". A type that means to
+/// listen declares at least one of them.
+pub fn requireAnyDecl(comptime T: type, comptime names: []const []const u8) void {
+    comptime {
+        var found = false;
+        for (names) |name| {
+            if (@hasDecl(T, name)) found = true;
+        }
+        if (!found) {
+            var list: []const u8 = "";
+            for (names) |name| list = list ++ "\n  pub fn " ++ name;
+            @compileError(@typeName(T) ++ " declares none of the callbacks this listener" ++
+                " looks for, so it would be installed and never called. `@hasDecl` only" ++
+                " sees `pub` declarations across files — check that yours are `pub`, and" ++
+                " that they are spelled as one of:" ++ list);
+        }
+    }
+}
+
 pub fn layersFromType(comptime T: type) Layers {
     comptime {
         for ([_][]const u8{
@@ -191,6 +216,10 @@ pub fn contactPointsOn2(manifold: *const ContactManifold) []const math.Vec3 {
 ///
 /// `context` must outlive the system it is installed on.
 pub fn contactListener(comptime T: type, context: *T) c.ContactListener {
+    requireAnyDecl(T, &.{
+        "onContactValidate", "onContactAdded", "onContactPersisted", "onContactRemoved",
+    });
+
     const Thunks = struct {
         fn selfOf(user: ?*anyopaque) *T {
             return @ptrCast(@alignCast(user.?));
@@ -222,6 +251,8 @@ pub fn contactListener(comptime T: type, context: *T) c.ContactListener {
 /// `onBodyActivated(self, BodyId, u64)` / `onBodyDeactivated(self, BodyId, u64)`
 /// `T` declares.
 pub fn bodyActivationListener(comptime T: type, context: *T) c.BodyActivationListener {
+    requireAnyDecl(T, &.{ "onBodyActivated", "onBodyDeactivated" });
+
     const Thunks = struct {
         fn selfOf(user: ?*anyopaque) *T {
             return @ptrCast(@alignCast(user.?));

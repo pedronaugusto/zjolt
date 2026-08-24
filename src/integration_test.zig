@@ -20,7 +20,7 @@ const zjolt = @import("zjolt.zig");
 // rejected and moving-vs-anything accepted.
 //=============================================================================
 
-const Layers = struct {
+pub const Layers = struct {
     pub const static: zjolt.ObjectLayer = 0;
     pub const moving: zjolt.ObjectLayer = 1;
 
@@ -52,13 +52,13 @@ const Layers = struct {
 //=============================================================================
 
 /// A world with a large static box floor whose top surface is at y = 0.
-const World = struct {
+pub const World = struct {
     system: zjolt.PhysicsSystem,
     jobs: zjolt.JobSystem,
     floor_shape: zjolt.Shape,
     floor: zjolt.BodyId,
 
-    fn init() !World {
+    pub fn init() !World {
         const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.max_physics_jobs);
         errdefer jobs.deinit();
 
@@ -93,13 +93,13 @@ const World = struct {
         };
     }
 
-    fn deinit(self: *World) void {
+    pub fn deinit(self: *World) void {
         self.system.deinit();
         self.floor_shape.release();
         self.jobs.deinit();
     }
 
-    fn stepFor(self: *World, seconds: f32) !void {
+    pub fn stepFor(self: *World, seconds: f32) !void {
         const dt: f32 = 1.0 / 60.0;
         var elapsed: f32 = 0;
         while (elapsed < seconds) : (elapsed += dt) {
