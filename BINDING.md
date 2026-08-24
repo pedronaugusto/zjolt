@@ -40,6 +40,55 @@ in the umbrella `ffi/zjolt.h`.
 Nothing in `src/` may `@cImport`. `src/c.zig` is hand-written on purpose, and
 `src/abi_check.zig` is what proves it did not drift.
 
+## One entry point, all the way through
+
+This is the whole pattern. Read it instead of reading a subsystem.
+
+`ffi/zjolt_shape.h`
+```c
+ZJOLT_API ZJoltResult zjoltShapeCreateSphere(float radius, float density,
+                                             ZJoltShape **out);
+```
+
+`ffi/zjolt_shape.cpp`
+```cpp
+ZJoltResult zjoltShapeCreateSphere(float radius, float density,
+                                   ZJoltShape **out) {
+  ZJOLT_ENTER(out);                                    // clears out, refuses pre-init
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::SphereShapeSettings settings(radius);           // settings on the STACK
+  if (density > 0.0f) settings.SetDensity(density);
+  JPH::Shape::ShapeResult result = settings.Create();
+  return Finish(result, out);                          // or zjolt::Own(fresh)
+}
+```
+
+`src/c.zig`
+```zig
+pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, out: **Shape) Result;
+```
+
+`src/shape.zig`
+```zig
+pub fn initSphere(radius: f32, density: f32) err.Error!Shape {
+    var handle: *c.Shape = undefined;
+    try err.check(c.zjoltShapeCreateSphere(radius, density, &handle));
+    return .{ .handle = handle };
+}
+```
+
+`src/zjolt.zig` — one re-export line. `build.zig` — the `.h` in `public_headers`,
+the `.cpp` in the FFI source list, any new Jolt TUs in `jolt_sources`.
+
+## Do not read anything else
+
+Startup reading is the single largest cost in binding a subsystem, and almost
+all of it is wasted. **Read this file, then run `tools/recon.sh` on your
+classes, then write.** Do not read `README.md`, do not read `git log`, do not
+open another subsystem "for style" — the style is above. Do not open a Jolt
+header that recon already summarised unless recon pointed you at a line in it.
+
 ## Naming, which is load-bearing
 
 `src/abi_check.zig` pairs the two sides by name and has **no hand-written
