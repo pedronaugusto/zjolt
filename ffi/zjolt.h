@@ -21,6 +21,7 @@
 #include "zjolt_character.h"
 #include "zjolt_debug.h"
 #include "zjolt_group.h"
+#include "zjolt_hair.h"
 #include "zjolt_material.h"
 #include "zjolt_query.h"
 #include "zjolt_ragdoll.h"

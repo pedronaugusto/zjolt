@@ -51,6 +51,7 @@ const softbody_mod = @import("softbody.zig");
 const vehicle_mod = @import("vehicle.zig");
 const debug_mod = @import("debug.zig");
 const ragdoll_mod = @import("ragdoll.zig");
+const hair_mod = @import("hair.zig");
 
 //=============================================================================
 // Public surface
@@ -221,6 +222,26 @@ pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
 pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
 pub const RagdollSwingType = ragdoll_mod.SwingType;
 pub const Ragdoll = ragdoll_mod.Ragdoll;
+/// Hair, and the compute backend it runs on. There is no renderer here: the
+/// backend is either Jolt's CPU fallback, which this package compiles, or a
+/// table the host fills in over a device it already owns.
+pub const ComputeSystem = hair_mod.ComputeSystem;
+pub const ComputeBackend = hair_mod.ComputeBackend;
+pub const ComputeInterface = hair_mod.Interface;
+pub const ComputeBufferType = hair_mod.BufferType;
+pub const ComputeMapMode = hair_mod.MapMode;
+pub const ComputeBarrier = hair_mod.Barrier;
+pub const isCpuComputeSupported = hair_mod.isCpuSupported;
+
+pub const Hair = hair_mod.Hair;
+pub const Groom = hair_mod.Groom;
+pub const HairScalp = hair_mod.Scalp;
+pub const HairVertex = hair_mod.Vertex;
+pub const HairStrand = hair_mod.Strand;
+pub const HairGradient = hair_mod.Gradient;
+pub const HairSkinWeight = hair_mod.SkinWeight;
+pub const HairMaterial = hair_mod.Material;
+pub const defaultHairMaterial = hair_mod.defaultMaterial;
 
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
@@ -353,6 +374,7 @@ test {
     _ = state_mod;
     _ = softbody_mod;
     _ = debug_mod;
+    _ = hair_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
