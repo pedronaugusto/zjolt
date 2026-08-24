@@ -1321,6 +1321,778 @@ test "a character with an inner body is visible to ray casts" {
 }
 
 //=============================================================================
+// Simulation settings
+//=============================================================================
+
+test "a settings change produces a measurably different simulation" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    // Same world twice, one field apart. `allow_sleeping` is the field to
+    // pick: it changes an outcome that is observable through the API rather
+    // than a number that only shows up in a trajectory.
+    for ([_]bool{ true, false }) |allow_sleeping| {
+        var world = try World.init();
+        defer world.deinit();
+
+        var settings = world.system.getSettings();
+        try std.testing.expect(settings.allow_sleeping);
+        settings.allow_sleeping = allow_sleeping;
+        try world.system.setSettings(settings);
+
+        // Read back, because the point of a flat descriptor is that what goes
+        // in comes out.
+        try std.testing.expectEqual(allow_sleeping, world.system.getSettings().allow_sleeping);
+        try std.testing.expectEqual(
+            settings.num_velocity_steps,
+            world.system.getSettings().num_velocity_steps,
+        );
+
+        const ball = try world.system.bodies().createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(0, 1, 0),
+        }, .activate);
+
+        try world.stepFor(3.0);
+
+        try std.testing.expectEqual(
+            !allow_sleeping,
+            world.system.bodies().isActive(ball),
+        );
+    }
+}
+
+test "settings Jolt would divide by or loop on are refused" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const good = zjolt.defaultPhysicsSettings();
+    try std.testing.expect(good.step_listeners_batch_size >= 1);
+    try world.system.setSettings(good);
+
+    // Jolt asserts on none of these. A zero batch size is a `fetch_add(0)` in
+    // the step's listener loop, which never advances; a zero batches-per-job
+    // is an integer division. Both fail several frames from here.
+    var bad = good;
+    bad.step_listeners_batch_size = 0;
+    try std.testing.expectError(error.InvalidArgument, world.system.setSettings(bad));
+
+    bad = good;
+    bad.step_listener_batches_per_job = 0;
+    try std.testing.expectError(error.InvalidArgument, world.system.setSettings(bad));
+
+    bad = good;
+    bad.max_in_flight_body_pairs = 0;
+    try std.testing.expectError(error.InvalidArgument, world.system.setSettings(bad));
+
+    bad = good;
+    bad.num_velocity_steps = 0;
+    try std.testing.expectError(error.InvalidArgument, world.system.setSettings(bad));
+
+    // ...and a refused set changed nothing.
+    try std.testing.expectEqual(
+        good.step_listeners_batch_size,
+        world.system.getSettings().step_listeners_batch_size,
+    );
+}
+
+//=============================================================================
+// Broad-phase queries
+//=============================================================================
+
+test "a broad-phase query finds the bodies in a region and not the ones outside" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const near = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .dont_activate);
+    const far = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(30, 5, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const broad = world.system.broadPhase();
+    var found: [16]zjolt.BodyId = undefined;
+
+    // A box around the near ball only.
+    const box: zjolt.AABox = .{
+        .min = zjolt.vec3(-2, 3, -2),
+        .max = zjolt.vec3(2, 7, 2),
+    };
+    const in_box = try broad.collideBox(box, null, &found);
+    try std.testing.expectEqual(@as(usize, 1), in_box.len);
+    try std.testing.expectEqual(near, in_box[0]);
+    try std.testing.expectEqual(@as(u32, 1), try broad.countBoxOverlaps(box, null));
+
+    // The same region as a sphere, a point and an oriented box.
+    const in_sphere = try broad.collideSphere(zjolt.rvec3(0, 5, 0), 1.0, null, &found);
+    try std.testing.expectEqual(@as(usize, 1), in_sphere.len);
+    try std.testing.expectEqual(near, in_sphere[0]);
+
+    const at_point = try broad.collidePoint(zjolt.rvec3(0, 5, 0), null, &found);
+    try std.testing.expectEqual(@as(usize, 1), at_point.len);
+    try std.testing.expectEqual(near, at_point[0]);
+
+    const oriented = try broad.collideOrientedBox(.{
+        .center = zjolt.rvec3(0, 5, 0),
+        .rotation = zjolt.quatFromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 4.0),
+        .half_extent = zjolt.vec3(2, 2, 2),
+    }, null, &found);
+    try std.testing.expectEqual(@as(usize, 1), oriented.len);
+    try std.testing.expectEqual(near, oriented[0]);
+
+    // Nowhere near either ball.
+    const empty = try broad.collidePoint(zjolt.rvec3(0, 100, 0), null, &found);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+
+    // A ray down the +x axis passes through both balls, and through the floor
+    // only if it dips — it does not.
+    var hits: [16]zjolt.BroadPhaseCastHit = undefined;
+    const along_x = try broad.castRay(
+        zjolt.rvec3(-5, 5, 0),
+        zjolt.vec3(50, 0, 0),
+        null,
+        &hits,
+    );
+    try std.testing.expectEqual(@as(usize, 2), along_x.len);
+    for (along_x) |hit| {
+        try std.testing.expect(hit.body == near or hit.body == far);
+        try std.testing.expect(hit.fraction >= 0 and hit.fraction <= 1);
+    }
+
+    // Sweeping a small box the same way finds the same two.
+    const swept = try broad.castBox(
+        .{ .min = zjolt.vec3(-5.2, 4.8, -0.2), .max = zjolt.vec3(-4.8, 5.2, 0.2) },
+        zjolt.vec3(50, 0, 0),
+        null,
+        &hits,
+    );
+    try std.testing.expectEqual(@as(usize, 2), swept.len);
+
+    // The layer filter is consulted, and it is the only kind the broad phase
+    // has — there is no body filter here, which is why `Filters` is its own
+    // type rather than the narrow phase's.
+    const only_static: zjolt.BroadPhaseFilters = .{
+        .object_layer = .{ .should_collide = onlyStaticLayer },
+    };
+    const filtered = try broad.collideBox(box, &only_static, &found);
+    try std.testing.expectEqual(@as(usize, 0), filtered.len);
+
+    // A short buffer reports the count rather than truncating silently.
+    var one: [1]zjolt.BodyId = undefined;
+    const wide: zjolt.AABox = .{
+        .min = zjolt.vec3(-50, -50, -50),
+        .max = zjolt.vec3(50, 50, 50),
+    };
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        broad.collideBox(wide, null, &one),
+    );
+
+    // Whole-world bounds cover both balls and the floor.
+    const bounds = broad.bounds();
+    try std.testing.expect(bounds.min.x <= -1 and bounds.max.x >= 30);
+}
+
+fn onlyStaticLayer(user: ?*anyopaque, layer: zjolt.ObjectLayer) callconv(.c) bool {
+    _ = user;
+    return layer == Layers.static;
+}
+
+//=============================================================================
+// Batch add and remove
+//=============================================================================
+
+test "a batch insert leaves the same world a loop of single inserts would" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    const count = 64;
+    var by_batch: [count]zjolt.RVec3 = undefined;
+    var by_loop: [count]zjolt.RVec3 = undefined;
+
+    for ([_]bool{ true, false }) |use_batch| {
+        var world = try World.init();
+        defer world.deinit();
+
+        var ids: [count]zjolt.BodyId = undefined;
+        for (&ids, 0..) |*id, i| {
+            const x: f32 = @floatFromInt(@as(i32, @intCast(i % 8)) - 4);
+            const z: f32 = @floatFromInt(@as(i32, @intCast(i / 8)) - 4);
+            id.* = try world.system.bodies().create(.{
+                .shape = shape,
+                .object_layer = Layers.moving,
+                .position = zjolt.rvec3(x * 2, 1.0, z * 2),
+            });
+        }
+
+        if (use_batch) {
+            try world.system.batch().add(&ids, .activate);
+        } else {
+            for (ids) |id| world.system.bodies().add(id, .activate);
+        }
+
+        try std.testing.expectEqual(@as(u32, count + 1), world.system.numBodies());
+        for (ids) |id| try std.testing.expect(world.system.bodies().isAdded(id));
+
+        try world.stepFor(1.0);
+
+        const out = if (use_batch) &by_batch else &by_loop;
+        for (ids, 0..) |id, i| out[i] = world.system.bodies().getPosition(id);
+    }
+
+    // Not asserted bit-identical: a batch insert builds a different subtree
+    // from an incremental one, and the tree decides the order pairs are found
+    // in, which decides the order the solver sums them in. The world is the
+    // same world; the last bits of it are not the same bits.
+    for (by_batch, by_loop) |a, b| {
+        try std.testing.expectApproxEqAbs(a.x, b.x, 1e-3);
+        try std.testing.expectApproxEqAbs(a.y, b.y, 1e-3);
+        try std.testing.expectApproxEqAbs(a.z, b.z, 1e-3);
+    }
+}
+
+test "a batch refuses what Jolt would assert on, and stages nothing when it does" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const a = try bodies.create(.{ .shape = shape, .object_layer = Layers.moving });
+    const b = try bodies.create(.{ .shape = shape, .object_layer = Layers.moving });
+
+    // The same body twice. Jolt's prepare checks every id against the broad
+    // phase before inserting any of them, so both copies pass its check and
+    // the finalize inserts one body into the tree twice.
+    try std.testing.expectError(
+        error.InvalidArgument,
+        world.system.batch().add(&[_]zjolt.BodyId{ a, a }, .dont_activate),
+    );
+    try std.testing.expect(!bodies.isAdded(a));
+
+    // A body that is already added.
+    bodies.add(a, .dont_activate);
+    try std.testing.expectError(
+        error.InvalidArgument,
+        world.system.batch().add(&[_]zjolt.BodyId{ a, b }, .dont_activate),
+    );
+    try std.testing.expect(!bodies.isAdded(b));
+
+    // A body that no longer exists.
+    bodies.remove(a);
+    const gone = try bodies.create(.{ .shape = shape, .object_layer = Layers.moving });
+    bodies.destroy(gone);
+    try std.testing.expectError(
+        error.BodyNotFound,
+        world.system.batch().add(&[_]zjolt.BodyId{ a, gone }, .dont_activate),
+    );
+
+    // Removing one that was never added is refused too, and refusing means
+    // refusing the whole set.
+    try world.system.batch().add(&[_]zjolt.BodyId{ a, b }, .dont_activate);
+    bodies.remove(b);
+    try std.testing.expectError(
+        error.InvalidArgument,
+        world.system.batch().remove(&[_]zjolt.BodyId{ a, b }),
+    );
+    try std.testing.expect(bodies.isAdded(a));
+
+    // Destroy is the lenient one: a list that outlived one of its bodies is
+    // ordinary, so the survivors still go.
+    try world.system.batch().destroy(&[_]zjolt.BodyId{ a, b, gone });
+    try std.testing.expectEqual(@as(u32, 1), world.system.numBodies());
+}
+
+test "a prepared batch that is aborted, and one that is never consumed" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    {
+        var world = try World.init();
+        defer world.deinit();
+
+        var ids: [8]zjolt.BodyId = undefined;
+        for (&ids) |*id| {
+            id.* = try world.system.bodies().create(.{
+                .shape = shape,
+                .object_layer = Layers.moving,
+            });
+        }
+
+        // Staged: neither in the simulation nor findable.
+        const staged = try world.system.batch().prepare(&ids);
+        for (ids) |id| try std.testing.expect(!world.system.bodies().isAdded(id));
+
+        try world.system.batch().abort(staged);
+        for (ids) |id| try std.testing.expect(!world.system.bodies().isAdded(id));
+
+        // The handle is spent; a second use is refused rather than reaching a
+        // freed pointer.
+        try std.testing.expectError(
+            error.InvalidArgument,
+            world.system.batch().abort(staged),
+        );
+
+        // ...and finalizing after that works from a fresh prepare.
+        const again = try world.system.batch().prepare(&ids);
+        try world.system.batch().finalize(again, .dont_activate);
+        for (ids) |id| try std.testing.expect(world.system.bodies().isAdded(id));
+    }
+
+    // A batch left outstanding is aborted with the system rather than leaking
+    // it — std.testing.allocator is the assertion.
+    {
+        var world = try World.init();
+        defer world.deinit();
+
+        var ids: [4]zjolt.BodyId = undefined;
+        for (&ids) |*id| {
+            id.* = try world.system.bodies().create(.{
+                .shape = shape,
+                .object_layer = Layers.moving,
+            });
+        }
+        _ = try world.system.batch().prepare(&ids);
+    }
+}
+
+test "a batch wakes and sleeps many bodies at once" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    var ids: [8]zjolt.BodyId = undefined;
+    for (&ids, 0..) |*id, i| {
+        const x: f32 = @floatFromInt(i);
+        id.* = try world.system.bodies().create(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(x * 3, 0.5, 0),
+        });
+    }
+    try world.system.batch().add(&ids, .dont_activate);
+    for (ids) |id| try std.testing.expect(!world.system.bodies().isActive(id));
+
+    try world.system.batch().activate(&ids);
+    for (ids) |id| try std.testing.expect(world.system.bodies().isActive(id));
+
+    try world.system.batch().deactivate(&ids);
+    for (ids) |id| try std.testing.expect(!world.system.bodies().isActive(id));
+
+    // And by region, which is a broad-phase query with the same caveats.
+    try world.system.batch().activateInBox(.{
+        .min = zjolt.vec3(-1, -1, -1),
+        .max = zjolt.vec3(4, 2, 1),
+    }, null);
+    try std.testing.expect(world.system.bodies().isActive(ids[0]));
+    try std.testing.expect(world.system.bodies().isActive(ids[1]));
+    try std.testing.expect(!world.system.bodies().isActive(ids[7]));
+}
+
+//=============================================================================
+// Collision groups
+//=============================================================================
+
+test "a collision group filter suppresses exactly the pairs it names" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    const filter = try zjolt.GroupFilter.initTable(3);
+    defer filter.release();
+    try std.testing.expectEqual(@as(u32, 1), filter.refCount());
+    try std.testing.expectEqual(@as(u32, 3), filter.numSubGroups());
+
+    // Everything collides until a pair is cleared.
+    try std.testing.expect(try filter.isCollisionEnabled(0, 1));
+    try filter.disableCollision(0, 1);
+    try std.testing.expect(!try filter.isCollisionEnabled(0, 1));
+    // Symmetric, and only that pair.
+    try std.testing.expect(!try filter.isCollisionEnabled(1, 0));
+    try std.testing.expect(try filter.isCollisionEnabled(0, 2));
+
+    // The two arguments Jolt asserts on rather than checking.
+    try std.testing.expectError(error.InvalidArgument, filter.disableCollision(1, 1));
+    try std.testing.expectError(error.InvalidArgument, filter.disableCollision(0, 3));
+    try std.testing.expectError(
+        error.InvalidArgument,
+        zjolt.GroupFilter.initTable(zjolt.max_sub_groups + 1),
+    );
+
+    // Two overlapping spheres, no gravity: without the filter they push each
+    // other apart, with it they stay where they were put.
+    for ([_]bool{ false, true }) |suppressed| {
+        var world = try World.init();
+        defer world.deinit();
+        world.system.setGravity(zjolt.vec3_zero);
+
+        const bodies = world.system.bodies();
+        const a = try bodies.createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(-0.1, 5, 0),
+        }, .activate);
+        const b = try bodies.createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(0.1, 5, 0),
+        }, .activate);
+
+        // Same group, different sub-groups: the table decides. Sub-groups 0
+        // and 1 are the pair that was disabled above; 0 and 2 were not.
+        bodies.setCollisionGroup(a, .{ .filter = filter, .group_id = 7, .sub_group_id = 0 });
+        bodies.setCollisionGroup(b, .{
+            .filter = filter,
+            .group_id = 7,
+            .sub_group_id = if (suppressed) 1 else 2,
+        });
+        try std.testing.expectEqual(@as(u32, 7), bodies.getCollisionGroup(a).group_id);
+        try std.testing.expect(bodies.getCollisionGroup(a).filter != null);
+
+        try world.stepFor(0.5);
+
+        const gap = @abs(bodies.getPosition(a).x - bodies.getPosition(b).x);
+        if (suppressed) {
+            try std.testing.expect(gap < 0.3);
+        } else {
+            try std.testing.expect(gap > 0.9);
+        }
+    }
+
+    // The bodies took their own references and gave them back; ours is the
+    // only one left.
+    try std.testing.expectEqual(@as(u32, 1), filter.refCount());
+}
+
+//=============================================================================
+// Step listeners and combine callbacks
+//=============================================================================
+
+const CountingListener = struct {
+    calls: u32 = 0,
+    last_delta: f32 = 0,
+    fail_after: ?u32 = null,
+
+    pub fn onStep(self: *CountingListener, ctx: *const zjolt.StepListenerContext) !void {
+        self.calls += 1;
+        self.last_delta = ctx.delta_time;
+        if (self.fail_after) |n| {
+            if (self.calls > n) return error.ListenerGaveUp;
+        }
+    }
+};
+
+test "a step listener fires once per collision step" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    var counter: CountingListener = .{};
+    var listener: zjolt.StepListener(CountingListener) = .init(&counter);
+    try listener.attach(world.system);
+
+    _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+    try listener.check();
+    try std.testing.expectEqual(@as(u32, 1), counter.calls);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 60.0), counter.last_delta, 1e-6);
+
+    // Two collision steps, so two callbacks, each with half the delta.
+    _ = try world.system.step(1.0 / 60.0, 2, world.jobs);
+    try listener.check();
+    try std.testing.expectEqual(@as(u32, 3), counter.calls);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 120.0), counter.last_delta, 1e-6);
+
+    try listener.detach(world.system);
+    _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+    try std.testing.expectEqual(@as(u32, 3), counter.calls);
+
+    // Detaching twice is not a double free, and a handle from nowhere is
+    // refused where Jolt would assert.
+    try listener.detach(world.system);
+}
+
+test "a step listener that signals an error leaves the system usable" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+    const ball = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    var counter: CountingListener = .{ .fail_after = 0 };
+    var listener: zjolt.StepListener(CountingListener) = .init(&counter);
+    try listener.attach(world.system);
+    defer listener.detach(world.system) catch {};
+
+    // The error does not unwind out of the callback — if it did, the solver's
+    // locks would still be held and the NEXT step would deadlock. It is
+    // carried out and re-raised here instead.
+    _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+    try std.testing.expectError(error.ListenerGaveUp, listener.check());
+
+    // Taking it clears it, so a host is not told twice about one failure.
+    try listener.check();
+
+    // ...and the system still works: this is the step that would have hung.
+    const before = world.system.bodies().getPosition(ball);
+    _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+    _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+    try std.testing.expect(world.system.bodies().getPosition(ball).y < before.y);
+    try std.testing.expectError(error.ListenerGaveUp, listener.check());
+}
+
+const Bouncy = struct {
+    calls: u32 = 0,
+    value: f32,
+    fail: bool = false,
+
+    pub fn combine(self: *Bouncy, info: *const zjolt.CombineInfo) !f32 {
+        // Both bodies' own values arrive with the call, because the callback
+        // must not reach back into the system to read them.
+        _ = info.value1;
+        _ = info.value2;
+        self.calls += 1;
+        if (self.fail) return error.NoOpinion;
+        return self.value;
+    }
+};
+
+test "a combine callback decides the contact, and one that fails leaves the system usable" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+
+    // Both bodies have restitution 0, so anything that bounces came from the
+    // callback and not from the bodies.
+    var peak_by_restitution: [2]f32 = .{ 0, 0 };
+    for ([_]f32{ 0.0, 0.9 }, 0..) |restitution, i| {
+        var world = try World.init();
+        defer world.deinit();
+
+        var bouncy: Bouncy = .{ .value = restitution };
+        var callback: zjolt.CombineCallback(Bouncy) = .init(&bouncy);
+        try callback.attachRestitution(world.system);
+
+        const ball = try world.system.bodies().createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(0, 3, 0),
+        }, .activate);
+
+        var peak: f32 = 0;
+        var step: u32 = 0;
+        while (step < 120) : (step += 1) {
+            _ = try world.system.step(1.0 / 60.0, 1, world.jobs);
+            const up = world.system.bodies().getLinearVelocity(ball).y;
+            if (up > peak) peak = up;
+        }
+        try callback.check();
+        try std.testing.expect(bouncy.calls > 0);
+        peak_by_restitution[i] = peak;
+
+        try world.system.clearCombineRestitution();
+    }
+
+    try std.testing.expect(peak_by_restitution[0] < 0.5);
+    try std.testing.expect(peak_by_restitution[1] > 3.0);
+
+    // A callback that signals an error yields 0 for that contact and comes
+    // back out of `check`, rather than unwinding through the solver.
+    {
+        var world = try World.init();
+        defer world.deinit();
+
+        var bouncy: Bouncy = .{ .value = 0.9, .fail = true };
+        var callback: zjolt.CombineCallback(Bouncy) = .init(&bouncy);
+        try callback.attachRestitution(world.system);
+
+        const ball = try world.system.bodies().createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(0, 1, 0),
+        }, .activate);
+
+        try world.stepFor(1.0);
+        try std.testing.expect(bouncy.calls > 0);
+        try std.testing.expectError(error.NoOpinion, callback.check());
+
+        // Still simulating, and the ball came to rest on the floor rather than
+        // bouncing on a restitution the failed callback never returned.
+        try world.stepFor(0.5);
+        try std.testing.expectApproxEqAbs(
+            @as(zjolt.Real, 0.5),
+            world.system.bodies().getPosition(ball).y,
+            0.05,
+        );
+        try world.system.clearCombineRestitution();
+    }
+}
+
+//=============================================================================
+// Saving and restoring state
+//=============================================================================
+
+test "a saved state restores bit-identically" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.5, 0.5), .{});
+    defer shape.release();
+
+    var ids: [12]zjolt.BodyId = undefined;
+    for (&ids, 0..) |*id, i| {
+        const x: f32 = @floatFromInt(@as(i32, @intCast(i)) - 6);
+        id.* = try world.system.bodies().createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = zjolt.rvec3(x * 0.9, 2.0 + x * 0.05, 0),
+            .angular_velocity = zjolt.vec3(0.3, 0.1, -0.2),
+        }, .activate);
+    }
+
+    // Far enough in that bodies are in contact with the floor and with each
+    // other, so the contact cache is carrying real warm-start data.
+    try world.stepFor(1.0);
+
+    const saved = try world.system.state().saveAlloc(std.testing.allocator, .all);
+    defer std.testing.allocator.free(saved);
+    try std.testing.expect(saved.len > 0);
+    try std.testing.expectEqual(saved.len, try world.system.state().size(.all));
+
+    var expected_positions: [ids.len]zjolt.RVec3 = undefined;
+    var expected_rotations: [ids.len]zjolt.Quat = undefined;
+    try world.stepFor(0.5);
+    _ = try world.system.getTransforms(&ids, &expected_positions, &expected_rotations);
+
+    try world.system.state().restore(saved);
+
+    var actual_positions: [ids.len]zjolt.RVec3 = undefined;
+    var actual_rotations: [ids.len]zjolt.Quat = undefined;
+    try world.stepFor(0.5);
+    _ = try world.system.getTransforms(&ids, &actual_positions, &actual_rotations);
+
+    // Bit-identical, not approximately equal. A restore that put back
+    // everything except the solver's warm-start impulses would pass a
+    // tolerance and fail this.
+    for (expected_positions, actual_positions) |want, got| {
+        try std.testing.expectEqual(want.x, got.x);
+        try std.testing.expectEqual(want.y, got.y);
+        try std.testing.expectEqual(want.z, got.z);
+    }
+    for (expected_rotations, actual_rotations) |want, got| {
+        try std.testing.expectEqual(want.x, got.x);
+        try std.testing.expectEqual(want.w, got.w);
+    }
+}
+
+test "a state buffer is refused when it is not one, and when the world moved on" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    defer shape.release();
+    const ball = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 3, 0),
+    }, .activate);
+    try world.stepFor(0.2);
+
+    const saved = try world.system.state().saveAlloc(std.testing.allocator, .all);
+    defer std.testing.allocator.free(saved);
+
+    // A short buffer reports what it needed rather than writing a prefix.
+    var stub: [8]u8 = undefined;
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        world.system.state().save(.all, &stub),
+    );
+
+    // Ordinary text is not a saved state.
+    try std.testing.expectError(
+        error.BadFormat,
+        world.system.state().restore("this is not a physics state at all, at all"),
+    );
+
+    // Truncation and damage are both caught before Jolt reads a byte.
+    try std.testing.expectError(
+        error.BadFormat,
+        world.system.state().restore(saved[0 .. saved.len - 4]),
+    );
+    const damaged = try std.testing.allocator.dupe(u8, saved);
+    defer std.testing.allocator.free(damaged);
+    damaged[damaged.len - 1] ^= 0xff;
+    try std.testing.expectError(error.BadFormat, world.system.state().restore(damaged));
+
+    // ...and so is the one Jolt reacts to with an assertion rather than a
+    // return: a body that no longer exists.
+    world.system.bodies().destroy(ball);
+    try std.testing.expectError(error.BadFormat, world.system.state().restore(saved));
+}
+
+//=============================================================================
 // Helpers
 //=============================================================================
 

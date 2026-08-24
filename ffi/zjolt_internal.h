@@ -406,6 +406,22 @@ struct QueryFilters {
   BodyFilterAdapter body;
 };
 
+/// The two a broad-phase query needs.
+///
+/// Separate from QueryFilters rather than a subset of it because
+/// BroadPhaseQuery has nowhere to put a body filter, and accepting one there
+/// would be a filter that silently does nothing.
+struct BroadPhaseFilters {
+  explicit BroadPhaseFilters(const ZJoltBroadPhaseFilters *filters)
+      : broad_phase(filters != nullptr ? filters->broad_phase_layer
+                                       : ZJoltBroadPhaseLayerFilter{}),
+        object_layer(filters != nullptr ? filters->object_layer
+                                        : ZJoltObjectLayerFilter{}) {}
+
+  BroadPhaseLayerFilterAdapter broad_phase;
+  ObjectLayerFilterAdapter object_layer;
+};
+
 //===----------------------------------------------------------------------===//
 // Byte-buffer streams, for shape serialisation
 //
@@ -648,11 +664,61 @@ struct ZJoltPhysicsSystem {
   ZJoltContactListenerAdapter *contact_listener = nullptr;
   ZJoltBodyActivationListenerAdapter *activation_listener = nullptr;
 
+  /// Step listeners still attached, owned. Jolt keeps its own list and asserts
+  /// on a double add or a stranger's remove, so this is the list that answers
+  /// "is this handle mine" before Jolt is asked. Defined in zjolt_system.cpp.
+  JPH::Array<ZJoltStepListener *> step_listeners;
+
+  /// Batches prepared but neither finalized nor aborted, owned. Each one holds
+  /// bodies that Jolt has marked as belonging to a broad-phase layer without
+  /// having put them in the tree, so destroying the system has to unwind them.
+  /// Defined in zjolt_batch.cpp.
+  JPH::Array<ZJoltBodyAddBatch *> pending_batches;
+
+  /// Whether Update has ever run on this system.
+  ///
+  /// `WereBodiesInContact` reads the contact cache's back buffer, and
+  /// `ManifoldCache::Find` asserts that buffer has been finalised
+  /// (`ContactConstraintManager.cpp:380`) — which it is not until the first
+  /// step ends. Asking before then is an ordinary thing for a host to do, and
+  /// the honest answer is "no", not an abort.
+  bool has_stepped = false;
+
+  /// Index into the combine-callback slot table in zjolt_system.cpp, or -1
+  /// when this system has never installed one. Jolt's combine hook is a bare
+  /// function pointer with no user parameter, and the slot is what carries the
+  /// host's.
+  int combine_slot = -1;
+
+  /// Jolt's own combine functions, captured at creation.
+  ///
+  /// Clearing a combine callback has to put something back, and
+  /// `SetCombineFriction(nullptr)` is not it — the solver calls the pointer
+  /// unconditionally. Spelled out rather than named through
+  /// `ContactConstraintManager::CombineFunction` so this header does not have
+  /// to include the constraint manager for one typedef.
+  using CombineFunction = float (*)(const JPH::Body &, const JPH::SubShapeID &,
+                                    const JPH::Body &, const JPH::SubShapeID &);
+  CombineFunction default_combine_friction = nullptr;
+  CombineFunction default_combine_restitution = nullptr;
+
   ZJoltPhysicsSystem(const ZJoltPhysicsSystemDesc &desc)
       : broad_phase_layers(desc.broad_phase_layers),
         object_vs_broad_phase_filter(desc.object_vs_broad_phase_filter),
         object_layer_pair_filter(desc.object_layer_pair_filter) {}
 };
+
+namespace zjolt {
+
+/// Aborts and frees every batch still staged on `system`.
+///
+/// Defined in zjolt_batch.cpp, called from zjoltPhysicsSystemDestroy, and
+/// declared here because those are different translation units. A batch that
+/// outlived its system would leave bodies marked as being in a broad-phase
+/// layer they were never inserted into.
+void AbortPendingBatches(ZJoltPhysicsSystem *system);
+
+}  // namespace zjolt
 
 /// A character controller, plus the system it queries against.
 struct ZJoltCharacter {

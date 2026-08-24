@@ -15,10 +15,14 @@
 
 #include "zjolt_core.h"
 
+#include "zjolt_batch.h"
 #include "zjolt_body.h"
+#include "zjolt_broadphase.h"
 #include "zjolt_character.h"
+#include "zjolt_group.h"
 #include "zjolt_query.h"
 #include "zjolt_shape.h"
+#include "zjolt_state.h"
 #include "zjolt_system.h"
 
 #endif  // ZJOLT_H_
