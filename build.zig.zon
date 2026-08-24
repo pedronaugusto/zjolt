@@ -15,6 +15,7 @@
         "ci",
         ".github",
         "LICENSE",
+        "BINDING.md",
         "README.md",
         "UPSTREAM.md",
     },

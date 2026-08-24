@@ -20,19 +20,15 @@
 
 namespace {
 
-uint32_t ToCSubShapeId(const JPH::SubShapeID &id) {
-  return static_cast<uint32_t>(id.GetValue());
-}
-
 void FillRayHit(ZJoltRayCastHit *out, const JPH::RayCastResult &hit) {
   out->body = zjolt::ToC(hit.mBodyID);
-  out->sub_shape_id = ToCSubShapeId(hit.mSubShapeID2);
+  out->sub_shape_id = zjolt::ToC(hit.mSubShapeID2);
   out->fraction = hit.mFraction;
 }
 
 void FillShapeCastHit(ZJoltShapeCastHit *out, const JPH::ShapeCastResult &hit) {
   out->body = zjolt::ToC(hit.mBodyID2);
-  out->sub_shape_id = ToCSubShapeId(hit.mSubShapeID2);
+  out->sub_shape_id = zjolt::ToC(hit.mSubShapeID2);
   out->fraction = hit.mFraction;
   out->contact_point_on_1 = zjolt::ToC(hit.mContactPointOn1);
   out->contact_point_on_2 = zjolt::ToC(hit.mContactPointOn2);
@@ -44,7 +40,7 @@ void FillShapeCastHit(ZJoltShapeCastHit *out, const JPH::ShapeCastResult &hit) {
 void FillCollideHit(ZJoltCollideShapeHit *out,
                     const JPH::CollideShapeResult &hit) {
   out->body = zjolt::ToC(hit.mBodyID2);
-  out->sub_shape_id = ToCSubShapeId(hit.mSubShapeID2);
+  out->sub_shape_id = zjolt::ToC(hit.mSubShapeID2);
   out->contact_point_on_1 = zjolt::ToC(hit.mContactPointOn1);
   out->contact_point_on_2 = zjolt::ToC(hit.mContactPointOn2);
   out->penetration_axis = zjolt::ToC(hit.mPenetrationAxis);

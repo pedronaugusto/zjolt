@@ -96,6 +96,11 @@ Both are exercised by `tests/consumer`, which builds zjolt through
 from building it in-repo, and the difference is invisible to the rest of the
 suite.
 
+New surface follows one recipe, written down in [BINDING.md](BINDING.md): which
+five files a subsystem touches, the naming the ABI cross-check pairs on, the
+entry-point guard, reference counting, and the rule that nothing may unwind out
+of a callback.
+
 ## Design
 
 ### Callbacks cross as C, not as C++
