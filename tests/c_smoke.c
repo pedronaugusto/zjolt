@@ -766,6 +766,65 @@ int main(void) {
   CHECK(nothing == 0, "open air contains nothing");
 
   //-------------------------------------------------------------------------
+  // Shape versus shape: two placements, no system involved at all
+  //-------------------------------------------------------------------------
+
+  ZJoltCollideShapeSettings pair_settings;
+  zjoltCollideShapeSettingsInit(&pair_settings);
+  CHECK(pair_settings.max_separation_distance == 0.0f,
+        "the collide settings default to touching contacts only");
+
+  ZJoltShapeCastSettings pair_cast_settings;
+  zjoltShapeCastSettingsInit(&pair_cast_settings);
+  CHECK(pair_cast_settings.extra_convex_radius == 0.0f,
+        "the cast settings default to no extra convex radius");
+
+  /* Two half-metre boxes, pushed together until they overlap by 0.1. */
+  const ZJoltRVec3 pair_origin = {(ZJoltReal)0.0, (ZJoltReal)0.0,
+                                  (ZJoltReal)0.0};
+  const ZJoltRVec3 pair_near = {(ZJoltReal)0.9, (ZJoltReal)0.0,
+                                (ZJoltReal)0.0};
+  const ZJoltRVec3 pair_far = {(ZJoltReal)1.5, (ZJoltReal)0.0,
+                               (ZJoltReal)0.0};
+  ZJoltCollideShapeHit pair_hit;
+  bool pair_did_hit = false;
+  CHECK_OK(zjoltCollideShapeVsShapeClosest(
+      box, NULL, &pair_origin, &identity, box, NULL, &pair_near, &identity,
+      NULL, NULL, NULL, &pair_hit, &pair_did_hit));
+  CHECK(pair_did_hit, "two boxes 0.9 apart overlap");
+  CHECK(pair_hit.penetration_depth > 0.05f &&
+            pair_hit.penetration_depth < 0.15f,
+        "the overlap is the 0.1 they were pushed together by: %f",
+        (double)pair_hit.penetration_depth);
+  CHECK(pair_hit.body == ZJOLT_BODY_ID_INVALID,
+        "a shape-versus-shape hit names no body");
+
+  pair_did_hit = true;
+  CHECK_OK(zjoltCollideShapeVsShapeClosest(
+      box, NULL, &pair_origin, &identity, box, NULL, &pair_far, &identity,
+      NULL, NULL, NULL, &pair_hit, &pair_did_hit));
+  CHECK(!pair_did_hit, "the same boxes 1.5 apart do not overlap");
+
+  /* Sweeping one into the other finds it partway along. */
+  const ZJoltVec3 pair_sweep = {2.0f, 0.0f, 0.0f};
+  ZJoltShapeCastHit pair_cast_hit;
+  bool pair_cast_did_hit = false;
+  CHECK_OK(zjoltCastShapeVsShapeClosest(
+      box, NULL, &pair_origin, &identity, &pair_sweep, box, NULL, &pair_far,
+      &identity, NULL, NULL, NULL, &pair_cast_hit, &pair_cast_did_hit));
+  CHECK(pair_cast_did_hit, "a box swept two metres reaches one 1.5 away");
+  CHECK(pair_cast_hit.fraction > 0.0f && pair_cast_hit.fraction < 1.0f,
+        "the sweep hit partway along: %f", (double)pair_cast_hit.fraction);
+
+  /* And the two-call protocol reports the count either way round. */
+  uint32_t pair_count = 0;
+  CHECK_OK(zjoltCollideShapeVsShapeAll(box, NULL, &pair_origin, &identity, box,
+                                       NULL, &pair_near, &identity, NULL, NULL,
+                                       NULL, NULL, 0, &pair_count));
+  CHECK(pair_count == 1, "one box against one box is one overlap: %u",
+        pair_count);
+
+  //-------------------------------------------------------------------------
   // Bulk read-back
   //-------------------------------------------------------------------------
 
