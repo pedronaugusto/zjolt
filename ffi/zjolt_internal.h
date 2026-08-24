@@ -604,6 +604,187 @@ class ConstStreamIn final : public JPH::StreamIn {
   bool eof_ = false;
 };
 
+//===----------------------------------------------------------------------===//
+// The save/load container
+//
+// Every save/load pair in this library wraps Jolt's payload in the same
+// framing — a magic tag, a container version, this library's config id, the
+// Jolt version, the payload length and a CRC-32, all validated before Jolt
+// reads a byte. Shapes, scenes, whole-system state and per-body state each
+// used to carry their own copy of it, which meant four places to fix a
+// framing bug and nothing that made them agree. They share this one instead.
+//
+// What still differs per site is deliberate and is what `ContainerFormat`
+// carries: the magic tag is a DIFFERENT four bytes for each pair, so a shape
+// blob handed to a scene restore is refused on the tag rather than parsed
+// into something plausible and wrong; and a site may append fixed-size fields
+// of its own after the common ones (the state pair records which parts were
+// saved and which bodies they came from, the per-body pair the body's motion
+// type).
+//
+// What this does NOT claim: it is not a defence against a deliberately
+// crafted payload carrying a matching checksum. Treat a saved blob as
+// something your own cook wrote, not as untrusted input.
+//===----------------------------------------------------------------------===//
+
+/// Little-endian on every host, because the bytes are a file format rather
+/// than a memory image: a blob written on one machine has to load on another.
+inline void WriteLE32(uint8_t *out, uint32_t value) {
+  out[0] = static_cast<uint8_t>(value);
+  out[1] = static_cast<uint8_t>(value >> 8);
+  out[2] = static_cast<uint8_t>(value >> 16);
+  out[3] = static_cast<uint8_t>(value >> 24);
+}
+
+inline uint32_t ReadLE32(const uint8_t *in) {
+  return static_cast<uint32_t>(in[0]) | (static_cast<uint32_t>(in[1]) << 8) |
+         (static_cast<uint32_t>(in[2]) << 16) |
+         (static_cast<uint32_t>(in[3]) << 24);
+}
+
+inline void WriteLE64(uint8_t *out, uint64_t value) {
+  WriteLE32(out, static_cast<uint32_t>(value));
+  WriteLE32(out + 4, static_cast<uint32_t>(value >> 32));
+}
+
+inline uint64_t ReadLE64(const uint8_t *in) {
+  return static_cast<uint64_t>(ReadLE32(in)) |
+         (static_cast<uint64_t>(ReadLE32(in + 4)) << 32);
+}
+
+/// CRC-32, the usual reflected polynomial, computed without a table. A blob is
+/// written once and read once; the table is not worth the cache line.
+inline uint32_t Crc32(const uint8_t *data, size_t size) {
+  uint32_t crc = 0xffffffffu;
+  for (size_t i = 0; i < size; ++i) {
+    crc ^= data[i];
+    for (int bit = 0; bit < 8; ++bit) {
+      const uint32_t mask = -(crc & 1u);
+      crc = (crc >> 1) ^ (0xedb88320u & mask);
+    }
+  }
+  return ~crc;
+}
+
+/// The Jolt a blob was written against. A cache from a different Jolt would
+/// otherwise deserialise into a plausible-looking wrong object.
+inline uint32_t JoltVersionStamp() {
+  return (static_cast<uint32_t>(JPH_VERSION_MAJOR) << 16) |
+         (static_cast<uint32_t>(JPH_VERSION_MINOR) << 8) |
+         static_cast<uint32_t>(JPH_VERSION_PATCH);
+}
+
+/// Bytes of header every container writes before its site-specific fields:
+/// magic at 0, container version at 4, config id at 8, Jolt version at 12,
+/// payload length at 16, payload CRC-32 at 24.
+constexpr size_t kContainerCommonSize = 28;
+
+/// What one save/load pair's container differs in, and the words it fails in.
+///
+/// Declare one of these next to the pair that uses it. The three messages are
+/// the ones that name the thing being loaded; the checks that read the same
+/// either way — version, config id, Jolt version, recorded length — word
+/// themselves.
+struct ContainerFormat {
+  /// This pair's own four bytes. No two pairs may share them: it is the tag,
+  /// not the layout, that refuses one pair's blob to another's loader.
+  uint8_t magic[4];
+  uint32_t version;
+  /// Fixed-size fields this pair appends after the common ones, at
+  /// `kContainerCommonSize`. Zero-filled on write when the pair has none.
+  size_t extra_size;
+
+  /// "too short to be a saved shape"
+  const char *too_short;
+  /// "not a shape saved by zjoltShapeSave"
+  const char *wrong_magic;
+  /// "the shape payload failed its checksum"
+  const char *bad_checksum;
+
+  constexpr size_t HeaderSize() const {
+    return kContainerCommonSize + extra_size;
+  }
+};
+
+/// Writes the header for a payload already sitting at `bytes + HeaderSize()`.
+///
+/// `extra` supplies `extra_size` bytes of the pair's own fields, or is null to
+/// zero them — which is what a pair with nothing to add wants, since the space
+/// is reserved either way.
+inline void WriteContainerHeader(const ContainerFormat &format, uint8_t *bytes,
+                                 size_t payload_size, const uint8_t *extra) {
+  const size_t header_size = format.HeaderSize();
+  std::memcpy(bytes, format.magic, sizeof(format.magic));
+  WriteLE32(bytes + 4, format.version);
+  WriteLE32(bytes + 8, static_cast<uint32_t>(ZJOLT_CONFIG_ID));
+  WriteLE32(bytes + 12, JoltVersionStamp());
+  WriteLE64(bytes + 16, static_cast<uint64_t>(payload_size));
+  WriteLE32(bytes + 24, Crc32(bytes + header_size, payload_size));
+  if (extra == nullptr) {
+    std::memset(bytes + kContainerCommonSize, 0, format.extra_size);
+  } else {
+    std::memcpy(bytes + kContainerCommonSize, extra, format.extra_size);
+  }
+}
+
+/// What a validated container was carrying. Both spans point into the caller's
+/// buffer and live exactly as long as it does.
+struct ContainerContents {
+  const uint8_t *payload;
+  size_t payload_size;
+  /// `extra_size` bytes of the pair's own fields, to read with ReadLE32.
+  const uint8_t *extra;
+};
+
+/// Validates the framing and reports what is inside, without letting Jolt see
+/// a byte of a blob that failed. Anything wrong is ZJOLT_RESULT_BAD_FORMAT
+/// with the detail already recorded for zjoltLastError.
+///
+/// A pair's own fields are handed back rather than judged here: only the pair
+/// knows what its motion type or state mask has to agree with, and it checks
+/// them after this returns — still before Jolt reads anything.
+inline ZJoltResult ReadContainer(const ContainerFormat &format,
+                                 const void *data, size_t size,
+                                 ContainerContents *out) {
+  const uint8_t *bytes = static_cast<const uint8_t *>(data);
+  const size_t header_size = format.HeaderSize();
+
+  if (size < header_size) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT, format.too_short);
+  }
+  if (std::memcmp(bytes, format.magic, sizeof(format.magic)) != 0) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT, format.wrong_magic);
+  }
+  if (ReadLE32(bytes + 4) != format.version) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT,
+                    "saved by a different zjolt container version");
+  }
+  if (ReadLE32(bytes + 8) != static_cast<uint32_t>(ZJOLT_CONFIG_ID)) {
+    return SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "saved by a zjolt built with different layout-affecting settings");
+  }
+  if (ReadLE32(bytes + 12) != JoltVersionStamp()) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT,
+                    "saved against a different Jolt version");
+  }
+
+  const uint64_t payload_size = ReadLE64(bytes + 16);
+  if (payload_size != static_cast<uint64_t>(size - header_size)) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT,
+                    "the recorded payload length does not match the buffer");
+  }
+  if (ReadLE32(bytes + 24) !=
+      Crc32(bytes + header_size, static_cast<size_t>(payload_size))) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT, format.bad_checksum);
+  }
+
+  out->payload = bytes + header_size;
+  out->payload_size = static_cast<size_t>(payload_size);
+  out->extra = bytes + kContainerCommonSize;
+  return ZJOLT_RESULT_OK;
+}
+
 }  // namespace zjolt
 
 /// Opens a result-returning entry point. Returns FROM THE CALLER when the
