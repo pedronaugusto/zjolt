@@ -1431,6 +1431,227 @@ int main(void) {
   }
 
   //-------------------------------------------------------------------------
+  // Ragdolls and skeleton mapping
+  //
+  // A two-joint ragdoll, and a mapper pushing its pose onto a three-joint
+  // render skeleton. The pose types are where the [*c] residue would show:
+  // every one of these takes an array of a flat struct, and a Zig-side
+  // declaration that got a pointee wrong would still pass the ABI guard.
+  //-------------------------------------------------------------------------
+
+  {
+    ZJoltSkeleton *skeleton = NULL;
+    CHECK_OK(zjoltSkeletonCreate(&skeleton));
+
+    uint32_t root_joint = 0xffffffffu;
+    uint32_t hand_joint = 0xffffffffu;
+    CHECK_OK(zjoltSkeletonAddJoint(skeleton, "root", -1, &root_joint));
+    CHECK_OK(zjoltSkeletonAddJoint(skeleton, "hand", (int32_t)root_joint,
+                                   &hand_joint));
+    CHECK(zjoltSkeletonGetJointCount(skeleton) == 2, "two joints");
+    CHECK(zjoltSkeletonGetJointIndex(skeleton, "hand") == (int32_t)hand_joint,
+          "a joint is found by name");
+
+    ZJoltRagdollConstraintDesc to_parent;
+    memset(&to_parent, 0, sizeof(to_parent));
+    to_parent.position1.y = (ZJoltReal)6.5;
+    to_parent.twist_axis1.y = 1.0f;
+    to_parent.plane_axis1.x = 1.0f;
+    to_parent.position2.y = (ZJoltReal)6.5;
+    to_parent.twist_axis2.y = 1.0f;
+    to_parent.plane_axis2.x = 1.0f;
+    to_parent.swing_type = ZJOLT_SWING_TYPE_CONE;
+    to_parent.normal_half_cone_angle = 1.0f;
+    to_parent.plane_half_cone_angle = 1.0f;
+    to_parent.twist_min_angle = -1.0f;
+    to_parent.twist_max_angle = 1.0f;
+
+    ZJoltRagdollPartDesc parts[2];
+    zjoltBodyDescInit(&parts[0].body);
+    parts[0].body.shape = box;
+    parts[0].body.object_layer = LAYER_MOVING;
+    parts[0].body.position.y = (ZJoltReal)6.0;
+    parts[0].to_parent = NULL;
+    zjoltBodyDescInit(&parts[1].body);
+    parts[1].body.shape = box;
+    parts[1].body.object_layer = LAYER_MOVING;
+    parts[1].body.position.y = (ZJoltReal)7.0;
+    parts[1].to_parent = &to_parent;
+
+    ZJoltRagdollSettings *settings = NULL;
+    CHECK_OK(zjoltRagdollSettingsCreate(&settings));
+    CHECK_OK(zjoltRagdollSettingsBuild(settings, skeleton, parts, 2));
+    CHECK(zjoltRagdollSettingsGetSkeleton(settings) == skeleton,
+          "the settings hand back the skeleton they were built with");
+    zjoltRagdollSettingsDisableParentChildCollisions(settings);
+    CHECK_OK(zjoltRagdollSettingsCalculateConstraintPriorities(settings, 5));
+
+    ZJoltRagdoll *ragdoll = NULL;
+    CHECK_OK(zjoltRagdollSettingsCreateRagdoll(settings, system, 3, 0,
+                                               &ragdoll));
+    zjoltRagdollAddToPhysicsSystem(ragdoll, ZJOLT_ACTIVATION_ACTIVATE, true);
+
+    CHECK(zjoltRagdollGetRagdollSettings(ragdoll) == settings,
+          "and the ragdoll hands back the settings that spawned it");
+    CHECK(zjoltRagdollGetConstraintCount(ragdoll) == 1,
+          "one constraint: the root joint has no parent to be attached to");
+
+    /* The priorities reached the constraints the spawn built, which is the
+       only place they are observable from. */
+    ZJoltConstraint *joint = zjoltRagdollGetConstraint(ragdoll, 0);
+    CHECK(joint != NULL, "the ragdoll's constraint is reachable");
+    CHECK(zjoltConstraintGetPriority(joint) == 5, "and carries the priority");
+    CHECK(zjoltRagdollGetConstraint(ragdoll, 1) == NULL,
+          "an index past the end is refused rather than indexed");
+
+    ZJoltBodyId part_ids[2] = {ZJOLT_BODY_ID_INVALID, ZJOLT_BODY_ID_INVALID};
+    uint32_t part_count = 0;
+    CHECK_OK(zjoltRagdollGetBodyIds(ragdoll, part_ids, 2, &part_count));
+    CHECK(part_count == 2, "two parts");
+
+    ZJoltRVec3 root_position = {0, 0, 0};
+    ZJoltQuat root_rotation = {0, 0, 0, 0};
+    CHECK_OK(zjoltRagdollGetRootTransform(ragdoll, &root_position,
+                                          &root_rotation, true));
+    ZJoltRVec3 body_position = {0, 0, 0};
+    zjoltBodyGetPositionAndRotation(system, part_ids[0], &body_position, NULL);
+    CHECK_NEAR(root_position.y, body_position.y, 1e-4f);
+    CHECK_NEAR(root_rotation.w, 1.0f, 1e-4f);
+
+    ZJoltCollisionGroup group;
+    zjoltBodyGetCollisionGroup(system, part_ids[1], &group);
+    CHECK(group.group_id == 3, "the spawn set the group id");
+    CHECK(group.sub_group_id == 1, "and the joint index is the sub-group");
+    zjoltRagdollSetGroupId(ragdoll, 9, true);
+    zjoltBodyGetCollisionGroup(system, part_ids[1], &group);
+    CHECK(group.group_id == 9, "and it moves");
+    CHECK(group.sub_group_id == 1, "without disturbing the sub-group");
+    CHECK(group.filter != NULL, "or the shared filter");
+
+    /* The render skeleton: the ragdoll's, plus a leaf no part drives. */
+    ZJoltSkeleton *render = NULL;
+    CHECK_OK(zjoltSkeletonCreate(&render));
+    uint32_t r_root = 0;
+    uint32_t r_hand = 0;
+    uint32_t r_finger = 0;
+    CHECK_OK(zjoltSkeletonAddJoint(render, "root", -1, &r_root));
+    CHECK_OK(zjoltSkeletonAddJoint(render, "hand", (int32_t)r_root, &r_hand));
+    CHECK_OK(
+        zjoltSkeletonAddJoint(render, "finger", (int32_t)r_hand, &r_finger));
+
+    const ZJoltQuat identity = {0, 0, 0, 1};
+    const ZJoltQuat identities[3] = {{0, 0, 0, 1}, {0, 0, 0, 1}, {0, 0, 0, 1}};
+    const ZJoltVec3 neutral1_joints[2] = {{0, 0, 0}, {0, 1, 0}};
+    const ZJoltVec3 neutral2_joints[3] = {{0, 0, 0}, {0, 1, 0}, {0, 0.5f, 0}};
+
+    ZJoltSkeletonPose *neutral1 = NULL;
+    CHECK_OK(zjoltSkeletonPoseCreate(&neutral1));
+    CHECK_OK(zjoltSkeletonPoseSetSkeleton(neutral1, skeleton));
+    CHECK_OK(zjoltSkeletonPoseSetJoints(neutral1, identities, neutral1_joints,
+                                        2));
+    CHECK_OK(zjoltSkeletonPoseCalculateJointMatrices(neutral1));
+
+    ZJoltSkeletonPose *neutral2 = NULL;
+    CHECK_OK(zjoltSkeletonPoseCreate(&neutral2));
+    CHECK_OK(zjoltSkeletonPoseSetSkeleton(neutral2, render));
+    CHECK_OK(zjoltSkeletonPoseSetJoints(neutral2, identities, neutral2_joints,
+                                        3));
+    CHECK_OK(zjoltSkeletonPoseCalculateJointMatrices(neutral2));
+
+    ZJoltSkeletonMapper *mapper = NULL;
+    CHECK_OK(zjoltSkeletonMapperCreate(&mapper));
+    CHECK(zjoltSkeletonMapperGetRefCount(mapper) == 1, "one reference");
+    CHECK_OK(zjoltSkeletonMapperInitialize(mapper, neutral1, neutral2, NULL,
+                                           NULL));
+    CHECK(zjoltSkeletonMapperGetMappingCount(mapper) == 2,
+          "both ragdoll joints found their namesake");
+    CHECK(zjoltSkeletonMapperGetMappedJointIndex(mapper, 1) ==
+              (int32_t)r_hand,
+          "and the hand maps to the render skeleton's hand");
+    CHECK(zjoltSkeletonMapperGetMappedJointIndex(mapper, 7) == -1,
+          "a joint that does not exist maps to nothing");
+
+    /* A pose taken off the live ragdoll, mapped onto the render skeleton. */
+    ZJoltSkeletonPose *simulated = NULL;
+    CHECK_OK(zjoltSkeletonPoseCreate(&simulated));
+    CHECK_OK(zjoltSkeletonPoseSetSkeleton(simulated, skeleton));
+    CHECK_OK(zjoltRagdollGetPose(ragdoll, simulated, true));
+
+    ZJoltSkeletonPose *drawn = NULL;
+    CHECK_OK(zjoltSkeletonPoseCreate(&drawn));
+    CHECK_OK(zjoltSkeletonPoseSetSkeleton(drawn, render));
+    CHECK_OK(zjoltSkeletonPoseSetJoints(drawn, identities, neutral2_joints, 3));
+    CHECK_OK(zjoltSkeletonMapperMap(mapper, simulated, drawn));
+    CHECK_OK(zjoltSkeletonPoseCalculateJointStates(drawn));
+
+    ZJoltQuat drawn_rotations[3];
+    ZJoltVec3 drawn_translations[3];
+    uint32_t drawn_count = 0;
+    CHECK_OK(zjoltSkeletonPoseGetJoints(drawn, drawn_rotations,
+                                        drawn_translations, 3, &drawn_count));
+    CHECK(drawn_count == 3, "three joints came back");
+    /* The ragdoll's world position rode across in the ROOT OFFSET, not in the
+       root joint: zjoltRagdollGetPose writes joint matrices relative to it. A
+       render pose left at its own offset would draw six metres low. */
+    ZJoltRVec3 drawn_offset = {0, 0, 0};
+    zjoltSkeletonPoseGetRootOffset(drawn, &drawn_offset);
+    CHECK_NEAR(drawn_offset.y, 6.0f, 0.5f);
+    CHECK_NEAR(drawn_translations[0].y, 0.0f, 1e-3f);
+    /* The finger is not driven by the ragdoll, so it kept its own offset from
+       the hand that just moved under it. */
+    CHECK_NEAR(drawn_translations[2].y, 0.5f, 1e-3f);
+    CHECK_NEAR(drawn_translations[2].x, 0.0f, 1e-3f);
+
+    /* Locking pins a mapped joint's translation to the neutral pose. */
+    const bool locked[3] = {false, true, false};
+    CHECK_OK(zjoltSkeletonMapperLockTranslations(mapper, neutral2, locked, 3));
+    CHECK(zjoltSkeletonMapperIsJointTranslationLocked(mapper, 1),
+          "the hand is locked");
+    CHECK(!zjoltSkeletonMapperIsJointTranslationLocked(mapper, 2),
+          "the finger is not");
+
+    const bool lock_root[3] = {true, false, false};
+    CHECK(zjoltSkeletonMapperLockTranslations(mapper, neutral2, lock_root, 3) ==
+              ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a joint with no parent cannot be locked");
+
+    CHECK_OK(zjoltSkeletonMapperMap(mapper, simulated, drawn));
+    CHECK_OK(zjoltSkeletonPoseCalculateJointStates(drawn));
+    CHECK_OK(zjoltSkeletonPoseGetJoints(drawn, drawn_rotations,
+                                        drawn_translations, 3, &drawn_count));
+    CHECK_NEAR(drawn_translations[1].y, 1.0f, 1e-3f);
+
+    /* And back the other way, onto a fresh pose of the ragdoll skeleton. */
+    ZJoltSkeletonPose *back = NULL;
+    CHECK_OK(zjoltSkeletonPoseCreate(&back));
+    CHECK_OK(zjoltSkeletonPoseSetSkeleton(back, skeleton));
+    CHECK_OK(zjoltSkeletonMapperMapReverse(mapper, drawn, back));
+    CHECK_OK(zjoltSkeletonPoseCalculateJointStates(back));
+
+    ZJoltQuat back_rotations[2];
+    ZJoltVec3 back_translations[2];
+    uint32_t back_count = 0;
+    CHECK_OK(zjoltSkeletonPoseGetJoints(back, back_rotations, back_translations,
+                                        2, &back_count));
+    CHECK(back_count == 2, "two joints came back");
+    CHECK_NEAR(back_translations[0].y, drawn_translations[0].y, 1e-3f);
+    CHECK_NEAR(back_rotations[0].w, identity.w, 1e-3f);
+
+    zjoltSkeletonPoseDestroy(back);
+    zjoltSkeletonPoseDestroy(drawn);
+    zjoltSkeletonPoseDestroy(simulated);
+    zjoltSkeletonMapperRelease(mapper);
+    zjoltSkeletonPoseDestroy(neutral2);
+    zjoltSkeletonPoseDestroy(neutral1);
+    zjoltSkeletonRelease(render);
+
+    /* Releasing a still-added ragdoll takes it out of the world first. */
+    zjoltRagdollRelease(ragdoll);
+    zjoltRagdollSettingsRelease(settings);
+    zjoltSkeletonRelease(skeleton);
+  }
+
+  //-------------------------------------------------------------------------
   // Teardown
   //-------------------------------------------------------------------------
 

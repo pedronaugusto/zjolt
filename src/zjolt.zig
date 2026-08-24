@@ -319,6 +319,7 @@ pub const defaultVehicleCollisionTesterDesc = vehicle_mod.defaultCollisionTester
 pub const defaultVehicleMotorcycleDesc = vehicle_mod.defaultMotorcycleDesc;
 pub const Skeleton = ragdoll_mod.Skeleton;
 pub const SkeletonPose = ragdoll_mod.SkeletonPose;
+pub const SkeletonMapper = ragdoll_mod.SkeletonMapper;
 pub const RagdollSettings = ragdoll_mod.RagdollSettings;
 pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
 pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
