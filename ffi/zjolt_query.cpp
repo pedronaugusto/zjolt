@@ -179,6 +179,15 @@ struct ForwardToHost {
 /// during AddHit and is deliberately not cleared afterwards
 /// (CollisionCollector.h:73). Resolving it here is what lets the ABI report a
 /// normal without exporting a pointer that is stale the moment it is useful.
+/// The material at `sub_shape_id` on the shape a collector's context is
+/// currently holding, or NULL when there is no context — which does not
+/// happen when this is driven through NarrowPhaseQuery, but a defensive
+/// default is cheaper than a precondition nobody would remember to check.
+const JPH::PhysicsMaterial *ResolveMaterial(const JPH::TransformedShape *shape,
+                                            const JPH::SubShapeID &sub_shape_id) {
+  return shape != nullptr ? shape->GetMaterial(sub_shape_id) : nullptr;
+}
+
 struct ProjectRayHit {
   JPH::RRayCast ray;
 
@@ -194,13 +203,14 @@ struct ProjectRayHit {
                       ? zjolt::ToC(shape->GetWorldSpaceSurfaceNormal(
                             hit.mSubShapeID2, ray.GetPointOnRay(hit.mFraction)))
                       : ZJoltVec3{0.0f, 0.0f, 0.0f};
+    out->material = zjolt::ToC(ResolveMaterial(shape, hit.mSubShapeID2));
   }
 };
 
 struct ProjectShapeCastHit {
   template <class Collector>
   void operator()(ZJoltShapeCastHit *out, const JPH::ShapeCastResult &hit,
-                  const Collector &) const {
+                  const Collector &collector) const {
     out->body = zjolt::ToC(hit.mBodyID2);
     out->sub_shape_id = zjolt::ToC(hit.mSubShapeID2);
     out->fraction = hit.mFraction;
@@ -209,28 +219,34 @@ struct ProjectShapeCastHit {
     out->penetration_axis = zjolt::ToC(hit.mPenetrationAxis);
     out->penetration_depth = hit.mPenetrationDepth;
     out->is_back_face_hit = hit.mIsBackFaceHit;
+    out->material =
+        zjolt::ToC(ResolveMaterial(collector.GetContext(), hit.mSubShapeID2));
   }
 };
 
 struct ProjectCollideHit {
   template <class Collector>
   void operator()(ZJoltCollideShapeHit *out, const JPH::CollideShapeResult &hit,
-                  const Collector &) const {
+                  const Collector &collector) const {
     out->body = zjolt::ToC(hit.mBodyID2);
     out->sub_shape_id = zjolt::ToC(hit.mSubShapeID2);
     out->contact_point_on_1 = zjolt::ToC(hit.mContactPointOn1);
     out->contact_point_on_2 = zjolt::ToC(hit.mContactPointOn2);
     out->penetration_axis = zjolt::ToC(hit.mPenetrationAxis);
     out->penetration_depth = hit.mPenetrationDepth;
+    out->material =
+        zjolt::ToC(ResolveMaterial(collector.GetContext(), hit.mSubShapeID2));
   }
 };
 
 struct ProjectPointHit {
   template <class Collector>
   void operator()(ZJoltCollidePointHit *out, const JPH::CollidePointResult &hit,
-                  const Collector &) const {
+                  const Collector &collector) const {
     out->body = zjolt::ToC(hit.mBodyID);
     out->sub_shape_id = zjolt::ToC(hit.mSubShapeID2);
+    out->material =
+        zjolt::ToC(ResolveMaterial(collector.GetContext(), hit.mSubShapeID2));
   }
 };
 
@@ -498,6 +514,42 @@ ZJoltResult zjoltCastShapeEach(const ZJoltPhysicsSystem *system,
 // caller's `position`, not resolved to an absolute world coordinate that a
 // float cannot hold precisely.
 //===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltCollideShapeClosest(const ZJoltPhysicsSystem *system,
+                                     const ZJoltShape *shape,
+                                     const ZJoltVec3 *scale,
+                                     const ZJoltRVec3 *position,
+                                     const ZJoltQuat *rotation,
+                                     float max_separation_distance,
+                                     const ZJoltQueryFilters *filters,
+                                     ZJoltCollideShapeHit *out_hit,
+                                     bool *out_hit_any) {
+  ZJOLT_ENTER(out_hit, out_hit_any);
+  if (!zjolt::Present(system, shape, position, rotation, out_hit,
+                      out_hit_any)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::Shape *impl = zjolt::ToJolt(shape);
+  const JPH::Vec3 shape_scale =
+      scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
+
+  JPH::CollideShapeSettings settings;
+  settings.mMaxSeparationDistance = max_separation_distance;
+
+  bool had_hit = false;
+  zjolt::QueryFilters adapters(filters);
+  auto collector = MakeStream<JPH::CollideShapeCollector, ZJoltCollideShapeHit>(
+      ProjectCollideHit{}, KeepBest<ZJoltCollideShapeHit>{out_hit, &had_hit});
+  system->system.GetNarrowPhaseQuery().CollideShape(
+      impl, shape_scale,
+      MakeCollideTransform(impl, shape_scale, *position, *rotation), settings,
+      zjolt::ToJoltR(*position), collector, adapters.broad_phase,
+      adapters.object_layer, adapters.body, adapters.shape);
+
+  *out_hit_any = had_hit;
+  return ZJOLT_RESULT_OK;
+}
 
 ZJoltResult zjoltCollideShapeAll(const ZJoltPhysicsSystem *system,
                                  const ZJoltShape *shape,

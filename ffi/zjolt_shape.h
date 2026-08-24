@@ -360,6 +360,270 @@ ZJOLT_API ZJoltResult zjoltShapeRestore(const void *data, size_t size,
 /// reach the payload itself, not so callers can build one by hand.
 #define ZJOLT_SHAPE_HEADER_SIZE 32
 
+//===----------------------------------------------------------------------===//
+// Introspection Jolt puts on every leaf shape
+//
+// These read a shape's geometry directly — the same questions a query result
+// is already built from internally. GetSurfaceNormal is what a hit's contact
+// normal would be resolved from if this ABI did not already resolve it into
+// every hit; GetSupportingFace is what the narrow phase reads to build a
+// contact manifold. Exposed here so a host can ask them directly, without a
+// query.
+//
+// Forward-declared rather than pulled in with an include: zjolt_transformed.h
+// is the whole type this handle names, and it depends on zjolt_query.h for
+// the hit and filter structs its own queries share with zjolt_query.h's — a
+// dependency this file has no reason to take on just to spell one pointer
+// type. The two headers declare the identical tag independently, which is
+// exactly the standard C idiom for an opaque handle two unrelated headers
+// both need to name.
+//===----------------------------------------------------------------------===//
+
+typedef struct ZJoltTransformedShape ZJoltTransformedShape;
+
+/// Sub-shape id bits `shape` needs to address any leaf beneath it. 0 for a
+/// NULL shape.
+ZJOLT_API uint32_t zjoltShapeGetSubShapeIDBits(const ZJoltShape *shape);
+
+/// The FACE normal at `local_surface_position` on the leaf named by
+/// `sub_shape_id`, both relative to `shape`'s own center of mass.
+///
+/// This is a face normal, not a vertex or edge one. For a hit's contact
+/// normal use `-penetration_axis` from the hit itself (already the case for
+/// every hit this ABI reports), which is defined at vertices and edges too;
+/// reach for this only when there is no hit to ask, e.g. after
+/// zjoltShapeGetSubShapeTransformedShape.
+///
+/// `sub_shape_id` follows zjoltShapeGetMaterial's rule: pass
+/// ZJOLT_SUB_SHAPE_ID_EMPTY for a shape with no leaves, because Jolt asserts
+/// the id is empty there rather than tolerating an arbitrary value. Zeroed
+/// for a NULL `shape` or `local_surface_position`.
+ZJOLT_API void zjoltShapeGetSurfaceNormal(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id,
+    const ZJoltVec3 *local_surface_position, ZJoltVec3 *out_normal);
+
+/// Vertices zjoltShapeGetSupportingFace can report in one call. Jolt's own
+/// `Shape::SupportingFace` capacity; `out_vertices` must hold this many.
+#define ZJOLT_SHAPE_MAX_SUPPORTING_FACE_VERTICES 32
+
+/// The face of the leaf named by `sub_shape_id` that faces `direction` the
+/// most, in the space `position`/`rotation` place `shape`'s center of mass
+/// into (scaled by `scale` about that center first). Only convex shapes and
+/// triangles have one: anything else — a sphere, an empty shape — reports
+/// `*out_count = 0` rather than an error, which is Jolt's own answer and not
+/// a failure of this call.
+///
+/// `direction` is in `shape`'s own local space. `scale` may be NULL for
+/// (1, 1, 1); `position` and `rotation` are required, because unlike a
+/// query's placement there is no default world position for a bare shape to
+/// fall back to.
+ZJOLT_API ZJoltResult zjoltShapeGetSupportingFace(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id,
+    const ZJoltVec3 *direction, const ZJoltVec3 *scale,
+    const ZJoltVec3 *position, const ZJoltQuat *rotation,
+    ZJoltVec3 *out_vertices, uint32_t *out_count);
+
+/// The direct child at `sub_shape_id`, and its transform, as a fresh
+/// zjolt_transformed.h handle — release it with zjoltTransformedShapeDestroy.
+/// For a shape with no children this is `shape` itself, wrapped at the given
+/// placement.
+///
+/// `position` and `rotation` may be NULL for the child's transform relative
+/// to `shape`'s own center of mass with no additional rotation — the usual
+/// choice when drilling into a shape that is not itself placed in the world
+/// yet. `scale` may be NULL for (1, 1, 1). `out_remainder` receives what is
+/// left of `sub_shape_id` after peeling off the path to this child, for
+/// descending further into what came back.
+///
+/// The returned handle's body id is always ZJOLT_BODY_ID_INVALID: this
+/// relates two shapes, and there is no body on either side of it.
+ZJOLT_API ZJoltResult zjoltShapeGetSubShapeTransformedShape(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id,
+    const ZJoltVec3 *position, const ZJoltQuat *rotation,
+    const ZJoltVec3 *scale, ZJoltTransformedShape **out,
+    ZJoltSubShapeId *out_remainder);
+
+/// A copy of `shape`, scaled by `scale` IN THE SPACE IT WAS CREATED — not the
+/// space of its leaves, which is what every other `scale` parameter in this
+/// header means. Not every shape supports every scale; see
+/// zjoltShapeIsValidScale. Jolt matches the request as closely as it can
+/// rather than refusing an unsupported one, so check the shape this produces
+/// if the distinction matters.
+ZJOLT_API ZJoltResult zjoltShapeScaleShape(const ZJoltShape *shape,
+                                           const ZJoltVec3 *scale,
+                                           ZJoltShape **out);
+
+/// Whether `scale` can be used directly for `shape` — wrapped in
+/// zjoltShapeCreateScaled, for instance — without Jolt substituting something
+/// else for it. A sphere or a capsule need a uniform scale; a compound
+/// refuses one that would shear a child. False for a NULL `shape` or `scale`.
+ZJOLT_API bool zjoltShapeIsValidScale(const ZJoltShape *shape,
+                                      const ZJoltVec3 *scale);
+
+/// The scale nearest `scale` that zjoltShapeIsValidScale would accept for
+/// `shape` — discarding, for instance, the components that would make a
+/// sphere's scale non-uniform. Compare the result against `scale` to detect a
+/// caller mistake worth a warning. Echoes `scale` back unchanged for a NULL
+/// `shape`; zeroed for a NULL `scale`.
+ZJOLT_API void zjoltShapeMakeScaleValid(const ZJoltShape *shape,
+                                        const ZJoltVec3 *scale,
+                                        ZJoltVec3 *out_scale);
+
+//===----------------------------------------------------------------------===//
+// Triangle read-back
+//
+// The mesh-cooking path in reverse: read the triangles a shape is built from
+// — or approximates itself with, for a convex primitive — back out, for a
+// renderer or a navmesh baker that wants geometry rather than a collision
+// answer.
+//
+// This is NOT the count-then-fill protocol used everywhere else in this ABI:
+// Jolt does not know the total triangle count up front, only how many it
+// found in the batch just walked. Call zjoltShapeGetTrianglesStart once, then
+// zjoltShapeGetTrianglesNext repeatedly until it reports 0 — which means "no
+// more triangles", not "call again with a bigger buffer".
+//===----------------------------------------------------------------------===//
+
+/// Opaque scratch space for one triangle walk. Must not be touched, moved, or
+/// reused for a second walk until the first one reports 0 remaining. Sized
+/// and aligned to match Jolt's own `Shape::GetTrianglesContext` exactly,
+/// which zjolt_abi.cpp checks at build time.
+#if defined(__cplusplus)
+#define ZJOLT_ALIGNAS_16 alignas(16)
+#else
+#define ZJOLT_ALIGNAS_16 _Alignas(16)
+#endif
+typedef struct ZJoltShapeTrianglesContext {
+  ZJOLT_ALIGNAS_16 uint8_t data[4288];
+} ZJoltShapeTrianglesContext;
+#undef ZJOLT_ALIGNAS_16
+
+/// Fewest triangles zjoltShapeGetTrianglesNext accepts a request for. Jolt
+/// asserts on fewer rather than returning a short batch, so this ABI refuses
+/// instead of reaching that assert with asserts compiled out.
+#define ZJOLT_SHAPE_MIN_TRIANGLES_REQUESTED 32
+
+/// Starts a triangle walk over `shape`, transformed by
+/// `position`/`rotation`/`scale` (`scale` NULL for (1, 1, 1)), restricted to
+/// `box` in that same space. Only initialises `context`; the walk itself is
+/// zjoltShapeGetTrianglesNext.
+ZJOLT_API ZJoltResult zjoltShapeGetTrianglesStart(
+    const ZJoltShape *shape, ZJoltShapeTrianglesContext *context,
+    const ZJoltAABox *box, const ZJoltVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *scale);
+
+/// Continues a walk zjoltShapeGetTrianglesStart began.
+///
+/// `out_vertices` must hold `3 * max_triangles` entries, three consecutive
+/// vertices per triangle. `out_materials`, when not NULL, must hold
+/// `max_triangles` entries — pointers borrowed from `shape`, valid as long as
+/// it is. `*out_count` is how many triangles were actually written, which may
+/// be less than `max_triangles` with more still to come, or exactly 0 when
+/// the walk is over.
+///
+/// `max_triangles` below ZJOLT_SHAPE_MIN_TRIANGLES_REQUESTED is
+/// ZJOLT_RESULT_INVALID_ARGUMENT: Jolt asserts on a smaller request instead
+/// of honouring it, which a build with asserts off would read straight past.
+/// The returned triangles may extend slightly outside `box` — Jolt performs
+/// only coarse culling here.
+ZJOLT_API ZJoltResult zjoltShapeGetTrianglesNext(
+    const ZJoltShape *shape, ZJoltShapeTrianglesContext *context,
+    uint32_t max_triangles, ZJoltVec3 *out_vertices,
+    const ZJoltPhysicsMaterial **out_materials, uint32_t *out_count);
+
+/// The materials `shape` was built with, in the order zjoltShapeGetMaterial
+/// and the triangle read-back above index them. Only a mesh or a height field
+/// has one; ZJOLT_RESULT_INVALID_ARGUMENT for any other shape kind, including
+/// a compound of meshes — ask each leaf individually instead. Two-call
+/// protocol; pointers borrowed from `shape`, valid as long as it is.
+ZJOLT_API ZJoltResult zjoltShapeGetMaterialList(
+    const ZJoltShape *shape, const ZJoltPhysicsMaterial **out_materials,
+    uint32_t capacity, uint32_t *out_count);
+
+//===----------------------------------------------------------------------===//
+// Mesh specifics
+//===----------------------------------------------------------------------===//
+
+/// The index into zjoltShapeGetMaterialList that `sub_shape_id` names, for a
+/// mesh built with `triangle_materials`. 0 for any other shape kind, which is
+/// indistinguishable from a real index 0 — use zjoltShapeGetSubType first if
+/// the difference matters.
+ZJOLT_API uint32_t zjoltShapeMeshGetMaterialIndex(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id);
+
+/// The per-triangle user data a mesh was NOT given a way to set at
+/// construction — Jolt still tracks one, defaulting to the triangle's own
+/// index in `indices` before Jolt's internal reordering — and reports through
+/// this rather than zjoltShapeGetSubType-gated silence. 0 for any other shape
+/// kind.
+ZJOLT_API uint32_t zjoltShapeMeshGetTriangleUserData(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id);
+
+//===----------------------------------------------------------------------===//
+// Height field specifics
+//
+// A height field's grid is addressed by (x, y) sample coordinates, not by
+// sub-shape id, for everything below except zjoltShapeGetSubShapeCoordinates
+// — which is the bridge from a hit's sub-shape id back to (x, y).
+//===----------------------------------------------------------------------===//
+
+/// Samples per side, after Jolt rounds the construction-time count up to a
+/// multiple of the block size. 0 for any other shape kind.
+ZJOLT_API uint32_t zjoltShapeHeightFieldGetSampleCount(const ZJoltShape *shape);
+
+/// 0 for any other shape kind, which is never a real block size — Jolt's
+/// smallest is 2.
+ZJOLT_API uint32_t zjoltShapeHeightFieldGetBlockSize(const ZJoltShape *shape);
+
+/// The range of height values this shape can encode, i.e. the domain
+/// `SetHeights` would clamp into. Both 0 for any other shape kind.
+ZJOLT_API float zjoltShapeHeightFieldGetMinHeightValue(const ZJoltShape *shape);
+ZJOLT_API float zjoltShapeHeightFieldGetMaxHeightValue(const ZJoltShape *shape);
+
+/// The local-space position of sample (x, y), including its height. Zeroed
+/// for any other shape kind, or for (x, y) outside [0, sample count).
+ZJOLT_API void zjoltShapeHeightFieldGetPosition(const ZJoltShape *shape,
+                                                uint32_t x, uint32_t y,
+                                                ZJoltVec3 *out_position);
+
+/// Whether sample (x, y) is a hole — a sample originally given
+/// ZJOLT_HEIGHT_FIELD_NO_COLLISION. True (there is nothing to collide with)
+/// for any other shape kind or for (x, y) outside [0, sample count), which is
+/// the safe reading of "nothing is known to be here".
+ZJOLT_API bool zjoltShapeHeightFieldIsNoCollision(const ZJoltShape *shape,
+                                                  uint32_t x, uint32_t y);
+
+/// Drops `local_position` straight down (well, along -Y in the height
+/// field's own local space) onto the surface. `*out_found` is false when
+/// `local_position` is outside the field's footprint or over a hole, in
+/// which case the other two outputs are left untouched.
+ZJOLT_API ZJoltResult zjoltShapeHeightFieldProjectOntoSurface(
+    const ZJoltShape *shape, const ZJoltVec3 *local_position,
+    ZJoltVec3 *out_surface_position, ZJoltSubShapeId *out_sub_shape_id,
+    bool *out_found);
+
+/// The grid cell and which of its two triangles `sub_shape_id` names — the
+/// inverse of the encoding zjoltShapeHeightFieldProjectOntoSurface and a hit's
+/// sub-shape id both use. Zeroed for any other shape kind.
+ZJOLT_API ZJoltResult zjoltShapeHeightFieldGetSubShapeCoordinates(
+    const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id, uint32_t *out_x,
+    uint32_t *out_y, uint32_t *out_triangle_index);
+
+/// Reads back a `size_x` by `size_y` block of height samples starting at
+/// (x, y), row by row into `out_heights` — `out_heights[row * stride + col]`
+/// for `row` in [0, size_y) and `col` in [0, size_x). A hole reads back as
+/// ZJOLT_HEIGHT_FIELD_NO_COLLISION.
+///
+/// `x` and `y` must each be a multiple of zjoltShapeHeightFieldGetBlockSize,
+/// and the requested block must fit within the sample grid — Jolt asserts on
+/// both rather than clamping, which this ABI turns into
+/// ZJOLT_RESULT_INVALID_ARGUMENT instead of reaching the assert with asserts
+/// compiled out. `stride` is in samples, not bytes, and must be at least
+/// `size_x`; `out_heights` must hold `size_y * stride` entries.
+ZJOLT_API ZJoltResult zjoltShapeHeightFieldGetHeights(
+    const ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
+    uint32_t size_y, float *out_heights, uint32_t stride);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
