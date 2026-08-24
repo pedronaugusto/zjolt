@@ -52,6 +52,7 @@ const vehicle_mod = @import("vehicle.zig");
 const debug_mod = @import("debug.zig");
 const ragdoll_mod = @import("ragdoll.zig");
 const hair_mod = @import("hair.zig");
+const constraint_mod = @import("constraint.zig");
 
 //=============================================================================
 // Public surface
@@ -250,6 +251,34 @@ pub const HairSkinWeight = hair_mod.SkinWeight;
 pub const HairMaterial = hair_mod.Material;
 pub const defaultHairMaterial = hair_mod.defaultMaterial;
 
+pub const Constraint = constraint_mod.Constraint;
+pub const ConstraintSubType = constraint_mod.SubType;
+pub const ConstraintSpace = constraint_mod.Space;
+pub const MotorState = constraint_mod.MotorState;
+pub const MotorSettings = constraint_mod.MotorSettings;
+pub const SpringMode = constraint_mod.SpringMode;
+pub const SpringSettings = constraint_mod.SpringSettings;
+pub const SwingType = constraint_mod.SwingType;
+pub const SixDofAxis = constraint_mod.SixDofAxis;
+pub const PathRotationConstraintType = constraint_mod.PathRotationConstraintType;
+pub const world_body = constraint_mod.world_body;
+pub const constraintCount = constraint_mod.count;
+pub const FixedConstraintDesc = constraint_mod.FixedDesc;
+pub const PointConstraintDesc = constraint_mod.PointDesc;
+pub const HingeConstraintDesc = constraint_mod.HingeDesc;
+pub const SliderConstraintDesc = constraint_mod.SliderDesc;
+pub const DistanceConstraintDesc = constraint_mod.DistanceDesc;
+pub const ConeConstraintDesc = constraint_mod.ConeDesc;
+pub const SwingTwistConstraintDesc = constraint_mod.SwingTwistDesc;
+pub const SixDofConstraintDesc = constraint_mod.SixDofDesc;
+pub const GearConstraintDesc = constraint_mod.GearDesc;
+pub const RackAndPinionConstraintDesc = constraint_mod.RackAndPinionDesc;
+pub const PulleyConstraintDesc = constraint_mod.PulleyDesc;
+pub const PathConstraintDesc = constraint_mod.PathDesc;
+pub const ConstraintPath = constraint_mod.Path;
+pub const PathPoint = constraint_mod.PathPoint;
+pub const PathFrame = constraint_mod.PathFrame;
+
 /// Build options the C library was actually compiled with, so a consumer can
 /// branch on them instead of assuming.
 pub const options = @import("zjolt_options");
@@ -382,6 +411,7 @@ test {
     _ = softbody_mod;
     _ = debug_mod;
     _ = hair_mod;
+    _ = constraint_mod;
     _ = @import("integration_test.zig");
 
     // Mechanical, and it has to be: it calls every entry point in the ABI
