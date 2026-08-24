@@ -1240,3 +1240,85 @@ pub extern fn zjoltDistanceConstraintGetDistance(constraint: *const Constraint, 
 pub extern fn zjoltDistanceConstraintSetLimitsSpringSettings(constraint: *Constraint, spring: *const SpringSettings) Result;
 pub extern fn zjoltDistanceConstraintGetLimitsSpringSettings(constraint: *const Constraint, out: *SpringSettings) Result;
 pub extern fn zjoltDistanceConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltConeConstraintSetHalfConeAngle(constraint: *Constraint, half_cone_angle: f32) Result;
+pub extern fn zjoltConeConstraintGetCosHalfConeAngle(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltConeConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltConeConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltSwingTwistConstraintSetNormalHalfConeAngle(constraint: *Constraint, angle: f32) Result;
+pub extern fn zjoltSwingTwistConstraintGetNormalHalfConeAngle(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSwingTwistConstraintSetPlaneHalfConeAngle(constraint: *Constraint, angle: f32) Result;
+pub extern fn zjoltSwingTwistConstraintGetPlaneHalfConeAngle(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSwingTwistConstraintSetTwistLimits(constraint: *Constraint, min: f32, max: f32) Result;
+pub extern fn zjoltSwingTwistConstraintGetTwistLimits(constraint: *const Constraint, out_min: ?*f32, out_max: ?*f32) Result;
+pub extern fn zjoltSwingTwistConstraintSetSwingMotorSettings(constraint: *Constraint, motor: *const MotorSettings) Result;
+pub extern fn zjoltSwingTwistConstraintGetSwingMotorSettings(constraint: *const Constraint, out: *MotorSettings) Result;
+pub extern fn zjoltSwingTwistConstraintSetSwingMotorState(constraint: *Constraint, state: MotorState) Result;
+pub extern fn zjoltSwingTwistConstraintGetSwingMotorState(constraint: *const Constraint, out: *MotorState) Result;
+pub extern fn zjoltSwingTwistConstraintSetTwistMotorSettings(constraint: *Constraint, motor: *const MotorSettings) Result;
+pub extern fn zjoltSwingTwistConstraintGetTwistMotorSettings(constraint: *const Constraint, out: *MotorSettings) Result;
+pub extern fn zjoltSwingTwistConstraintSetTwistMotorState(constraint: *Constraint, state: MotorState) Result;
+pub extern fn zjoltSwingTwistConstraintGetTwistMotorState(constraint: *const Constraint, out: *MotorState) Result;
+pub extern fn zjoltSwingTwistConstraintSetMaxFrictionTorque(constraint: *Constraint, torque: f32) Result;
+pub extern fn zjoltSwingTwistConstraintGetMaxFrictionTorque(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltSwingTwistConstraintSetTargetAngularVelocity(constraint: *Constraint, angular_velocity: *const Vec3) Result;
+pub extern fn zjoltSwingTwistConstraintGetTargetAngularVelocity(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSwingTwistConstraintSetTargetOrientation(constraint: *Constraint, orientation: *const Quat) Result;
+pub extern fn zjoltSwingTwistConstraintGetTargetOrientation(constraint: *const Constraint, out: *Quat) Result;
+pub extern fn zjoltSwingTwistConstraintGetRotationInConstraintSpace(constraint: *const Constraint, out: *Quat) Result;
+pub extern fn zjoltSwingTwistConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSwingTwistConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltSixDofConstraintSetTranslationLimits(constraint: *Constraint, min: *const Vec3, max: *const Vec3) Result;
+pub extern fn zjoltSixDofConstraintSetRotationLimits(constraint: *Constraint, min: *const Vec3, max: *const Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetLimits(constraint: *const Constraint, axis: SixDofAxis, out_min: ?*f32, out_max: ?*f32) Result;
+pub extern fn zjoltSixDofConstraintIsFixedAxis(constraint: *const Constraint, axis: SixDofAxis, out: *bool) Result;
+pub extern fn zjoltSixDofConstraintIsFreeAxis(constraint: *const Constraint, axis: SixDofAxis, out: *bool) Result;
+pub extern fn zjoltSixDofConstraintSetMaxFriction(constraint: *Constraint, axis: SixDofAxis, friction: f32) Result;
+pub extern fn zjoltSixDofConstraintGetMaxFriction(constraint: *const Constraint, axis: SixDofAxis, out: *f32) Result;
+pub extern fn zjoltSixDofConstraintSetMotorSettings(constraint: *Constraint, axis: SixDofAxis, motor: *const MotorSettings) Result;
+pub extern fn zjoltSixDofConstraintGetMotorSettings(constraint: *const Constraint, axis: SixDofAxis, out: *MotorSettings) Result;
+pub extern fn zjoltSixDofConstraintSetMotorState(constraint: *Constraint, axis: SixDofAxis, state: MotorState) Result;
+pub extern fn zjoltSixDofConstraintGetMotorState(constraint: *const Constraint, axis: SixDofAxis, out: *MotorState) Result;
+pub extern fn zjoltSixDofConstraintSetLimitsSpringSettings(constraint: *Constraint, axis: SixDofAxis, spring: *const SpringSettings) Result;
+pub extern fn zjoltSixDofConstraintGetLimitsSpringSettings(constraint: *const Constraint, axis: SixDofAxis, out: *SpringSettings) Result;
+pub extern fn zjoltSixDofConstraintSetTargetVelocity(constraint: *Constraint, velocity: *const Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetTargetVelocity(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSixDofConstraintSetTargetAngularVelocity(constraint: *Constraint, angular_velocity: *const Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetTargetAngularVelocity(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSixDofConstraintSetTargetPosition(constraint: *Constraint, position: *const Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetTargetPosition(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSixDofConstraintSetTargetOrientation(constraint: *Constraint, orientation: *const Quat) Result;
+pub extern fn zjoltSixDofConstraintGetTargetOrientation(constraint: *const Constraint, out: *Quat) Result;
+pub extern fn zjoltSixDofConstraintGetRotationInConstraintSpace(constraint: *const Constraint, out: *Quat) Result;
+pub extern fn zjoltSixDofConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetTotalLambdaMotorTranslation(constraint: *const Constraint, out: *Vec3) Result;
+pub extern fn zjoltSixDofConstraintGetTotalLambdaMotorRotation(constraint: *const Constraint, out: *Vec3) Result;
+
+pub extern fn zjoltGearConstraintSetConstraints(constraint: *Constraint, gear1: ?*Constraint, gear2: ?*Constraint) Result;
+pub extern fn zjoltGearConstraintGetTotalLambda(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltRackAndPinionConstraintSetConstraints(constraint: *Constraint, pinion: ?*Constraint, rack: ?*Constraint) Result;
+pub extern fn zjoltRackAndPinionConstraintGetTotalLambda(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltPulleyConstraintSetLength(constraint: *Constraint, min: f32, max: f32) Result;
+pub extern fn zjoltPulleyConstraintGetLength(constraint: *const Constraint, out_min: ?*f32, out_max: ?*f32) Result;
+pub extern fn zjoltPulleyConstraintGetCurrentLength(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltPulleyConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *f32) Result;
+
+pub extern fn zjoltPathConstraintSetPath(constraint: *Constraint, path: ?*const PathConstraintPath, fraction: f32) Result;
+pub extern fn zjoltPathConstraintGetPath(constraint: *const Constraint) ?*const PathConstraintPath;
+pub extern fn zjoltPathConstraintGetPathFraction(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltPathConstraintSetMotorSettings(constraint: *Constraint, motor: *const MotorSettings) Result;
+pub extern fn zjoltPathConstraintGetMotorSettings(constraint: *const Constraint, out: *MotorSettings) Result;
+pub extern fn zjoltPathConstraintSetMotorState(constraint: *Constraint, state: MotorState) Result;
+pub extern fn zjoltPathConstraintGetMotorState(constraint: *const Constraint, out: *MotorState) Result;
+pub extern fn zjoltPathConstraintSetTargetVelocity(constraint: *Constraint, velocity: f32) Result;
+pub extern fn zjoltPathConstraintGetTargetVelocity(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltPathConstraintSetTargetPathFraction(constraint: *Constraint, fraction: f32) Result;
+pub extern fn zjoltPathConstraintGetTargetPathFraction(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltPathConstraintSetMaxFrictionForce(constraint: *Constraint, force: f32) Result;
+pub extern fn zjoltPathConstraintGetMaxFrictionForce(constraint: *const Constraint, out: *f32) Result;
+pub extern fn zjoltPathConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;

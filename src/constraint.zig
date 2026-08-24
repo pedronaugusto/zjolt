@@ -720,6 +720,474 @@ pub const Constraint = struct {
         try err.check(c.zjoltDistanceConstraintGetTotalLambdaPosition(self.handle, &out));
         return out;
     }
+
+    //-------------------------------------------------------------------------
+    // Cone
+    //-------------------------------------------------------------------------
+
+    /// Radians from the principal axis to the cone's edge, in [0, pi].
+    pub fn coneSetHalfConeAngle(self: Constraint, angle: f32) err.Error!void {
+        try err.check(c.zjoltConeConstraintSetHalfConeAngle(self.handle, angle));
+    }
+
+    /// The COSINE of the half angle, which is what the constraint keeps. Jolt
+    /// has no getter for the angle itself.
+    pub fn coneCosHalfConeAngle(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltConeConstraintGetCosHalfConeAngle(self.handle, &out));
+        return out;
+    }
+
+    pub fn coneTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltConeConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn coneTotalLambdaRotation(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltConeConstraintGetTotalLambdaRotation(self.handle, &out));
+        return out;
+    }
+
+    //-------------------------------------------------------------------------
+    // Swing-twist
+    //-------------------------------------------------------------------------
+
+    pub fn swingTwistSetNormalHalfConeAngle(self: Constraint, angle: f32) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetNormalHalfConeAngle(self.handle, angle));
+    }
+
+    pub fn swingTwistNormalHalfConeAngle(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetNormalHalfConeAngle(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistSetPlaneHalfConeAngle(self: Constraint, angle: f32) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetPlaneHalfConeAngle(self.handle, angle));
+    }
+
+    pub fn swingTwistPlaneHalfConeAngle(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetPlaneHalfConeAngle(self.handle, &out));
+        return out;
+    }
+
+    /// Both twist limits at once, in radians, both in [-pi, pi] and ordered.
+    ///
+    /// One call rather than two setters on purpose: Jolt recomputes the
+    /// constraint part inside each individual setter and asserts on the
+    /// ordering, so moving a range through a single setter can pass through an
+    /// invalid intermediate state.
+    pub fn swingTwistSetTwistLimits(self: Constraint, min: f32, max: f32) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTwistLimits(self.handle, min, max));
+    }
+
+    pub fn swingTwistTwistLimits(self: Constraint) err.Error!struct { min: f32, max: f32 } {
+        var min: f32 = 0;
+        var max: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetTwistLimits(self.handle, &min, &max));
+        return .{ .min = min, .max = max };
+    }
+
+    pub fn swingTwistSetSwingMotorSettings(self: Constraint, motor: MotorSettings) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetSwingMotorSettings(self.handle, &motor));
+    }
+
+    pub fn swingTwistSwingMotorSettings(self: Constraint) err.Error!MotorSettings {
+        var out: MotorSettings = .{};
+        try err.check(c.zjoltSwingTwistConstraintGetSwingMotorSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistSetSwingMotorState(self: Constraint, state: MotorState) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetSwingMotorState(self.handle, state));
+    }
+
+    pub fn swingTwistSwingMotorState(self: Constraint) err.Error!MotorState {
+        var out: MotorState = .off;
+        try err.check(c.zjoltSwingTwistConstraintGetSwingMotorState(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistSetTwistMotorSettings(self: Constraint, motor: MotorSettings) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTwistMotorSettings(self.handle, &motor));
+    }
+
+    pub fn swingTwistTwistMotorSettings(self: Constraint) err.Error!MotorSettings {
+        var out: MotorSettings = .{};
+        try err.check(c.zjoltSwingTwistConstraintGetTwistMotorSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistSetTwistMotorState(self: Constraint, state: MotorState) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTwistMotorState(self.handle, state));
+    }
+
+    pub fn swingTwistTwistMotorState(self: Constraint) err.Error!MotorState {
+        var out: MotorState = .off;
+        try err.check(c.zjoltSwingTwistConstraintGetTwistMotorState(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistSetMaxFrictionTorque(self: Constraint, torque: f32) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetMaxFrictionTorque(self.handle, torque));
+    }
+
+    pub fn swingTwistMaxFrictionTorque(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSwingTwistConstraintGetMaxFrictionTorque(self.handle, &out));
+        return out;
+    }
+
+    /// Radians per second, in CONSTRAINT space: x is twist, y and z are swing.
+    pub fn swingTwistSetTargetAngularVelocity(self: Constraint, velocity: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTargetAngularVelocity(self.handle, &velocity));
+    }
+
+    pub fn swingTwistTargetAngularVelocity(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetTargetAngularVelocity(self.handle, &out));
+        return out;
+    }
+
+    /// Clamped to the current swing and twist limits, so reading it back may
+    /// differ from what was written.
+    pub fn swingTwistSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
+        try err.check(c.zjoltSwingTwistConstraintSetTargetOrientation(self.handle, &orientation));
+    }
+
+    pub fn swingTwistTargetOrientation(self: Constraint) err.Error!math.Quat {
+        var out: math.Quat = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetTargetOrientation(self.handle, &out));
+        return out;
+    }
+
+    /// Where the joint actually is, as a rotation in constraint space.
+    pub fn swingTwistRotationInConstraintSpace(self: Constraint) err.Error!math.Quat {
+        var out: math.Quat = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetRotationInConstraintSpace(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn swingTwistTotalLambdaMotor(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaMotor(self.handle, &out));
+        return out;
+    }
+
+    //-------------------------------------------------------------------------
+    // Six degrees of freedom
+    //
+    // Every axis argument is checked against `SixDofAxis`: Jolt indexes plain
+    // arrays of six with it and has no bounds check of its own.
+    //-------------------------------------------------------------------------
+
+    pub fn sixDofSetTranslationLimits(self: Constraint, min: math.Vec3, max: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetTranslationLimits(self.handle, &min, &max));
+    }
+
+    /// Radians. Clamped to [-pi, pi], and forced symmetric for a cone swing,
+    /// so what comes back out may not be what went in.
+    pub fn sixDofSetRotationLimits(self: Constraint, min: math.Vec3, max: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetRotationLimits(self.handle, &min, &max));
+    }
+
+    pub fn sixDofLimits(self: Constraint, axis: SixDofAxis) err.Error!struct { min: f32, max: f32 } {
+        var min: f32 = 0;
+        var max: f32 = 0;
+        try err.check(c.zjoltSixDofConstraintGetLimits(self.handle, axis, &min, &max));
+        return .{ .min = min, .max = max };
+    }
+
+    pub fn sixDofIsFixedAxis(self: Constraint, axis: SixDofAxis) err.Error!bool {
+        var out: bool = false;
+        try err.check(c.zjoltSixDofConstraintIsFixedAxis(self.handle, axis, &out));
+        return out;
+    }
+
+    pub fn sixDofIsFreeAxis(self: Constraint, axis: SixDofAxis) err.Error!bool {
+        var out: bool = false;
+        try err.check(c.zjoltSixDofConstraintIsFreeAxis(self.handle, axis, &out));
+        return out;
+    }
+
+    pub fn sixDofSetMaxFriction(self: Constraint, axis: SixDofAxis, friction: f32) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetMaxFriction(self.handle, axis, friction));
+    }
+
+    pub fn sixDofMaxFriction(self: Constraint, axis: SixDofAxis) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltSixDofConstraintGetMaxFriction(self.handle, axis, &out));
+        return out;
+    }
+
+    pub fn sixDofSetMotorSettings(self: Constraint, axis: SixDofAxis, motor: MotorSettings) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetMotorSettings(self.handle, axis, &motor));
+    }
+
+    pub fn sixDofMotorSettings(self: Constraint, axis: SixDofAxis) err.Error!MotorSettings {
+        var out: MotorSettings = .{};
+        try err.check(c.zjoltSixDofConstraintGetMotorSettings(self.handle, axis, &out));
+        return out;
+    }
+
+    pub fn sixDofSetMotorState(self: Constraint, axis: SixDofAxis, state: MotorState) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetMotorState(self.handle, axis, state));
+    }
+
+    pub fn sixDofMotorState(self: Constraint, axis: SixDofAxis) err.Error!MotorState {
+        var out: MotorState = .off;
+        try err.check(c.zjoltSixDofConstraintGetMotorState(self.handle, axis, &out));
+        return out;
+    }
+
+    /// Translation axes only — Jolt has no soft rotation limits and asserts on
+    /// a rotation axis here.
+    pub fn sixDofSetLimitsSpring(self: Constraint, axis: SixDofAxis, spring: SpringSettings) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetLimitsSpringSettings(self.handle, axis, &spring));
+    }
+
+    pub fn sixDofLimitsSpring(self: Constraint, axis: SixDofAxis) err.Error!SpringSettings {
+        var out: SpringSettings = .{};
+        try err.check(c.zjoltSixDofConstraintGetLimitsSpringSettings(self.handle, axis, &out));
+        return out;
+    }
+
+    pub fn sixDofSetTargetVelocity(self: Constraint, velocity: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetTargetVelocity(self.handle, &velocity));
+    }
+
+    pub fn sixDofTargetVelocity(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTargetVelocity(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofSetTargetAngularVelocity(self: Constraint, velocity: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetTargetAngularVelocity(self.handle, &velocity));
+    }
+
+    pub fn sixDofTargetAngularVelocity(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTargetAngularVelocity(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofSetTargetPosition(self: Constraint, position: math.Vec3) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetTargetPosition(self.handle, &position));
+    }
+
+    pub fn sixDofTargetPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTargetPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
+        try err.check(c.zjoltSixDofConstraintSetTargetOrientation(self.handle, &orientation));
+    }
+
+    pub fn sixDofTargetOrientation(self: Constraint) err.Error!math.Quat {
+        var out: math.Quat = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTargetOrientation(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofRotationInConstraintSpace(self: Constraint) err.Error!math.Quat {
+        var out: math.Quat = undefined;
+        try err.check(c.zjoltSixDofConstraintGetRotationInConstraintSpace(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofTotalLambdaRotation(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTotalLambdaRotation(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofTotalLambdaMotorTranslation(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTotalLambdaMotorTranslation(self.handle, &out));
+        return out;
+    }
+
+    pub fn sixDofTotalLambdaMotorRotation(self: Constraint) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltSixDofConstraintGetTotalLambdaMotorRotation(self.handle, &out));
+        return out;
+    }
+
+    //-------------------------------------------------------------------------
+    // Gear, rack and pinion
+    //-------------------------------------------------------------------------
+
+    /// Hands the gear the two HINGES its bodies are mounted on, so it can
+    /// correct positional drift rather than matching velocities only. Null for
+    /// both clears them.
+    ///
+    /// Both must be hinges: Jolt reads them during position solving and aborts
+    /// on anything else, a frame later and with nothing naming this call.
+    pub fn gearSetConstraints(self: Constraint, gear1: ?Constraint, gear2: ?Constraint) err.Error!void {
+        try err.check(c.zjoltGearConstraintSetConstraints(
+            self.handle,
+            if (gear1) |g| g.handle else null,
+            if (gear2) |g| g.handle else null,
+        ));
+    }
+
+    pub fn gearTotalLambda(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltGearConstraintGetTotalLambda(self.handle, &out));
+        return out;
+    }
+
+    /// As `gearSetConstraints`, and with the same abort behind it: `pinion`
+    /// must be a hinge and `rack` must be a slider.
+    pub fn rackAndPinionSetConstraints(self: Constraint, pinion: ?Constraint, rack: ?Constraint) err.Error!void {
+        try err.check(c.zjoltRackAndPinionConstraintSetConstraints(
+            self.handle,
+            if (pinion) |p| p.handle else null,
+            if (rack) |r| r.handle else null,
+        ));
+    }
+
+    pub fn rackAndPinionTotalLambda(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltRackAndPinionConstraintGetTotalLambda(self.handle, &out));
+        return out;
+    }
+
+    //-------------------------------------------------------------------------
+    // Pulley
+    //-------------------------------------------------------------------------
+
+    /// Metres of rope. `min` must be non-negative and no greater than `max`.
+    /// The descriptor's negative sentinel does not apply here.
+    pub fn pulleySetLength(self: Constraint, min: f32, max: f32) err.Error!void {
+        try err.check(c.zjoltPulleyConstraintSetLength(self.handle, min, max));
+    }
+
+    pub fn pulleyLength(self: Constraint) err.Error!struct { min: f32, max: f32 } {
+        var min: f32 = 0;
+        var max: f32 = 0;
+        try err.check(c.zjoltPulleyConstraintGetLength(self.handle, &min, &max));
+        return .{ .min = min, .max = max };
+    }
+
+    /// Both segments summed with the ratio applied. Computed from the
+    /// positions the last step cached, so before the first step it reports the
+    /// length at creation.
+    pub fn pulleyCurrentLength(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPulleyConstraintGetCurrentLength(self.handle, &out));
+        return out;
+    }
+
+    pub fn pulleyTotalLambdaPosition(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPulleyConstraintGetTotalLambdaPosition(self.handle, &out));
+        return out;
+    }
+
+    //-------------------------------------------------------------------------
+    // Path
+    //-------------------------------------------------------------------------
+
+    /// Replaces the path and the point along it that body 2 sits at. Null makes
+    /// the constraint inactive: it stays in the system and applies nothing.
+    pub fn pathSetPath(self: Constraint, path: ?Path, fraction: f32) err.Error!void {
+        try err.check(c.zjoltPathConstraintSetPath(
+            self.handle,
+            if (path) |p| p.handle else null,
+            fraction,
+        ));
+    }
+
+    /// BORROWED — valid only while the constraint holds it. Call `addRef` on
+    /// the result to keep it.
+    pub fn pathPath(self: Constraint) ?Path {
+        const raw = c.zjoltPathConstraintGetPath(self.handle) orelse return null;
+        return Path{ .handle = @constCast(raw) };
+    }
+
+    pub fn pathFraction(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPathConstraintGetPathFraction(self.handle, &out));
+        return out;
+    }
+
+    pub fn pathSetMotorSettings(self: Constraint, motor: MotorSettings) err.Error!void {
+        try err.check(c.zjoltPathConstraintSetMotorSettings(self.handle, &motor));
+    }
+
+    pub fn pathMotorSettings(self: Constraint) err.Error!MotorSettings {
+        var out: MotorSettings = .{};
+        try err.check(c.zjoltPathConstraintGetMotorSettings(self.handle, &out));
+        return out;
+    }
+
+    pub fn pathSetMotorState(self: Constraint, state: MotorState) err.Error!void {
+        try err.check(c.zjoltPathConstraintSetMotorState(self.handle, state));
+    }
+
+    pub fn pathMotorState(self: Constraint) err.Error!MotorState {
+        var out: MotorState = .off;
+        try err.check(c.zjoltPathConstraintGetMotorState(self.handle, &out));
+        return out;
+    }
+
+    /// Metres per second along the path, for a velocity motor.
+    pub fn pathSetTargetVelocity(self: Constraint, velocity: f32) err.Error!void {
+        try err.check(c.zjoltPathConstraintSetTargetVelocity(self.handle, velocity));
+    }
+
+    pub fn pathTargetVelocity(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPathConstraintGetTargetVelocity(self.handle, &out));
+        return out;
+    }
+
+    /// On a non-looping path this must lie between 0 and the path's max
+    /// fraction — Jolt asserts it. A looping path accepts anything and wraps.
+    pub fn pathSetTargetFraction(self: Constraint, fraction: f32) err.Error!void {
+        try err.check(c.zjoltPathConstraintSetTargetPathFraction(self.handle, fraction));
+    }
+
+    pub fn pathTargetFraction(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPathConstraintGetTargetPathFraction(self.handle, &out));
+        return out;
+    }
+
+    pub fn pathSetMaxFrictionForce(self: Constraint, force: f32) err.Error!void {
+        try err.check(c.zjoltPathConstraintSetMaxFrictionForce(self.handle, force));
+    }
+
+    pub fn pathMaxFrictionForce(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPathConstraintGetMaxFrictionForce(self.handle, &out));
+        return out;
+    }
+
+    pub fn pathTotalLambdaMotor(self: Constraint) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltPathConstraintGetTotalLambdaMotor(self.handle, &out));
+        return out;
+    }
 };
 
 /// How many constraints are currently added to `system`.

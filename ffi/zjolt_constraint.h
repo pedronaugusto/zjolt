@@ -868,6 +868,295 @@ ZJOLT_API ZJoltResult zjoltDistanceConstraintGetLimitsSpringSettings(
 ZJOLT_API ZJoltResult zjoltDistanceConstraintGetTotalLambdaPosition(
     const ZJoltConstraint *constraint, float *out);
 
+//===----------------------------------------------------------------------===//
+// Cone
+//===----------------------------------------------------------------------===//
+
+/// Radians from the principal axis to the cone's edge. Must be in [0, pi] —
+/// Jolt asserts it.
+ZJOLT_API ZJoltResult zjoltConeConstraintSetHalfConeAngle(
+    ZJoltConstraint *constraint, float half_cone_angle);
+
+/// The COSINE of the half angle, which is what the constraint actually keeps.
+/// Jolt has no getter for the angle itself.
+ZJOLT_API ZJoltResult zjoltConeConstraintGetCosHalfConeAngle(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltConeConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltConeConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, float *out);
+
+//===----------------------------------------------------------------------===//
+// Swing-twist
+//===----------------------------------------------------------------------===//
+
+/// Radians, in [0, pi]. The swing limit is symmetric about the twist axis.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetNormalHalfConeAngle(
+    ZJoltConstraint *constraint, float angle);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetNormalHalfConeAngle(
+    const ZJoltConstraint *constraint, float *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetPlaneHalfConeAngle(
+    ZJoltConstraint *constraint, float angle);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetPlaneHalfConeAngle(
+    const ZJoltConstraint *constraint, float *out);
+
+/// Both twist limits at once, in radians, both in [-pi, pi] and ordered.
+///
+/// Deliberately not two setters. Jolt has one per limit, and each recomputes
+/// the constraint part immediately — so moving a range upwards by setting the
+/// minimum first passes through a state where the minimum exceeds the maximum,
+/// which is the assertion. Setting both in one call lets the order be chosen
+/// so that the intermediate state is always valid.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTwistLimits(
+    ZJoltConstraint *constraint, float min, float max);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTwistLimits(
+    const ZJoltConstraint *constraint, float *out_min, float *out_max);
+
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetSwingMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetSwingMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetSwingMotorState(
+    ZJoltConstraint *constraint, ZJoltMotorState state);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetSwingMotorState(
+    const ZJoltConstraint *constraint, ZJoltMotorState *out);
+
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTwistMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTwistMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTwistMotorState(
+    ZJoltConstraint *constraint, ZJoltMotorState state);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTwistMotorState(
+    const ZJoltConstraint *constraint, ZJoltMotorState *out);
+
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetMaxFrictionTorque(
+    ZJoltConstraint *constraint, float torque);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetMaxFrictionTorque(
+    const ZJoltConstraint *constraint, float *out);
+
+/// Radians per second, in CONSTRAINT space: x is twist, y and z are swing.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetAngularVelocity(
+    ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTargetAngularVelocity(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// The target for a position motor, in constraint space. Jolt CLAMPS it to the
+/// current swing and twist limits, so reading it back may differ.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetOrientation(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTargetOrientation(
+    const ZJoltConstraint *constraint, ZJoltQuat *out);
+
+/// Where the joint actually is, as a rotation in constraint space. This is
+/// what to compare a target against.
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetRotationInConstraintSpace(
+    const ZJoltConstraint *constraint, ZJoltQuat *out);
+
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaMotor(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+//===----------------------------------------------------------------------===//
+// Six degrees of freedom
+//
+// Every one of these takes an axis, and every one refuses an axis outside
+// ZJoltSixDofAxis. That is not pedantry: the limits, frictions and motors are
+// plain arrays of six, indexed by the enumerator with no bounds check of
+// Jolt's own, so a seventh axis is an out-of-bounds read or write.
+//===----------------------------------------------------------------------===//
+
+/// Metres. See ZJoltSixDofConstraintDesc::limit_min for how free, fixed and
+/// limited are spelled.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTranslationLimits(
+    ZJoltConstraint *constraint, const ZJoltVec3 *min, const ZJoltVec3 *max);
+
+/// Radians. Clamped to [-pi, pi], and forced symmetric for a CONE swing, so
+/// what comes back out may not be what went in.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetRotationLimits(
+    ZJoltConstraint *constraint, const ZJoltVec3 *min, const ZJoltVec3 *max);
+
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetLimits(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis, float *out_min,
+    float *out_max);
+
+ZJOLT_API ZJoltResult zjoltSixDofConstraintIsFixedAxis(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis, bool *out);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintIsFreeAxis(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis, bool *out);
+
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetMaxFriction(
+    ZJoltConstraint *constraint, ZJoltSixDofAxis axis, float friction);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetMaxFriction(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis, float *out);
+
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetMotorSettings(
+    ZJoltConstraint *constraint, ZJoltSixDofAxis axis,
+    const ZJoltMotorSettings *motor);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis,
+    ZJoltMotorSettings *out);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetMotorState(
+    ZJoltConstraint *constraint, ZJoltSixDofAxis axis, ZJoltMotorState state);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetMotorState(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis,
+    ZJoltMotorState *out);
+
+/// TRANSLATION axes only — Jolt asserts on a rotation axis here, because it
+/// has no soft rotation limits.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetLimitsSpringSettings(
+    ZJoltConstraint *constraint, ZJoltSixDofAxis axis,
+    const ZJoltSpringSettings *spring);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetLimitsSpringSettings(
+    const ZJoltConstraint *constraint, ZJoltSixDofAxis axis,
+    ZJoltSpringSettings *out);
+
+/// Metres per second, in constraint space.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetVelocity(
+    ZJoltConstraint *constraint, const ZJoltVec3 *velocity);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTargetVelocity(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// Radians per second, in constraint space.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetAngularVelocity(
+    ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTargetAngularVelocity(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// Metres, in constraint space.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetPosition(
+    ZJoltConstraint *constraint, const ZJoltVec3 *position);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTargetPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+/// Clamped to the current rotation limits, as a swing-twist target is.
+ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetOrientation(
+    ZJoltConstraint *constraint, const ZJoltQuat *orientation);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTargetOrientation(
+    const ZJoltConstraint *constraint, ZJoltQuat *out);
+
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetRotationInConstraintSpace(
+    const ZJoltConstraint *constraint, ZJoltQuat *out);
+
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTotalLambdaRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTotalLambdaMotorTranslation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTotalLambdaMotorRotation(
+    const ZJoltConstraint *constraint, ZJoltVec3 *out);
+
+//===----------------------------------------------------------------------===//
+// Gear
+//===----------------------------------------------------------------------===//
+
+/// Hands the gear the two HINGES its bodies are mounted on, so it can correct
+/// positional drift instead of matching velocities only. NULL for both clears
+/// them again.
+///
+/// Both must be hinge constraints. Jolt reads the pair during position solving
+/// and asserts `false, "Unsupported"` on anything else — an abort one frame
+/// later, with nothing at the stack naming this call. It is checked here
+/// instead.
+ZJOLT_API ZJoltResult zjoltGearConstraintSetConstraints(
+    ZJoltConstraint *constraint, ZJoltConstraint *gear1, ZJoltConstraint *gear2);
+
+ZJOLT_API ZJoltResult zjoltGearConstraintGetTotalLambda(
+    const ZJoltConstraint *constraint, float *out);
+
+//===----------------------------------------------------------------------===//
+// Rack and pinion
+//===----------------------------------------------------------------------===//
+
+/// As for a gear, and with the same assertion behind it: `pinion` must be a
+/// HINGE and `rack` must be a SLIDER. NULL for both clears them.
+ZJOLT_API ZJoltResult zjoltRackAndPinionConstraintSetConstraints(
+    ZJoltConstraint *constraint, ZJoltConstraint *pinion, ZJoltConstraint *rack);
+
+ZJOLT_API ZJoltResult zjoltRackAndPinionConstraintGetTotalLambda(
+    const ZJoltConstraint *constraint, float *out);
+
+//===----------------------------------------------------------------------===//
+// Pulley
+//===----------------------------------------------------------------------===//
+
+/// Metres of rope. `min` must be non-negative and no greater than `max` —
+/// Jolt asserts both.
+///
+/// Note that the negative sentinel the descriptor accepts does NOT apply here:
+/// "use the current length" exists only at creation.
+ZJOLT_API ZJoltResult zjoltPulleyConstraintSetLength(ZJoltConstraint *constraint,
+                                                     float min, float max);
+ZJOLT_API ZJoltResult zjoltPulleyConstraintGetLength(
+    const ZJoltConstraint *constraint, float *out_min, float *out_max);
+
+/// The length the rope is at now, both segments summed with the ratio applied.
+/// Computed from the positions the last step cached, so before the first step
+/// it reports the length at creation.
+ZJOLT_API ZJoltResult zjoltPulleyConstraintGetCurrentLength(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltPulleyConstraintGetTotalLambdaPosition(
+    const ZJoltConstraint *constraint, float *out);
+
+//===----------------------------------------------------------------------===//
+// Path
+//===----------------------------------------------------------------------===//
+
+/// Replaces the path and the point along it that body 2 sits at.
+///
+/// `path` may be NULL, which makes the constraint inactive — it stays in the
+/// system and applies nothing. A reference is taken for as long as the
+/// constraint holds it.
+ZJOLT_API ZJoltResult zjoltPathConstraintSetPath(
+    ZJoltConstraint *constraint, const ZJoltPathConstraintPath *path,
+    float fraction);
+
+/// The path this constraint follows, BORROWED — it is valid only while the
+/// constraint holds it. Call zjoltPathConstraintPathAddRef to keep it. NULL
+/// when there is none, or when the handle is not a path constraint.
+ZJOLT_API const ZJoltPathConstraintPath *zjoltPathConstraintGetPath(
+    const ZJoltConstraint *constraint);
+
+ZJOLT_API ZJoltResult zjoltPathConstraintGetPathFraction(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltPathConstraintSetMotorSettings(
+    ZJoltConstraint *constraint, const ZJoltMotorSettings *motor);
+ZJOLT_API ZJoltResult zjoltPathConstraintGetMotorSettings(
+    const ZJoltConstraint *constraint, ZJoltMotorSettings *out);
+ZJOLT_API ZJoltResult zjoltPathConstraintSetMotorState(
+    ZJoltConstraint *constraint, ZJoltMotorState state);
+ZJOLT_API ZJoltResult zjoltPathConstraintGetMotorState(
+    const ZJoltConstraint *constraint, ZJoltMotorState *out);
+
+/// Metres per second along the path, for a velocity motor.
+ZJOLT_API ZJoltResult zjoltPathConstraintSetTargetVelocity(
+    ZJoltConstraint *constraint, float velocity);
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTargetVelocity(
+    const ZJoltConstraint *constraint, float *out);
+
+/// Where along the path a position motor drives to.
+///
+/// On a non-looping path this must lie between 0 and the path's max fraction —
+/// Jolt asserts it. A looping path accepts any fraction and wraps.
+ZJOLT_API ZJoltResult zjoltPathConstraintSetTargetPathFraction(
+    ZJoltConstraint *constraint, float fraction);
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTargetPathFraction(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltPathConstraintSetMaxFrictionForce(
+    ZJoltConstraint *constraint, float force);
+ZJOLT_API ZJoltResult zjoltPathConstraintGetMaxFrictionForce(
+    const ZJoltConstraint *constraint, float *out);
+
+ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaMotor(
+    const ZJoltConstraint *constraint, float *out);
+
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
