@@ -8,6 +8,7 @@
 const std = @import("std");
 const core = @import("core.zig");
 const query = @import("query.zig");
+const transformed = @import("transformed.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
@@ -28,6 +29,7 @@ pub const Shape = core.Shape;
 pub const SubShapeId = core.SubShapeId;
 pub const Vec3 = core.Vec3;
 pub const QueryFilters = query.QueryFilters;
+pub const TransformedShape = transformed.TransformedShape;
 
 pub const RigidCharacter = opaque {};
 
@@ -112,6 +114,8 @@ pub extern fn zjoltCharacterGetShape(character: *const Character) ?*const Shape;
 
 pub extern fn zjoltCharacterGetInnerBodyId(character: *const Character) BodyId;
 
+pub extern fn zjoltCharacterSetInnerBodyShape(character: *Character, shape: *const Shape) Result;
+
 pub const CharacterId = u32;
 
 pub const character_id_invalid: CharacterId = 0xffff_ffff;
@@ -127,6 +131,10 @@ pub extern fn zjoltCharacterSetMaxSlopeAngle(character: *Character, radians: f32
 pub extern fn zjoltCharacterGetCosMaxSlopeAngle(character: *const Character) f32;
 
 pub extern fn zjoltCharacterIsSlopeTooSteep(character: *const Character, normal: *const Vec3) bool;
+
+pub extern fn zjoltCharacterGetSupportingVolume(character: *const Character, out_normal: ?*Vec3, out_distance: ?*f32) void;
+
+pub extern fn zjoltCharacterSetSupportingVolume(character: *Character, normal: *const Vec3, distance: f32) Result;
 
 pub extern fn zjoltCharacterGetGroundMaterial(character: *const Character) ?*const PhysicsMaterial;
 
@@ -208,6 +216,21 @@ pub extern fn zjoltCharacterHasCollidedWithBody(character: *const Character, bod
 
 pub extern fn zjoltCharacterHasCollidedWithCharacter(character: *const Character, other_character_id: CharacterId) bool;
 
+pub extern fn zjoltCharacterGetTransformedShape(character: *const Character, out: **TransformedShape) Result;
+
+pub const CharacterCollisionHit = extern struct {
+    body: BodyId,
+    character_id: CharacterId,
+    sub_shape_id: SubShapeId,
+    contact_point_on_1: Vec3,
+    contact_point_on_2: Vec3,
+    penetration_axis: Vec3,
+    penetration_depth: f32,
+    material: ?*const PhysicsMaterial,
+};
+
+pub extern fn zjoltCharacterCheckCollision(character: *const Character, position: *const RVec3, rotation: ?*const Quat, movement_direction: ?*const Vec3, max_separation_distance: f32, shape: ?*const Shape, filters: ?*const QueryFilters, out_hits: ?[*]CharacterCollisionHit, capacity: u32, out_count: *u32) Result;
+
 pub const CharacterContactSettings = extern struct {
     can_push_character: bool,
     can_receive_impulses: bool,
@@ -233,6 +256,8 @@ pub extern fn zjoltCharacterContactListenerCreate(callbacks: *const CharacterCon
 pub extern fn zjoltCharacterContactListenerDestroy(listener: ?*CharacterContactListener) void;
 
 pub extern fn zjoltCharacterSetListener(character: *Character, listener: ?*CharacterContactListener) Result;
+
+pub extern fn zjoltCharacterGetListener(character: *const Character) ?*CharacterContactListener;
 
 pub extern fn zjoltCharacterVsCharacterCollisionCreate(out: **CharacterVsCharacterCollision) Result;
 
@@ -336,3 +361,11 @@ pub extern fn zjoltRigidCharacterGetGroundBodyId(character: *const RigidCharacte
 pub extern fn zjoltRigidCharacterGetGroundSubShapeId(character: *const RigidCharacter) SubShapeId;
 
 pub extern fn zjoltRigidCharacterGetGroundUserData(character: *const RigidCharacter) u64;
+
+pub extern fn zjoltRigidCharacterGetSupportingVolume(character: *const RigidCharacter, out_normal: ?*Vec3, out_distance: ?*f32) void;
+
+pub extern fn zjoltRigidCharacterSetSupportingVolume(character: *RigidCharacter, normal: *const Vec3, distance: f32) Result;
+
+pub extern fn zjoltRigidCharacterGetTransformedShape(character: *const RigidCharacter, out: **TransformedShape) Result;
+
+pub extern fn zjoltRigidCharacterCheckCollision(character: *const RigidCharacter, position: *const RVec3, rotation: ?*const Quat, movement_direction: ?*const Vec3, max_separation_distance: f32, shape: ?*const Shape, out_hits: ?[*]CharacterCollisionHit, capacity: u32, out_count: *u32) Result;

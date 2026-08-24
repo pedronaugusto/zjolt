@@ -360,3 +360,365 @@ test "the contact listener fires, and a listener that signals an error leaves th
     try std.testing.expect(recorder.calls > 1);
     try std.testing.expect(recorder.added > 0);
 }
+
+test "a character reports which listener is attached to it" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+    });
+    defer character.deinit();
+
+    try std.testing.expect(character.getListener() == null);
+
+    const Counter = struct {
+        added: u32 = 0,
+
+        pub fn onContactAdded(
+            self: *@This(),
+            character_id: zjolt.CharacterId,
+            contact: *const zjolt.CharacterContact,
+            settings: *zjolt.CharacterContactSettings,
+        ) void {
+            _ = .{ character_id, contact, settings };
+            self.added += 1;
+        }
+    };
+
+    var counter: Counter = .{};
+    var listener = zjolt.CharacterContactListener(Counter).init(&counter);
+    try listener.attach();
+    defer listener.deinit();
+
+    try character.setListener(listener.handle);
+    try std.testing.expectEqual(listener.handle, character.getListener().?);
+
+    // Detaching shows through the same getter, and destroys nothing: the
+    // character never owned the listener, so this reports an attachment
+    // rather than transferring one.
+    try character.setListener(null);
+    try std.testing.expect(character.getListener() == null);
+    try listener.check();
+}
+
+//=============================================================================
+// The supporting volume
+//=============================================================================
+
+test "the supporting volume decides which contacts may count as ground" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+    });
+    defer character.deinit();
+
+    const settings = zjolt.defaultCharacterUpdateSettings();
+    try walkForward(character, &settings, 0, 4.0);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+
+    // `init` installs a plane an inner radius above the shape's lowest point,
+    // pointing up. Jolt's own bare default sits 1e10 below everything and so
+    // accepts any contact at all, including a wall.
+    const original = character.supportingVolume();
+    try std.testing.expect(original.normal.y > 0.9);
+
+    // Lift the plane far above the character: every contact is now in FRONT
+    // of it, and none of them may support the character any more.
+    try character.setSupportingVolume(.{ .normal = zjolt.vec3(0, 1, 0), .distance = 100 });
+    try character.refreshContacts(null);
+    try std.testing.expectEqual(zjolt.GroundState.not_supported, character.groundState());
+    try std.testing.expect(!character.isSupported());
+
+    // Which is the distinction worth having: the plane rules out SUPPORT, not
+    // contact. The character still touches the floor and still reports which
+    // body it is touching — it just may not stand on it.
+    try std.testing.expectEqual(world.floor, character.groundBodyId());
+
+    try character.setSupportingVolume(original);
+    try character.refreshContacts(null);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+
+    // A plane with no direction has no side, and a character given one would
+    // never report ground again — so it is refused here rather than installed
+    // and puzzled over several frames later.
+    try std.testing.expectError(error.InvalidArgument, character.setSupportingVolume(.{
+        .normal = zjolt.vec3(0, 0, 0),
+        .distance = 0,
+    }));
+}
+
+//=============================================================================
+// Asking about a placement the character is not at
+//=============================================================================
+
+test "a virtual character is reachable by a cast only through its transformed shape" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+    });
+    defer character.deinit();
+
+    // Nothing in the system finds it: a CharacterVirtual is never put in the
+    // broad phase, and this one has no inner body standing in for it.
+    const queries = world.system.queries();
+    try std.testing.expect((try queries.castRayClosest(
+        zjolt.rvec3(-5, 3, 0),
+        zjolt.vec3(10, 0, 0),
+        null,
+        null,
+    )) == null);
+
+    // The same ray against the character's own volume hits the front of the
+    // capsule: 5 m to the axis less the 0.3 m radius, over a 10 m ray.
+    const volume = try character.getTransformedShape();
+    defer volume.deinit();
+    const hit = (try volume.castRayClosest(
+        zjolt.rvec3(-5, 3, 0),
+        zjolt.vec3(10, 0, 0),
+        null,
+        null,
+    )) orelse return error.TestExpectedCharacterHit;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.47), hit.fraction, 0.02);
+
+    // It is a snapshot, not a view. Teleporting the character leaves it
+    // wrapping where the character used to be, which is exactly why a caller
+    // takes a fresh one per frame.
+    character.setPosition(zjolt.rvec3(500, 3, 0));
+    try std.testing.expect((try volume.castRayClosest(
+        zjolt.rvec3(-5, 3, 0),
+        zjolt.vec3(10, 0, 0),
+        null,
+        null,
+    )) != null);
+}
+
+test "checkCollision answers about a placement without moving the character" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+    });
+    defer character.deinit();
+
+    const settings = zjolt.defaultCharacterUpdateSettings();
+    try walkForward(character, &settings, 0, 4.0);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+
+    const standing = character.getPosition();
+    const collision_query: zjolt.CharacterCollisionQuery = .{ .max_separation_distance = 0.1 };
+
+    var buffer: [16]zjolt.CharacterCollisionHit = undefined;
+    const here = try character.checkCollision(standing, collision_query, null, &buffer);
+    try std.testing.expect(here.len > 0);
+    try std.testing.expectEqual(world.floor, here[0].body);
+    // A body hit names no character, and that is how the two are told apart.
+    try std.testing.expectEqual(zjolt.invalid_character_id, here[0].character_id);
+
+    // Fifty metres up there is nothing to overlap — and asking neither moved
+    // the character nor disturbed the contacts it already had.
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        try character.countCollisions(zjolt.rvec3(0, 50, 0), collision_query, null),
+    );
+    try std.testing.expectEqual(standing, character.getPosition());
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+}
+
+test "checkCollision finds another virtual character, which no system query can" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+
+    const walker = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 1, 0),
+    });
+    defer walker.deinit();
+    // Close enough that the two 0.3 m capsules overlap.
+    const other = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0.2, 1, 0),
+    });
+    defer other.deinit();
+
+    const crowd = try zjolt.CharacterVsCharacterCollision.init();
+    defer crowd.deinit();
+    crowd.add(walker);
+    crowd.add(other);
+    walker.setCharacterVsCharacterCollision(crowd);
+    defer walker.setCharacterVsCharacterCollision(null);
+
+    var buffer: [16]zjolt.CharacterCollisionHit = undefined;
+    const hits = try walker.checkCollision(
+        walker.getPosition(),
+        .{ .max_separation_distance = 0.1 },
+        null,
+        &buffer,
+    );
+
+    // This hit exists only because the check also walks the
+    // character-vs-character list — the other character is in no broad phase
+    // for a query to find. It is named by character id and its body id is the
+    // invalid one, which is the whole reason these are not plain overlap hits.
+    var found = false;
+    for (hits) |hit| {
+        if (hit.character_id == other.id()) {
+            found = true;
+            try std.testing.expectEqual(zjolt.invalid_body_id, hit.body);
+        }
+    }
+    try std.testing.expect(found);
+}
+
+//=============================================================================
+// The inner body
+//=============================================================================
+
+test "the inner body can be given a shape of its own" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const pin = try zjolt.Shape.initSphere(0.1, .{});
+    defer pin.release();
+    const bubble = try zjolt.Shape.initSphere(0.9, .{});
+    defer bubble.release();
+
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+        // Deliberately NOT the swept shape: a cheap proxy for the world to
+        // see, standing in for a detailed sweep volume.
+        .inner_body_shape = pin,
+        .inner_body_layer = Layers.moving,
+    });
+    defer character.deinit();
+    try std.testing.expect(character.innerBodyId() != zjolt.invalid_body_id);
+
+    // Half a metre off the character's axis: outside the 0.1 m proxy, inside
+    // a 0.9 m one. This is the ray the two shapes disagree about.
+    const queries = world.system.queries();
+    const origin = zjolt.rvec3(-5, 3.5, 0);
+    const along = zjolt.vec3(10, 0, 0);
+    try std.testing.expect((try queries.castRayClosest(origin, along, null, null)) == null);
+
+    try character.setInnerBodyShape(bubble);
+    const hit = (try queries.castRayClosest(origin, along, null, null)) orelse
+        return error.TestExpectedInnerBodyHit;
+    try std.testing.expectEqual(character.innerBodyId(), hit.body);
+
+    // A character with no inner body has nothing to give a shape to, and
+    // saying so beats Jolt's own silent no-op.
+    const bodyless = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(20, 3, 0),
+    });
+    defer bodyless.deinit();
+    try std.testing.expectError(error.InvalidArgument, bodyless.setInnerBodyShape(bubble));
+}
+
+//=============================================================================
+// The rigid character
+//=============================================================================
+
+test "a rigid character answers the same three questions about itself" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.RigidCharacter.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+        .layer = Layers.moving,
+    });
+    defer character.deinit();
+    character.addToPhysicsSystem(.activate);
+    defer character.removeFromPhysicsSystem();
+
+    try world.stepFor(2.0);
+    character.postSimulation(0.05);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+
+    // This one has a body, so its transformed shape is a convenience rather
+    // than the only way in — but it still has to report the placement the
+    // body is actually at.
+    const volume = try character.getTransformedShape();
+    defer volume.deinit();
+    const standing = character.getPosition();
+    const hit = (try volume.castRayClosest(
+        zjolt.rvec3(-5, standing.y, standing.z),
+        zjolt.vec3(10, 0, 0),
+        null,
+        null,
+    )) orelse return error.TestExpectedRigidCharacterHit;
+    try std.testing.expectApproxEqAbs(@as(f32, 0.47), hit.fraction, 0.05);
+
+    // The floor is under it, and asking does not move it.
+    var buffer: [16]zjolt.CharacterCollisionHit = undefined;
+    const here = try character.checkCollision(
+        standing,
+        .{ .max_separation_distance = 0.1 },
+        &buffer,
+    );
+    try std.testing.expect(here.len > 0);
+    try std.testing.expectEqual(world.floor, here[0].body);
+    // Nothing here walks a character-vs-character list, so no hit names one.
+    try std.testing.expectEqual(zjolt.invalid_character_id, here[0].character_id);
+    try std.testing.expectEqual(standing, character.getPosition());
+
+    // The supporting volume crosses in both directions here too. A rigid
+    // character re-reads it in postSimulation rather than during a sweep, so
+    // that is where a change takes effect.
+    const original = character.supportingVolume();
+    try std.testing.expect(original.normal.y > 0.9);
+    try character.setSupportingVolume(.{ .normal = zjolt.vec3(0, 1, 0), .distance = 100 });
+    character.postSimulation(0.05);
+    try std.testing.expect(!character.isSupported());
+
+    try character.setSupportingVolume(original);
+    character.postSimulation(0.05);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+}

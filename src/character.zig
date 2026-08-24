@@ -14,9 +14,53 @@ const body_mod = @import("body.zig");
 const query_mod = @import("query.zig");
 const shape_mod = @import("shape.zig");
 const system_mod = @import("system.zig");
+const transformed_mod = @import("transformed.zig");
 
 pub const GroundState = c.GroundState;
 pub const BackFaceMode = c.BackFaceMode;
+
+/// The plane, in a character's LOCAL space, behind which a contact may support
+/// it. A contact in front of it only collides.
+///
+/// This is the second half of the ground test — the max slope angle rejects a
+/// contact by its normal, this one rejects it by where on the shape it landed
+/// — and it is what stops a wall the character is pressed against from being
+/// reported as the floor it is standing on.
+///
+/// `distance` is measured in units of `normal`'s length: the signed distance
+/// of a local point p is `dot(normal, p) + distance`, and a contact is behind
+/// the plane when that is at most zero. Nothing normalises `normal` on the way
+/// through, because scaling it without scaling `distance` would move the plane
+/// rather than tidy it.
+pub const SupportingVolume = struct {
+    normal: math.Vec3,
+    distance: f32,
+};
+
+/// One overlap reported by `checkCollision`.
+///
+/// Not a `query.CollideShapeHit`: a virtual character is not a body, so an
+/// overlap with another one has no body id and would come back
+/// indistinguishable from an overlap with nothing. Exactly one of `body` and
+/// `character_id` is set on any hit.
+pub const CollisionHit = c.CharacterCollisionHit;
+
+/// What `checkCollision` and `countCollisions` are asking about, beyond the
+/// position. Every default is "the character as it stands".
+pub const CollisionQuery = struct {
+    /// Null uses the character's current rotation.
+    rotation: ?math.Quat = null,
+    /// A hint at which way the character is moving. It only steers which mesh
+    /// edges count as active, so a wrong one costs accuracy on internal edges
+    /// rather than correctness. Null means no hint.
+    movement_direction: ?math.Vec3 = null,
+    /// How far around the shape to report contacts. Zero matches the shape.
+    max_separation_distance: f32 = 0,
+    /// Null uses the character's current shape, which is what "does the
+    /// standing pose fit here" wants. Pass another to ask about a stance the
+    /// character has not switched to.
+    shape: ?shape_mod.Shape = null,
+};
 
 /// Extra behaviour layered on a plain move: sticking to the floor on the way
 /// down a slope, and stepping up stairs. Defaults come from Jolt.
@@ -26,6 +70,12 @@ pub fn defaultUpdateSettings() UpdateSettings {
     var settings: UpdateSettings = undefined;
     c.zjoltCharacterUpdateSettingsInit(&settings);
     return settings;
+}
+
+/// A pointer to an optional's payload, or null. Written once because taking
+/// the address inline would be the address of a temporary.
+fn optionalPtr(comptime T: type, value: *const ?T) ?*const T {
+    return if (value.*) |*payload| payload else null;
 }
 
 pub const Character = struct {
@@ -242,6 +292,22 @@ pub const Character = struct {
         return c.zjoltCharacterGetInnerBodyId(self.handle);
     }
 
+    /// Gives the inner rigid body a shape of its own, independent of the one
+    /// the character sweeps.
+    ///
+    /// `setShape` already keeps the inner body in step by handing it the new
+    /// swept shape, which is what a crouch wants. This is for the case that
+    /// undoes: a character created with an `inner_body_shape` DIFFERENT from
+    /// its `shape` — a cheap proxy for casts against a detailed sweep volume,
+    /// say — loses that distinction the first time the swept shape is
+    /// swapped, and this is what puts it back.
+    ///
+    /// Errors for a character created without an inner body, rather than
+    /// silently doing nothing.
+    pub fn setInnerBodyShape(self: Character, shape: shape_mod.Shape) err.Error!void {
+        try err.check(c.zjoltCharacterSetInnerBodyShape(self.handle, shape.handle));
+    }
+
     //=========================================================================
     // CharacterBase
     //=========================================================================
@@ -273,6 +339,33 @@ pub const Character = struct {
 
     pub fn isSlopeTooSteep(self: Character, normal: math.Vec3) bool {
         return c.zjoltCharacterIsSlopeTooSteep(self.handle, &normal);
+    }
+
+    /// @see `SupportingVolume`. `init` installs one an inner radius above the
+    /// shape's lowest point, which is what Jolt's own samples use — Jolt's
+    /// bare default accepts every contact and reports a wall as ground.
+    pub fn supportingVolume(self: Character) SupportingVolume {
+        var volume: SupportingVolume = .{ .normal = math.vec3_zero, .distance = 0 };
+        c.zjoltCharacterGetSupportingVolume(self.handle, &volume.normal, &volume.distance);
+        return volume;
+    }
+
+    /// Raising the plane makes the character pickier about what counts as
+    /// ground. Putting it at the shape's lowest point is the tempting mistake
+    /// and it breaks every slope: a capsule resting on a ramp touches it on
+    /// the SIDE of its bottom cap, above the lowest point, so a floor-level
+    /// plane discards that contact and the character reports itself
+    /// unsupported on ground it is plainly standing on.
+    ///
+    /// A zero-length `normal` is refused rather than installed: the plane it
+    /// describes has no side, and a character with one never reports ground
+    /// again.
+    pub fn setSupportingVolume(self: Character, volume: SupportingVolume) err.Error!void {
+        try err.check(c.zjoltCharacterSetSupportingVolume(
+            self.handle,
+            &volume.normal,
+            volume.distance,
+        ));
     }
 
     /// Null when the character has never touched anything.
@@ -476,11 +569,100 @@ pub const Character = struct {
         return c.zjoltCharacterHasCollidedWithCharacter(self.handle, other_character_id);
     }
 
+    //=========================================================================
+    // Asking about a placement the character is not at
+    //=========================================================================
+
+    /// The character's current volume, placed where the character is, as a
+    /// standalone queryable shape. The caller owns it: `deinit` it.
+    ///
+    /// This is the only way to hit a virtual character with a cast. Jolt never
+    /// puts a `Character` in the broad phase, so no query on the system will
+    /// ever find one unless it was given an inner body; running the cast
+    /// against this instead is what closes that.
+    ///
+    /// It is a SNAPSHOT — the placement is copied out, and it does not follow
+    /// the character afterwards.
+    pub fn getTransformedShape(self: Character) err.Error!transformed_mod.TransformedShape {
+        var handle: *c.TransformedShape = undefined;
+        try err.check(c.zjoltCharacterGetTransformedShape(self.handle, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// Everything the character's shape would overlap if it stood at
+    /// `position`, written into `buffer` and returned as the prefix that was
+    /// filled. Nothing about the character changes, its contacts included.
+    ///
+    /// Errors with `error.BufferTooSmall` when there were more overlaps than
+    /// `buffer` holds — ask `countCollisions` first when that matters, or
+    /// hand over a buffer sized for the answer you can act on.
+    ///
+    /// This is not a plain shape overlap with the character's shape. It
+    /// applies the character's own back-face mode, active-edge handling,
+    /// enhanced internal edge removal and padding, skips the character's own
+    /// inner body, and also tests whatever
+    /// `setCharacterVsCharacterCollision` was given — which no query on the
+    /// system can reach, because those characters are not in the broad phase
+    /// to be found.
+    pub fn checkCollision(
+        self: Character,
+        position: math.RVec3,
+        collision_query: CollisionQuery,
+        filters: ?*const query_mod.Filters,
+        buffer: []CollisionHit,
+    ) err.Error![]CollisionHit {
+        var count: u32 = 0;
+        try err.check(c.zjoltCharacterCheckCollision(
+            self.handle,
+            &position,
+            optionalPtr(math.Quat, &collision_query.rotation),
+            optionalPtr(math.Vec3, &collision_query.movement_direction),
+            collision_query.max_separation_distance,
+            if (collision_query.shape) |s| s.handle else null,
+            filters,
+            buffer.ptr,
+            @intCast(buffer.len),
+            &count,
+        ));
+        return buffer[0..count];
+    }
+
+    /// How many overlaps `checkCollision` would report, without a buffer to
+    /// hold them. One traversal, same as the filling form.
+    pub fn countCollisions(
+        self: Character,
+        position: math.RVec3,
+        collision_query: CollisionQuery,
+        filters: ?*const query_mod.Filters,
+    ) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltCharacterCheckCollision(
+            self.handle,
+            &position,
+            optionalPtr(math.Quat, &collision_query.rotation),
+            optionalPtr(math.Vec3, &collision_query.movement_direction),
+            collision_query.max_separation_distance,
+            if (collision_query.shape) |s| s.handle else null,
+            filters,
+            null,
+            0,
+            &count,
+        ));
+        return count;
+    }
+
     /// Attaches a contact listener built by `ContactListener(T).init` — pass
     /// its `.handle`. Pass `null` to detach whatever listener is currently
     /// attached.
     pub fn setListener(self: Character, listener: ?*c.CharacterContactListener) err.Error!void {
         try err.check(c.zjoltCharacterSetListener(self.handle, listener));
+    }
+
+    /// Whatever `setListener` last installed, or null for none. The character
+    /// does not own it and `deinit`ing the character does not destroy it —
+    /// this reports who is attached, it transfers nothing.
+    pub fn getListener(self: Character) ?*c.CharacterContactListener {
+        return c.zjoltCharacterGetListener(self.handle);
     }
 
     /// Attaches a character-vs-character collision checker. `null` detaches:
@@ -1130,5 +1312,90 @@ pub const RigidCharacter = struct {
 
     pub fn groundUserData(self: RigidCharacter) u64 {
         return c.zjoltRigidCharacterGetGroundUserData(self.handle);
+    }
+
+    /// @see `SupportingVolume`. A rigid character checks it in
+    /// `postSimulation` rather than during a sweep, so a change takes effect
+    /// at the next one.
+    pub fn supportingVolume(self: RigidCharacter) SupportingVolume {
+        var volume: SupportingVolume = .{ .normal = math.vec3_zero, .distance = 0 };
+        c.zjoltRigidCharacterGetSupportingVolume(self.handle, &volume.normal, &volume.distance);
+        return volume;
+    }
+
+    /// @see `Character.setSupportingVolume` for what raising the plane does
+    /// and for the mistake to avoid.
+    pub fn setSupportingVolume(self: RigidCharacter, volume: SupportingVolume) err.Error!void {
+        try err.check(c.zjoltRigidCharacterSetSupportingVolume(
+            self.handle,
+            &volume.normal,
+            volume.distance,
+        ));
+    }
+
+    //=========================================================================
+    // Asking about a placement the character is not at
+    //=========================================================================
+
+    /// The character's body and shape as a standalone queryable handle; the
+    /// caller owns it and `deinit`s it. Less essential than the virtual
+    /// character's — this one has a real body, so a cast against the system
+    /// already finds it. @see `Character.getTransformedShape` for the
+    /// snapshot rule, which applies here too.
+    pub fn getTransformedShape(self: RigidCharacter) err.Error!transformed_mod.TransformedShape {
+        var handle: *c.TransformedShape = undefined;
+        try err.check(c.zjoltRigidCharacterGetTransformedShape(self.handle, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// Everything the character's shape would overlap if it stood at
+    /// `position`. @see `Character.checkCollision` for the protocol.
+    ///
+    /// There are no filters to pass: Jolt builds them from the character's own
+    /// object layer, and always skips the character's own body and every
+    /// sensor. `character_id` on every hit is `invalid_character_id` — a rigid
+    /// character collides through the broad phase like anything else, so there
+    /// is no character-vs-character list in play.
+    pub fn checkCollision(
+        self: RigidCharacter,
+        position: math.RVec3,
+        collision_query: CollisionQuery,
+        buffer: []CollisionHit,
+    ) err.Error![]CollisionHit {
+        var count: u32 = 0;
+        try err.check(c.zjoltRigidCharacterCheckCollision(
+            self.handle,
+            &position,
+            optionalPtr(math.Quat, &collision_query.rotation),
+            optionalPtr(math.Vec3, &collision_query.movement_direction),
+            collision_query.max_separation_distance,
+            if (collision_query.shape) |s| s.handle else null,
+            buffer.ptr,
+            @intCast(buffer.len),
+            &count,
+        ));
+        return buffer[0..count];
+    }
+
+    /// How many overlaps `checkCollision` would report, without a buffer to
+    /// hold them.
+    pub fn countCollisions(
+        self: RigidCharacter,
+        position: math.RVec3,
+        collision_query: CollisionQuery,
+    ) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltRigidCharacterCheckCollision(
+            self.handle,
+            &position,
+            optionalPtr(math.Quat, &collision_query.rotation),
+            optionalPtr(math.Vec3, &collision_query.movement_direction),
+            collision_query.max_separation_distance,
+            if (collision_query.shape) |s| s.handle else null,
+            null,
+            0,
+            &count,
+        ));
+        return count;
     }
 };

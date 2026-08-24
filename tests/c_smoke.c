@@ -1113,6 +1113,94 @@ int main(void) {
         "the character settled on the floor at y = %f",
         (double)character_position.y);
 
+  CHECK(zjoltCharacterGetListener(character) == NULL,
+        "nothing is listening to this character");
+
+  /* The supporting volume, read back and put back. Driven from C because the
+     pair crosses as a vector out-parameter beside a bare float, which the ABI
+     guard compares by width alone. */
+  ZJoltVec3 support_normal;
+  float support_distance = 0.0f;
+  zjoltCharacterGetSupportingVolume(character, &support_normal,
+                                    &support_distance);
+  CHECK(support_normal.y > 0.9f, "the supporting volume plane faces up: %f",
+        (double)support_normal.y);
+
+  /* Lifted far above the character, no contact is behind it any more, so
+     nothing may support the character — though it is still touching the
+     floor and still says so. */
+  const ZJoltVec3 up_normal = {0.0f, 1.0f, 0.0f};
+  CHECK_OK(zjoltCharacterSetSupportingVolume(character, &up_normal, 100.0f));
+  CHECK_OK(zjoltCharacterRefreshContacts(character, NULL));
+  CHECK(zjoltCharacterGetGroundState(character) ==
+            ZJOLT_GROUND_STATE_NOT_SUPPORTED,
+        "a plane above every contact leaves the character unsupported");
+  CHECK(zjoltCharacterGetGroundBodyId(character) == floor_id,
+        "but the floor is still the body being touched");
+
+  const ZJoltVec3 no_normal = {0.0f, 0.0f, 0.0f};
+  CHECK(zjoltCharacterSetSupportingVolume(character, &no_normal, 0.0f) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a plane with no direction is refused");
+
+  CHECK_OK(zjoltCharacterSetSupportingVolume(character, &support_normal,
+                                             support_distance));
+  CHECK_OK(zjoltCharacterRefreshContacts(character, NULL));
+  CHECK(zjoltCharacterGetGroundState(character) == ZJOLT_GROUND_STATE_ON_GROUND,
+        "and putting the plane back puts the character back on the ground");
+
+  /* Overlaps at a placement, into a caller-owned array of a struct that
+     exists nowhere else. */
+  ZJoltCharacterCollisionHit character_hits[16];
+  uint32_t character_hit_count = 0;
+  CHECK_OK(zjoltCharacterCheckCollision(character, &character_position, NULL,
+                                        NULL, 0.1f, NULL, NULL,
+                                        character_hits, 16,
+                                        &character_hit_count));
+  CHECK(character_hit_count > 0, "standing where it stands, it overlaps the floor");
+  CHECK(character_hits[0].body == floor_id, "and the overlap names the floor");
+  CHECK(character_hits[0].character_id == ZJOLT_CHARACTER_ID_INVALID,
+        "a body overlap names no character");
+
+  ZJoltRVec3 high_above = character_position;
+  high_above.y += (ZJoltReal)50.0;
+  uint32_t empty_count = 1;
+  CHECK_OK(zjoltCharacterCheckCollision(character, &high_above, NULL, NULL,
+                                        0.1f, NULL, NULL, NULL, 0,
+                                        &empty_count));
+  CHECK(empty_count == 0, "fifty metres up there is nothing to overlap: %u",
+        empty_count);
+
+  /* A CharacterVirtual is in no broad phase, so this is the only handle a
+     cast can reach it through. */
+  ZJoltTransformedShape *character_volume = NULL;
+  CHECK_OK(zjoltCharacterGetTransformedShape(character, &character_volume));
+
+  ZJoltRVec3 side_on = character_position;
+  side_on.x -= (ZJoltReal)5.0;
+  const ZJoltVec3 side_along = {10.0f, 0.0f, 0.0f};
+  ZJoltRayCastHit character_ray;
+  bool character_ray_hit = false;
+  CHECK_OK(zjoltCastRayClosest(system, &side_on, &side_along, NULL, NULL,
+                               &character_ray, &character_ray_hit));
+  CHECK(!character_ray_hit, "no query on the system finds a virtual character");
+
+  CHECK_OK(zjoltTransformedShapeCastRayClosest(character_volume, &side_on,
+                                               &side_along, NULL, NULL,
+                                               &character_ray,
+                                               &character_ray_hit));
+  CHECK(character_ray_hit, "its transformed shape is what a cast can hit");
+  CHECK(character_ray.fraction > 0.4f && character_ray.fraction < 0.55f,
+        "and it hits the front of the capsule at %f",
+        (double)character_ray.fraction);
+  zjoltTransformedShapeDestroy(character_volume);
+
+  /* The inner body may carry a shape of its own. This character has none, so
+     asking is refused rather than quietly doing nothing. */
+  CHECK(zjoltCharacterSetInnerBodyShape(character, character_shape) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a character with no inner body has nothing to give a shape to");
+
   //-------------------------------------------------------------------------
   // Materials, and the shapes that carry more than one
   //
