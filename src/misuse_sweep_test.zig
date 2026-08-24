@@ -148,24 +148,24 @@ fn sweepBeforeInit() !usize {
                 if (oi < mi and @hasDecl(other, d.name)) earlier = true;
             }
             if (earlier) continue;
-        const Decl = @TypeOf(@field(m, d.name));
-        if (@typeInfo(Decl) != .@"fn") continue;
-        if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
-        if (@typeInfo(Decl).@"fn".return_type != core.Result) continue;
-        if (comptime isExcluded(d.name)) continue;
+            const Decl = @TypeOf(@field(m, d.name));
+            if (@typeInfo(Decl) != .@"fn") continue;
+            if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
+            if (@typeInfo(Decl).@"fn".return_type != core.Result) continue;
+            if (comptime isExcluded(d.name)) continue;
 
-        const got = @call(.auto, @field(m, d.name), hostileArgs(Decl));
-        if (got != .not_initialized) {
-            std.debug.print(
-                "\n{s} returned .{s} before zjoltInit; every result-returning " ++
-                    "entry point must open with ZJOLT_ENTER and return " ++
-                    ".not_initialized\n",
-                .{ d.name, @tagName(got) },
-            );
-            return error.EntryPointMissingInitGuard;
+            const got = @call(.auto, @field(m, d.name), hostileArgs(Decl));
+            if (got != .not_initialized) {
+                std.debug.print(
+                    "\n{s} returned .{s} before zjoltInit; every result-returning " ++
+                        "entry point must open with ZJOLT_ENTER and return " ++
+                        ".not_initialized\n",
+                    .{ d.name, @tagName(got) },
+                );
+                return error.EntryPointMissingInitGuard;
+            }
+            refused += 1;
         }
-        refused += 1;
-    }
     }
 
     return refused;
@@ -192,23 +192,23 @@ fn sweepNulls() !usize {
                 if (oi < mi and @hasDecl(other, d.name)) earlier = true;
             }
             if (earlier) continue;
-        const Decl = @TypeOf(@field(m, d.name));
-        if (@typeInfo(Decl) != .@"fn") continue;
-        if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
-        if (comptime isExcluded(d.name)) continue;
-        if (comptime !takesPointer(Decl)) continue;
+            const Decl = @TypeOf(@field(m, d.name));
+            if (@typeInfo(Decl) != .@"fn") continue;
+            if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
+            if (comptime isExcluded(d.name)) continue;
+            if (comptime !takesPointer(Decl)) continue;
 
-        const result = @call(.auto, @field(m, d.name), hostileArgs(Decl));
+            const result = @call(.auto, @field(m, d.name), hostileArgs(Decl));
 
-        if (@TypeOf(result) == core.Result and result == .ok) {
-            std.debug.print(
-                "\n{s} returned .ok when every pointer it was given was null\n",
-                .{d.name},
-            );
-            return error.EntryPointAcceptedNull;
+            if (@TypeOf(result) == core.Result and result == .ok) {
+                std.debug.print(
+                    "\n{s} returned .ok when every pointer it was given was null\n",
+                    .{d.name},
+                );
+                return error.EntryPointAcceptedNull;
+            }
+            survived += 1;
         }
-        survived += 1;
-    }
     }
 
     return survived;
