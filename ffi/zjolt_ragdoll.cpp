@@ -16,6 +16,7 @@
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
 #include <Jolt/Skeleton/Skeleton.h>
+#include <Jolt/Skeleton/SkeletonMapper.h>
 #include <Jolt/Skeleton/SkeletonPose.h>
 
 #include <atomic>
@@ -23,14 +24,15 @@
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// Three of the four are reinterpret_cast tags directly onto the Jolt type,
+// Three of the five are reinterpret_cast tags directly onto the Jolt type,
 // exactly like ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h — never
 // completed, never dereferenced except after converting back. Skeleton and
 // RagdollSettings are reference counted (JPH::RefTarget); SkeletonPose is a
 // plain value type with no reference count of its own, allocated and freed
 // like a job system.
 //
-// ZJoltRagdoll is the fourth, and it is not a tag — see The handle, below.
+// The other two are not tags, and each says why where it is defined: see The
+// handle (ZJoltRagdoll) and The mapper handle (ZJoltSkeletonMapper) below.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -66,6 +68,21 @@ inline JPH::RagdollSettings *ToJolt(ZJoltRagdollSettings *s) {
 }
 inline ZJoltRagdollSettings *ToC(JPH::RagdollSettings *s) {
   return reinterpret_cast<ZJoltRagdollSettings *>(s);
+}
+inline const ZJoltRagdollSettings *ToC(const JPH::RagdollSettings *s) {
+  return reinterpret_cast<const ZJoltRagdollSettings *>(s);
+}
+
+// ZJoltSkeletonMapper is deliberately absent here — it is not a tag; see The
+// mapper handle, below.
+
+// The one conversion in this file that is not for a handle this file
+// introduces: zjoltRagdollGetConstraint hands back a constraint of
+// zjolt_constraint.cpp's, and this is that file's ToC, character for
+// character. Same reason as the file comment above — this subsystem adds
+// files rather than editing the shared header the pair belongs in.
+inline ZJoltConstraint *ToC(JPH::Constraint *constraint) {
+  return reinterpret_cast<ZJoltConstraint *>(constraint);
 }
 
 }  // namespace zjolt
@@ -111,6 +128,40 @@ struct ZJoltRagdoll {
   mutable std::atomic<uint32_t> refs{1};
 };
 
+//===----------------------------------------------------------------------===//
+// The mapper handle
+//
+// A second handle that is not a tag, for a smaller reason than the ragdoll's
+// and a sharper one.
+//
+// JPH::SkeletonMapper is reference counted (SkeletonMapper.h:14) but carries
+// no JPH_OVERRIDE_NEW_DELETE, and unlike Skeleton and RagdollSettings it has
+// no JPH_DECLARE_SERIALIZABLE_NON_VIRTUAL to bring one in. Its
+// RefTarget::Release therefore ends in a GLOBAL `delete this`
+// (Core/Reference.h:70) on a block zjolt::New took from the HOST allocator —
+// a pointer the host's free never saw, freed by an allocator it never came
+// from. That is a heap corruption a test only finds if the host allocator
+// happens to check, which is exactly the kind of thing this ABI must not
+// leave to chance.
+//
+// So the count is the handle's, as it is for ZJoltRagdoll above, and the
+// JPH::SkeletonMapper is a member this file constructs and destroys through
+// zjolt::New/Delete. Nothing ever AddRefs the inner object, so Jolt's own
+// count stays at zero — which is what ~RefTarget asserts on the way out.
+//
+// It is NOT counted by zjoltLiveHandleCount, matching ZJoltSkeletonPose,
+// which is the same shape of thing: storage zjolt owns holding a Jolt value,
+// with nothing of the physics system in it.
+//===----------------------------------------------------------------------===//
+
+struct ZJoltSkeletonMapper {
+  JPH::SkeletonMapper impl;
+
+  /// Mutable for the same reason JPH::RefTarget's own count is: AddRef and
+  /// Release take a `const ZJoltSkeletonMapper *`.
+  mutable std::atomic<uint32_t> refs{1};
+};
+
 namespace {
 
 //===----------------------------------------------------------------------===//
@@ -126,6 +177,15 @@ JPH::Ragdoll *Impl(ZJoltRagdoll *ragdoll) {
 }
 const JPH::Ragdoll *Impl(const ZJoltRagdoll *ragdoll) {
   return ragdoll != nullptr ? ragdoll->impl.GetPtr() : nullptr;
+}
+
+/// The Jolt mapper inside a handle, or NULL for a NULL handle. A member
+/// rather than a pointer, so this is an address rather than a load.
+JPH::SkeletonMapper *Impl(ZJoltSkeletonMapper *mapper) {
+  return mapper != nullptr ? &mapper->impl : nullptr;
+}
+const JPH::SkeletonMapper *Impl(const ZJoltSkeletonMapper *mapper) {
+  return mapper != nullptr ? &mapper->impl : nullptr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -277,6 +337,88 @@ ZJoltResult ValidatePart(const JPH::Skeleton &skeleton,
         ZJOLT_RESULT_INVALID_ARGUMENT,
         "to_parent must be NULL exactly for the root joint");
   }
+  return ZJOLT_RESULT_OK;
+}
+
+/// How many joints a pose of skeleton 1 and a pose of skeleton 2 must have
+/// for the mapper to stay inside both of them.
+///
+/// SkeletonMapper holds nothing but joint indices once Initialize has run, and
+/// it does not keep the skeletons it was built from — so this is what stands
+/// in for "is this the right pose". Every index it can reach is one of these:
+/// a mapping's pair, a chain's two index runs, an unmapped joint, or a locked
+/// joint and its parent.
+void MapperExtent(const JPH::SkeletonMapper &mapper, uint32_t *out_needed1,
+                  uint32_t *out_needed2) {
+  int needed1 = 0;
+  int needed2 = 0;
+  auto note1 = [&needed1](int index) {
+    if (index + 1 > needed1) needed1 = index + 1;
+  };
+  auto note2 = [&needed2](int index) {
+    if (index + 1 > needed2) needed2 = index + 1;
+  };
+
+  for (const JPH::SkeletonMapper::Mapping &m : mapper.GetMappings()) {
+    note1(m.mJointIdx1);
+    note2(m.mJointIdx2);
+  }
+  for (const JPH::SkeletonMapper::Chain &c : mapper.GetChains()) {
+    for (int index : c.mJointIndices1) note1(index);
+    for (int index : c.mJointIndices2) note2(index);
+  }
+  for (const JPH::SkeletonMapper::Unmapped &u : mapper.GetUnmapped()) {
+    note2(u.mJointIdx);
+  }
+  for (const JPH::SkeletonMapper::Locked &l : mapper.GetLockedTranslations()) {
+    note2(l.mJointIdx);
+    note2(l.mParentJointIdx);
+  }
+
+  *out_needed1 = static_cast<uint32_t>(needed1);
+  *out_needed2 = static_cast<uint32_t>(needed2);
+}
+
+/// Everything zjoltSkeletonMapperMap and MapReverse check before letting Jolt
+/// index either pose.
+ZJoltResult PosesFitMapper(const JPH::SkeletonMapper &mapper,
+                           const JPH::SkeletonPose &pose1,
+                           const JPH::SkeletonPose &pose2) {
+  if (mapper.GetMappings().empty()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the mapper has no mapped joints; call zjoltSkeletonMapperInitialize "
+        "first, and check zjoltSkeletonMapperGetMappingCount if it has run");
+  }
+
+  uint32_t needed1 = 0;
+  uint32_t needed2 = 0;
+  MapperExtent(mapper, &needed1, &needed2);
+  if (pose1.GetJointCount() < needed1 || pose2.GetJointCount() < needed2) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a pose has fewer joints than the mapper indexes, so it is not a pose "
+        "of the skeleton zjoltSkeletonMapperInitialize was given");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+/// The neutral pose every SkeletonMapper setup call takes, checked once.
+/// `out_skeleton` receives its skeleton.
+ZJoltResult NeutralPoseIsUsable(const JPH::SkeletonPose &pose,
+                                const JPH::Skeleton **out_skeleton) {
+  const JPH::Skeleton *skeleton = pose.GetSkeleton();
+  if (skeleton == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "a neutral pose has no skeleton assigned");
+  }
+  if (!skeleton->AreJointsCorrectlyOrdered()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a neutral pose's skeleton has joints that are not correctly ordered, "
+        "and mapping requires a parent to come before its children");
+  }
+  *out_skeleton = skeleton;
   return ZJOLT_RESULT_OK;
 }
 
@@ -510,6 +652,243 @@ ZJoltResult zjoltSkeletonPoseCalculateJointStates(ZJoltSkeletonPose *pose) {
 }
 
 //===----------------------------------------------------------------------===//
+// SkeletonMapper
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSkeletonMapperCreate(ZJoltSkeletonMapper **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // Not zjolt::Own: the count this hands the caller is the handle's `refs`,
+  // which starts at one, and Jolt's own count on the member stays at zero for
+  // as long as the handle lives. See The mapper handle, above.
+  ZJoltSkeletonMapper *fresh = zjolt::New<ZJoltSkeletonMapper>();
+  if (fresh == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
+                           "could not allocate a skeleton mapper");
+  }
+  *out = fresh;
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltSkeletonMapperAddRef(const ZJoltSkeletonMapper *mapper) {
+  if (mapper == nullptr) return;
+  mapper->refs.fetch_add(1, std::memory_order_relaxed);
+}
+
+void zjoltSkeletonMapperRelease(const ZJoltSkeletonMapper *mapper) {
+  if (mapper == nullptr) return;
+
+  // The same arithmetic and the same fence as zjoltRagdollRelease, for the
+  // same reason: whichever thread reaches zero must see every other holder's
+  // writes before it runs the destructor.
+  if (mapper->refs.fetch_sub(1, std::memory_order_release) != 1) return;
+  std::atomic_thread_fence(std::memory_order_acquire);
+  zjolt::Delete(const_cast<ZJoltSkeletonMapper *>(mapper));
+}
+
+uint32_t zjoltSkeletonMapperGetRefCount(const ZJoltSkeletonMapper *mapper) {
+  if (mapper == nullptr) return 0;
+  return mapper->refs.load(std::memory_order_relaxed);
+}
+
+ZJoltResult zjoltSkeletonMapperInitialize(
+    ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral1,
+    const ZJoltSkeletonPose *neutral2,
+    ZJoltSkeletonMapperCanMapJointFn can_map_joint, void *user) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(mapper, neutral1, neutral2)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  JPH::SkeletonMapper *m = Impl(mapper);
+  // Jolt asserts this rather than clearing: initialising twice appends a
+  // second set of mappings to the first, and Map would then apply both.
+  if (!m->GetMappings().empty() || !m->GetChains().empty() ||
+      !m->GetUnmapped().empty()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "the mapper has already been initialised");
+  }
+
+  const JPH::SkeletonPose *p1 = zjolt::ToJolt(neutral1);
+  const JPH::SkeletonPose *p2 = zjolt::ToJolt(neutral2);
+  const JPH::Skeleton *s1 = nullptr;
+  const JPH::Skeleton *s2 = nullptr;
+  ZJoltResult usable = NeutralPoseIsUsable(*p1, &s1);
+  if (usable != ZJOLT_RESULT_OK) return usable;
+  usable = NeutralPoseIsUsable(*p2, &s2);
+  if (usable != ZJOLT_RESULT_OK) return usable;
+
+  if (s1->GetJointCount() > s2->GetJointCount()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "neutral1 must be the pose of the LOW-detail skeleton, so it cannot "
+        "have more joints than neutral2");
+  }
+
+  // A null callback is the default rather than an error, so a caller who does
+  // not need one never has to write a shim that compares names.
+  //
+  // Nothing may unwind out of this one: it runs inside Jolt's own loop, and
+  // Jolt is compiled without exceptions. The C signature carries no way to
+  // report a failure for exactly that reason — a predicate that cannot answer
+  // has nothing to say beyond "these two joints are not the same joint".
+  JPH::SkeletonMapper::CanMapJoint can_map =
+      &JPH::SkeletonMapper::sDefaultCanMapJoint;
+  if (can_map_joint != nullptr) {
+    can_map = [can_map_joint, user](const JPH::Skeleton *skeleton1, int index1,
+                                    const JPH::Skeleton *skeleton2,
+                                    int index2) {
+      return can_map_joint(user, zjolt::ToC(skeleton1),
+                           static_cast<uint32_t>(index1),
+                           zjolt::ToC(skeleton2),
+                           static_cast<uint32_t>(index2));
+    };
+  }
+
+  m->Initialize(s1, p1->GetJointMatrices().data(), s2,
+                p2->GetJointMatrices().data(), can_map);
+  return ZJOLT_RESULT_OK;
+}
+
+uint32_t zjoltSkeletonMapperGetMappingCount(const ZJoltSkeletonMapper *mapper) {
+  if (mapper == nullptr) return 0;
+  return static_cast<uint32_t>(Impl(mapper)->GetMappings().size());
+}
+
+int32_t zjoltSkeletonMapperGetMappedJointIndex(
+    const ZJoltSkeletonMapper *mapper, uint32_t joint1_index) {
+  if (mapper == nullptr) return -1;
+  // A scan for a match, so an index past the end simply matches nothing.
+  return Impl(mapper)->GetMappedJointIdx(
+      static_cast<int>(joint1_index));
+}
+
+ZJoltResult zjoltSkeletonMapperLockTranslations(
+    ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral2,
+    const bool *locked, uint32_t count) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(mapper, neutral2, locked)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::SkeletonPose *p2 = zjolt::ToJolt(neutral2);
+  const JPH::Skeleton *s2 = nullptr;
+  const ZJoltResult usable = NeutralPoseIsUsable(*p2, &s2);
+  if (usable != ZJOLT_RESULT_OK) return usable;
+
+  if (count != p2->GetJointCount()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "count must equal the neutral pose's joint count");
+  }
+
+  // Rejected before anything is recorded, so a refused call leaves the
+  // mapper's locks exactly as they were. A root joint's lock would be
+  // resolved by SkeletonMapper::Map against parent joint -1
+  // (SkeletonMapper.cpp:209), which reads before the start of the pose.
+  for (uint32_t i = 0; i < count; ++i) {
+    if (locked[i] && s2->GetJoint(static_cast<int>(i)).mParentJointIndex < 0) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a joint with no parent cannot have its translation locked: its "
+          "translation is what positions the whole skeleton");
+    }
+  }
+
+  Impl(mapper)->LockTranslations(s2, locked,
+                                          p2->GetJointMatrices().data());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSkeletonMapperLockAllTranslations(
+    ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral2) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(mapper, neutral2)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::SkeletonMapper *m = Impl(mapper);
+  // Jolt reads mMappings[0] to find the joint to lock everything below.
+  if (m->GetMappings().empty()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the mapper has no mapped joints, so there is no joint to lock below; "
+        "call zjoltSkeletonMapperInitialize first");
+  }
+
+  const JPH::SkeletonPose *p2 = zjolt::ToJolt(neutral2);
+  const JPH::Skeleton *s2 = nullptr;
+  const ZJoltResult usable = NeutralPoseIsUsable(*p2, &s2);
+  if (usable != ZJOLT_RESULT_OK) return usable;
+
+  m->LockAllTranslations(s2, p2->GetJointMatrices().data());
+  return ZJOLT_RESULT_OK;
+}
+
+bool zjoltSkeletonMapperIsJointTranslationLocked(
+    const ZJoltSkeletonMapper *mapper, uint32_t joint2_index) {
+  if (mapper == nullptr) return false;
+  return Impl(mapper)->IsJointTranslationLocked(
+      static_cast<int>(joint2_index));
+}
+
+ZJoltResult zjoltSkeletonMapperMap(const ZJoltSkeletonMapper *mapper,
+                                   const ZJoltSkeletonPose *pose1,
+                                   ZJoltSkeletonPose *pose2) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(mapper, pose1, pose2)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::SkeletonMapper *m = Impl(mapper);
+  const JPH::SkeletonPose *p1 = zjolt::ToJolt(pose1);
+  JPH::SkeletonPose *p2 = zjolt::ToJolt(pose2);
+
+  const ZJoltResult fits = PosesFitMapper(*m, *p1, *p2);
+  if (fits != ZJOLT_RESULT_OK) return fits;
+
+  // Map wants pose 2's LOCAL joint matrices beside the model-space ones it
+  // writes, and a SkeletonPose stores neither: it keeps the local form as
+  // rotation/translation pairs and the model form as matrices. Building them
+  // here is what keeps a matrix array out of the ABI — the caller would
+  // otherwise have to hold one, in a type this header does not name.
+  JPH::Array<JPH::Mat44> local(p2->GetJointCount());
+  p2->CalculateLocalSpaceJointMatrices(local.data());
+
+  m->Map(p1->GetJointMatrices().data(), local.data(),
+         p2->GetJointMatrices().data());
+
+  // Jolt's Map does not do this, and leaving it out is the trap: a pose's
+  // joint matrices are relative to its root offset, and zjoltRagdollGetPose
+  // puts the ragdoll's WORLD position in the offset rather than in matrix 0
+  // (Ragdoll.cpp:599-613, so a float Mat44 never has to hold a double-precision
+  // world position). A target pose left at its own offset therefore draws the
+  // character at the origin, correctly posed.
+  p2->SetRootOffset(p1->GetRootOffset());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSkeletonMapperMapReverse(const ZJoltSkeletonMapper *mapper,
+                                          const ZJoltSkeletonPose *pose2,
+                                          ZJoltSkeletonPose *pose1) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(mapper, pose2, pose1)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::SkeletonMapper *m = Impl(mapper);
+  JPH::SkeletonPose *p1 = zjolt::ToJolt(pose1);
+  const JPH::SkeletonPose *p2 = zjolt::ToJolt(pose2);
+
+  const ZJoltResult fits = PosesFitMapper(*m, *p1, *p2);
+  if (fits != ZJOLT_RESULT_OK) return fits;
+
+  m->MapReverse(p2->GetJointMatrices().data(),
+                p1->GetJointMatrices().data());
+  // The root offset travels with the pose, as in zjoltSkeletonMapperMap.
+  p1->SetRootOffset(p2->GetRootOffset());
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
 // RagdollSettings
 //===----------------------------------------------------------------------===//
 
@@ -586,6 +965,50 @@ ZJoltResult zjoltRagdollSettingsBuild(ZJoltRagdollSettings *settings,
     }
   }
 
+  return ZJOLT_RESULT_OK;
+}
+
+const ZJoltSkeleton *zjoltRagdollSettingsGetSkeleton(
+    const ZJoltRagdollSettings *settings) {
+  if (settings == nullptr) return nullptr;
+  return zjolt::ToC(zjolt::ToJolt(settings)->GetSkeleton());
+}
+
+ZJoltResult zjoltRagdollSettingsCalculateConstraintPriorities(
+    ZJoltRagdollSettings *settings, uint32_t base_priority) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::RagdollSettings *s = zjolt::ToJolt(settings);
+  // Jolt walks mSkeleton to find each part's parent, dereferencing it
+  // unconditionally — the same unguarded read Stabilize makes.
+  const JPH::Skeleton *skeleton = s->GetSkeleton();
+  if (skeleton == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the settings have not been through zjoltRagdollSettingsBuild");
+  }
+  if (!skeleton->AreJointsCorrectlyOrdered()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the settings' skeleton has joints that are not correctly ordered");
+  }
+
+  const uint32_t parts = static_cast<uint32_t>(s->mParts.size());
+  if (parts == 0) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "the settings have no parts to prioritise");
+  }
+  // Jolt's own assertion, as a check: the walk hands the root a priority of
+  // base_priority plus the length of the longest chain below it, which is at
+  // most the part count.
+  if (base_priority + parts <= base_priority) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "base_priority plus the part count overflows a 32-bit priority");
+  }
+
+  s->CalculateConstraintPriorities(base_priority);
   return ZJOLT_RESULT_OK;
 }
 
@@ -733,6 +1156,67 @@ ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
 
   for (uint32_t i = 0; i < count; ++i) out_ids[i] = zjolt::ToC(ids[i]);
   return ZJOLT_RESULT_OK;
+}
+
+const ZJoltRagdollSettings *zjoltRagdollGetRagdollSettings(
+    const ZJoltRagdoll *ragdoll) {
+  const JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return nullptr;
+  return zjolt::ToC(impl->GetRagdollSettings());
+}
+
+uint32_t zjoltRagdollGetConstraintCount(const ZJoltRagdoll *ragdoll) {
+  const JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return 0;
+  return static_cast<uint32_t>(impl->GetConstraintCount());
+}
+
+ZJoltConstraint *zjoltRagdollGetConstraint(ZJoltRagdoll *ragdoll,
+                                           uint32_t index) {
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return nullptr;
+  // Jolt indexes mConstraints without a bounds check.
+  if (index >= static_cast<uint32_t>(impl->GetConstraintCount())) {
+    return nullptr;
+  }
+  return zjolt::ToC(impl->GetConstraint(static_cast<int>(index)));
+}
+
+ZJoltResult zjoltRagdollGetRootTransform(const ZJoltRagdoll *ragdoll,
+                                         ZJoltRVec3 *out_position,
+                                         ZJoltQuat *out_rotation,
+                                         bool lock_bodies) {
+  ZJOLT_ENTER(out_position,
+              zjolt::OutIsEmptyAs(out_rotation, ZJoltQuat{0, 0, 0, 1}));
+  if (!zjolt::Present(ragdoll, out_position, out_rotation)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::Ragdoll *impl = Impl(ragdoll);
+  // Jolt reads mBodyIDs[0] with no bounds check. A ragdoll spawned from
+  // settings built on a skeleton with no joints has none.
+  if (impl->GetBodyIDs().empty()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "the ragdoll has no parts, so it has no root");
+  }
+
+  JPH::RVec3 position = JPH::RVec3::sZero();
+  JPH::Quat rotation = JPH::Quat::sIdentity();
+  impl->GetRootTransform(position, rotation, lock_bodies);
+  *out_position = zjolt::ToCR(position);
+  *out_rotation = zjolt::ToC(rotation);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltRagdollSetGroupId(ZJoltRagdoll *ragdoll, uint32_t group_id,
+                            bool lock_bodies) {
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return;
+  // Jolt takes a multi-body write lock over mBodyIDs.data(), which is null
+  // for a ragdoll with no parts.
+  if (impl->GetBodyIDs().empty()) return;
+  impl->SetGroupID(static_cast<JPH::CollisionGroup::GroupID>(group_id),
+                   lock_bodies);
 }
 
 void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies) {

@@ -14,6 +14,7 @@ const core = @import("core.zig");
 // having to know which header a shared primitive came from.
 pub const BodyDesc = body.BodyDesc;
 pub const zjoltBodyDescInit = body.zjoltBodyDescInit;
+pub const Constraint = constraint.Constraint;
 pub const SwingType = constraint.SwingType;
 pub const Activation = core.Activation;
 pub const BodyId = core.BodyId;
@@ -93,6 +94,34 @@ pub extern fn zjoltSkeletonPoseCalculateJointMatrices(pose: *SkeletonPose) Resul
 
 pub extern fn zjoltSkeletonPoseCalculateJointStates(pose: *SkeletonPose) Result;
 
+pub const SkeletonMapper = opaque {};
+
+pub const SkeletonMapperCanMapJointFn = *const fn (user: ?*anyopaque, skeleton1: *const Skeleton, index1: u32, skeleton2: *const Skeleton, index2: u32) callconv(.c) bool;
+
+pub extern fn zjoltSkeletonMapperCreate(out: **SkeletonMapper) Result;
+
+pub extern fn zjoltSkeletonMapperAddRef(mapper: *const SkeletonMapper) void;
+
+pub extern fn zjoltSkeletonMapperRelease(mapper: *const SkeletonMapper) void;
+
+pub extern fn zjoltSkeletonMapperGetRefCount(mapper: *const SkeletonMapper) u32;
+
+pub extern fn zjoltSkeletonMapperInitialize(mapper: *SkeletonMapper, neutral1: *const SkeletonPose, neutral2: *const SkeletonPose, can_map_joint: ?SkeletonMapperCanMapJointFn, user: ?*anyopaque) Result;
+
+pub extern fn zjoltSkeletonMapperGetMappingCount(mapper: *const SkeletonMapper) u32;
+
+pub extern fn zjoltSkeletonMapperGetMappedJointIndex(mapper: *const SkeletonMapper, joint1_index: u32) i32;
+
+pub extern fn zjoltSkeletonMapperLockTranslations(mapper: *SkeletonMapper, neutral2: *const SkeletonPose, locked: [*]const bool, count: u32) Result;
+
+pub extern fn zjoltSkeletonMapperLockAllTranslations(mapper: *SkeletonMapper, neutral2: *const SkeletonPose) Result;
+
+pub extern fn zjoltSkeletonMapperIsJointTranslationLocked(mapper: *const SkeletonMapper, joint2_index: u32) bool;
+
+pub extern fn zjoltSkeletonMapperMap(mapper: *const SkeletonMapper, pose1: *const SkeletonPose, pose2: *SkeletonPose) Result;
+
+pub extern fn zjoltSkeletonMapperMapReverse(mapper: *const SkeletonMapper, pose2: *const SkeletonPose, pose1: *SkeletonPose) Result;
+
 pub extern fn zjoltRagdollSettingsCreate(out: **RagdollSettings) Result;
 
 pub extern fn zjoltRagdollSettingsAddRef(settings: *const RagdollSettings) void;
@@ -102,6 +131,10 @@ pub extern fn zjoltRagdollSettingsRelease(settings: *const RagdollSettings) void
 pub extern fn zjoltRagdollSettingsGetRefCount(settings: *const RagdollSettings) u32;
 
 pub extern fn zjoltRagdollSettingsBuild(settings: *RagdollSettings, skeleton: *const Skeleton, parts: [*]const RagdollPartDesc, part_count: u32) Result;
+
+pub extern fn zjoltRagdollSettingsGetSkeleton(settings: *const RagdollSettings) ?*const Skeleton;
+
+pub extern fn zjoltRagdollSettingsCalculateConstraintPriorities(settings: *RagdollSettings, base_priority: u32) Result;
 
 pub extern fn zjoltRagdollSettingsStabilize(settings: *RagdollSettings) bool;
 
@@ -122,6 +155,16 @@ pub extern fn zjoltRagdollAddToPhysicsSystem(ragdoll: *Ragdoll, activation: Acti
 pub extern fn zjoltRagdollRemoveFromPhysicsSystem(ragdoll: *Ragdoll, lock_bodies: bool) void;
 
 pub extern fn zjoltRagdollGetBodyIds(ragdoll: *const Ragdoll, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltRagdollGetRagdollSettings(ragdoll: *const Ragdoll) ?*const RagdollSettings;
+
+pub extern fn zjoltRagdollGetConstraintCount(ragdoll: *const Ragdoll) u32;
+
+pub extern fn zjoltRagdollGetConstraint(ragdoll: *Ragdoll, index: u32) ?*Constraint;
+
+pub extern fn zjoltRagdollGetRootTransform(ragdoll: *const Ragdoll, out_position: *RVec3, out_rotation: *Quat, lock_bodies: bool) Result;
+
+pub extern fn zjoltRagdollSetGroupId(ragdoll: *Ragdoll, group_id: u32, lock_bodies: bool) void;
 
 pub extern fn zjoltRagdollActivate(ragdoll: *Ragdoll, lock_bodies: bool) void;
 

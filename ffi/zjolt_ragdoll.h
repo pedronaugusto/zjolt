@@ -32,6 +32,13 @@
 // (zjoltSkeletonPoseGetJoints/SetJoints) plus its root offset. Convert
 // between the two with zjoltSkeletonPoseCalculateJointMatrices (before
 // driving) and zjoltSkeletonPoseCalculateJointStates (after reading back).
+//
+// ZJoltSkeletonMapper is the fourth piece, and it is what a ragdoll is
+// usually for: it maps a pose between the low-detail skeleton the ragdoll
+// simulates and the high-detail skeleton something is drawn from. It is the
+// one type here whose Jolt signatures are all Mat44 arrays, and for the same
+// reason as above it takes ZJoltSkeletonPose handles instead — a pose's
+// joint matrices ARE the array Jolt asked for.
 //===----------------------------------------------------------------------===//
 
 #ifndef ZJOLT_RAGDOLL_H_
@@ -56,6 +63,11 @@ typedef struct ZJoltSkeleton ZJoltSkeleton;
 /// One instance of a skeleton in a particular pose. NOT reference counted —
 /// a plain owning handle, created and destroyed like a job system.
 typedef struct ZJoltSkeletonPose ZJoltSkeletonPose;
+
+/// A correspondence between the joints of two skeletons, and the poses that
+/// can be pushed across it. Reference counted. Built once with
+/// zjoltSkeletonMapperInitialize and then read-only on every frame it maps.
+typedef struct ZJoltSkeletonMapper ZJoltSkeletonMapper;
 
 /// The reusable template a ragdoll is spawned from: a skeleton plus one body
 /// part per joint. Reference counted; see the file comment above for why this
@@ -182,6 +194,180 @@ ZJOLT_API ZJoltResult zjoltSkeletonPoseCalculateJointStates(
     ZJoltSkeletonPose *pose);
 
 //===----------------------------------------------------------------------===//
+// SkeletonMapper
+//
+// One skeleton drives another. The ragdoll simulates a dozen-odd joints; the
+// mesh is skinned to a hundred. zjoltSkeletonMapperInitialize works out which
+// joints of the two correspond, from their NEUTRAL poses, and then
+// zjoltSkeletonMapperMap pushes a simulated pose onto the render skeleton
+// every frame — and zjoltSkeletonMapperMapReverse pushes an animated pose the
+// other way, which is what drives a ragdoll from animation before it is let
+// go.
+//
+// Every pose here is a ZJoltSkeletonPose, and WHICH of a pose's two forms is
+// read differs per call, so it is spelled out on each one below. Briefly: a
+// pose carries per-joint local rotation/translation (zjoltSkeletonPoseSetJoints
+// and GetJoints) and, beside it, a flattened model-space form
+// (zjoltSkeletonPoseCalculateJointMatrices builds it from the first,
+// CalculateJointStates rebuilds the first from it). The mapper works in the
+// model-space form, because that is the only space in which two skeletons of
+// different shape mean the same thing.
+//===----------------------------------------------------------------------===//
+
+/// Whether joint `index1` of `skeleton1` is the same joint as `index2` of
+/// `skeleton2`. Called during zjoltSkeletonMapperInitialize only, once per
+/// candidate pair, with no lock held and nothing else in flight.
+///
+/// Pass NULL for Jolt's own default, which is that the two joint NAMES are
+/// equal. Supply one when the two skeletons name their joints differently, or
+/// when a name appears twice and the first match is the wrong one.
+///
+/// Nothing may unwind out of this — see the note on callbacks in BINDING.md.
+typedef bool (*ZJoltSkeletonMapperCanMapJointFn)(void *user,
+                                                 const ZJoltSkeleton *skeleton1,
+                                                 uint32_t index1,
+                                                 const ZJoltSkeleton *skeleton2,
+                                                 uint32_t index2);
+
+/// Creates an uninitialised mapper — call zjoltSkeletonMapperInitialize next.
+ZJOLT_API ZJoltResult zjoltSkeletonMapperCreate(ZJoltSkeletonMapper **out);
+
+ZJOLT_API void zjoltSkeletonMapperAddRef(const ZJoltSkeletonMapper *mapper);
+ZJOLT_API void zjoltSkeletonMapperRelease(const ZJoltSkeletonMapper *mapper);
+ZJOLT_API uint32_t zjoltSkeletonMapperGetRefCount(
+    const ZJoltSkeletonMapper *mapper);
+
+/// Works out the correspondence between the two skeletons from their neutral
+/// poses, and is the call every other one below depends on.
+///
+/// `neutral1` is the LOW-detail skeleton — the one the ragdoll simulates —
+/// and `neutral2` the HIGH-detail one. Jolt requires that ordering (it
+/// assumes every joint of skeleton 1 maps to one of skeleton 2, and that
+/// skeleton 2 is skeleton 1's hierarchy with extra joints between, above or
+/// below); a `neutral1` with more joints than `neutral2` is refused rather
+/// than left to map to nothing.
+///
+/// Both poses must be in MODEL space, meaning
+/// zjoltSkeletonPoseCalculateJointMatrices has been called on each since its
+/// joints were last set. That cannot be checked — a pose's matrices are
+/// allocated by zjoltSkeletonPoseSetSkeleton and are uninitialised until
+/// something writes them — and getting it wrong produces a mapper that maps
+/// to nonsense rather than an error. The two neutral poses should also agree
+/// as closely as possible: every mapped joint's transform is stored as the
+/// difference between them, and a difference that is really a mistake is
+/// applied to every frame afterwards.
+///
+/// The poses are read during this call only; neither is retained.
+///
+/// Refuses (ZJOLT_RESULT_INVALID_ARGUMENT) a mapper that has already been
+/// initialised, a pose with no skeleton assigned, a skeleton whose joints are
+/// not correctly ordered — zjoltSkeletonMapperMap requires a parent to come
+/// before its children — and `neutral1` having more joints than `neutral2`.
+ZJOLT_API ZJoltResult zjoltSkeletonMapperInitialize(
+    ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral1,
+    const ZJoltSkeletonPose *neutral2,
+    ZJoltSkeletonMapperCanMapJointFn can_map_joint, void *user);
+
+/// How many joints of skeleton 1 were matched one-to-one with a joint of
+/// skeleton 2. 0 before zjoltSkeletonMapperInitialize, and 0 after it if
+/// nothing matched — which is the failure worth checking for, because a
+/// mapper that matched nothing is not an error, it just maps nothing.
+ZJOLT_API uint32_t zjoltSkeletonMapperGetMappingCount(
+    const ZJoltSkeletonMapper *mapper);
+
+/// The joint of skeleton 2 that joint `joint1_index` of skeleton 1 drives, or
+/// -1 if that joint was not matched (or `mapper` is NULL).
+ZJOLT_API int32_t zjoltSkeletonMapperGetMappedJointIndex(
+    const ZJoltSkeletonMapper *mapper, uint32_t joint1_index);
+
+/// Pins the translation of the named joints of skeleton 2 to their neutral
+/// pose, so that only their rotation follows the ragdoll.
+///
+/// A constraint is never perfectly rigid, so a ragdoll under load stretches
+/// at the joints; mapping that stretch onto the render skeleton stretches the
+/// mesh with it. Locking removes the stretch at the cost of the drawn
+/// skeleton no longer being exactly where the simulated one is.
+///
+/// `locked` has one bool per joint of `neutral2`, and `count` must equal its
+/// joint count exactly. `neutral2` is the same MODEL-space neutral pose
+/// zjoltSkeletonMapperInitialize was given, and is read during this call
+/// only.
+///
+/// A joint with NO PARENT is refused rather than locked: its translation is
+/// what positions the whole ragdoll, and Jolt's mapping step would resolve
+/// its lock against parent joint -1. Jolt's own LockAllTranslations excludes
+/// the root for the first of those reasons; this refuses it for the second.
+///
+/// Calls accumulate — locking is additive, and there is no unlock.
+ZJOLT_API ZJoltResult zjoltSkeletonMapperLockTranslations(
+    ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral2,
+    const bool *locked, uint32_t count);
+
+/// zjoltSkeletonMapperLockTranslations for every joint of skeleton 2 below
+/// the topmost mapped joint, that joint itself excluded. The usual choice:
+/// everything the ragdoll drives stops stretching, and the ragdoll is still
+/// free to move as a whole.
+///
+/// Refuses a mapper that has not been through zjoltSkeletonMapperInitialize —
+/// there is no topmost mapped joint before that, which Jolt only asserts.
+ZJOLT_API ZJoltResult zjoltSkeletonMapperLockAllTranslations(
+    ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral2);
+
+/// Whether zjoltSkeletonMapperLockTranslations or LockAllTranslations locked
+/// joint `joint2_index` of skeleton 2. False if `mapper` is NULL.
+ZJOLT_API bool zjoltSkeletonMapperIsJointTranslationLocked(
+    const ZJoltSkeletonMapper *mapper, uint32_t joint2_index);
+
+/// Pushes `pose1` onto `pose2`: the frame call.
+///
+/// Reads `pose1`'s MODEL-space joint matrices — so the pose
+/// zjoltRagdollGetPose just filled in, with no conversion in between — and
+/// `pose2`'s LOCAL joint rotations/translations, the ones
+/// zjoltSkeletonPoseSetJoints writes. Writes `pose2`'s MODEL-space joint
+/// matrices. Read them back with zjoltSkeletonPoseCalculateJointStates
+/// followed by zjoltSkeletonPoseGetJoints.
+///
+/// `pose2`'s local joints are read because joints of skeleton 2 that the
+/// ragdoll does not drive have to come from somewhere: they keep their own
+/// local transform relative to whatever their parent ended up at. So `pose2`
+/// carries the animation, and this overwrites the part of it the ragdoll owns.
+///
+/// `pose1`'s ROOT OFFSET is copied onto `pose2` as well. Jolt's own Map does
+/// not do that, and leaving it out is the trap it looks like: a pose's joint
+/// matrices are relative to its root offset, and zjoltRagdollGetPose puts the
+/// ragdoll's world position in the offset rather than in the first matrix, so
+/// that a 32-bit matrix never has to hold a double-precision world position.
+/// A target pose left at its own offset draws the character correctly posed,
+/// at the origin. Set a different offset afterwards if that is really wanted.
+///
+/// Both poses must belong to the skeletons zjoltSkeletonMapperInitialize was
+/// given. What is actually checked is that every joint index the mapper holds
+/// is inside both poses, which is what stops this writing past the end of one;
+/// a pose of the wrong skeleton with enough joints maps to nonsense rather
+/// than being caught.
+ZJOLT_API ZJoltResult zjoltSkeletonMapperMap(const ZJoltSkeletonMapper *mapper,
+                                             const ZJoltSkeletonPose *pose1,
+                                             ZJoltSkeletonPose *pose2);
+
+/// The other direction: reads `pose2`'s MODEL-space joint matrices and writes
+/// `pose1`'s. What drives a ragdoll from animation — sample the animation
+/// into `pose2`, run zjoltSkeletonPoseCalculateJointMatrices on it, map back,
+/// then zjoltRagdollDriveToPoseUsingKinematics or SetPose with `pose1`.
+///
+/// `pose2`'s root offset travels onto `pose1` too, as in zjoltSkeletonMapperMap.
+///
+/// Only the joints that mapped one-to-one are written; chains and unmapped
+/// joints are not, because the correspondence they describe does not run
+/// backwards. Every joint of skeleton 1 normally maps, which is the case Jolt
+/// assumes — but a joint of `pose1` that did NOT map keeps whatever matrix it
+/// already held, which is uninitialised memory in a pose nothing has written.
+/// Check zjoltSkeletonMapperGetMappingCount against `pose1`'s joint count if
+/// that matters.
+ZJOLT_API ZJoltResult zjoltSkeletonMapperMapReverse(
+    const ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *pose2,
+    ZJoltSkeletonPose *pose1);
+
+//===----------------------------------------------------------------------===//
 // RagdollSettings
 //===----------------------------------------------------------------------===//
 
@@ -242,6 +428,33 @@ ZJOLT_API ZJoltResult zjoltRagdollSettingsBuild(ZJoltRagdollSettings *settings,
                                                 const ZJoltSkeleton *skeleton,
                                                 const ZJoltRagdollPartDesc *parts,
                                                 uint32_t part_count);
+
+/// The skeleton zjoltRagdollSettingsBuild was given. Borrowed, and NOT
+/// AddRef'd — the settings' own reference keeps it alive. NULL if `settings`
+/// is NULL or has not been built.
+///
+/// With zjoltRagdollGetRagdollSettings, this is the route from a live ragdoll
+/// to the joint names behind the ids zjoltRagdollGetBodyIds hands back.
+ZJOLT_API const ZJoltSkeleton *zjoltRagdollSettingsGetSkeleton(
+    const ZJoltRagdollSettings *settings);
+
+/// Gives each part's constraint a solver priority, counting UP toward the
+/// root: a joint nearer the root is solved before one nearer a leaf, so a
+/// shoulder under load stops fighting the wrist hanging off it. Call it after
+/// zjoltRagdollSettingsBuild, like Stabilize; a ragdoll spawned afterwards
+/// carries the priorities, and one spawned before does not.
+///
+/// `base_priority` is the LOWEST priority used, given to the leaf-most
+/// constraints; everything else counts up from there. 0 unless the ragdoll's
+/// constraints have to sort against other constraints in the same system,
+/// which is the only reason to pass anything else — see
+/// zjoltConstraintSetPriority for what the number means.
+///
+/// Fails with ZJOLT_RESULT_INVALID_ARGUMENT if the settings have not been
+/// built, if the skeleton's joints are not correctly ordered, or if
+/// `base_priority` plus the part count would overflow.
+ZJOLT_API ZJoltResult zjoltRagdollSettingsCalculateConstraintPriorities(
+    ZJoltRagdollSettings *settings, uint32_t base_priority);
 
 /// Rebalances part mass and inertia along parent-child chains so the solver
 /// stays stable. Returns false if a chain's inertia tensor could not be
@@ -346,10 +559,80 @@ ZJOLT_API void zjoltRagdollRemoveFromPhysicsSystem(ZJoltRagdoll *ragdoll,
 /// The ids stay valid until the ragdoll's last reference drops; they name
 /// bodies the ragdoll owns, so do not destroy one through
 /// zjoltBodyInterfaceDestroyBody.
+///
+/// These ids are also how a ragdoll gets a constraint that is NOT one of the
+/// parent-child joints — Jolt calls those additional constraints, and they are
+/// what closes a kinematic loop: two hands tied together, a strap across a
+/// chest. Build one with any zjoltConstraintCreate* between two of these ids
+/// and zjoltConstraintAdd it, which offers the whole constraint zoo rather
+/// than only the swing-twist a ragdoll part joint is. It is yours, though, not
+/// the ragdoll's: zjoltRagdollAddToPhysicsSystem and
+/// RemoveFromPhysicsSystem do not move it, zjoltRagdollGetConstraintCount does
+/// not count it, and it must be removed before the ragdoll's last release
+/// destroys the bodies underneath it.
 ZJOLT_API ZJoltResult zjoltRagdollGetBodyIds(const ZJoltRagdoll *ragdoll,
                                              ZJoltBodyId *out_ids,
                                              uint32_t capacity,
                                              uint32_t *out_count);
+
+/// The settings this ragdoll was spawned from. Borrowed, and NOT AddRef'd —
+/// the ragdoll's own reference keeps them alive for as long as it does. NULL
+/// if `ragdoll` is NULL.
+ZJOLT_API const ZJoltRagdollSettings *zjoltRagdollGetRagdollSettings(
+    const ZJoltRagdoll *ragdoll);
+
+/// How many constraints the ragdoll owns: one per part that has a parent, so
+/// one fewer than zjoltRagdollGetBodyIds reports for a single-rooted
+/// skeleton. 0 if `ragdoll` is NULL.
+ZJOLT_API uint32_t zjoltRagdollGetConstraintCount(const ZJoltRagdoll *ragdoll);
+
+/// One of them, NULL if `index` is past the end or `ragdoll` is NULL.
+/// Borrowed, and NOT AddRef'd: it is valid until the ragdoll's last reference
+/// drops, and the ragdoll owns it — do not zjoltConstraintRelease it, and do
+/// not zjoltConstraintRemove it from the system by hand
+/// (zjoltRagdollRemoveFromPhysicsSystem moves the whole ragdoll as one batch,
+/// and a constraint already removed is removed twice). Call zjoltConstraintAddRef
+/// if it has to outlive your reference to the ragdoll.
+///
+/// Constraints are in joint-index order, skipping the root — so for a
+/// skeleton whose joints are correctly ordered, constraint `i` is the one
+/// attaching the `i`-th non-root joint to its parent.
+///
+/// This is what makes the zjoltConstraint* surface reachable on a ragdoll:
+/// retuning one joint's motor (zjoltSwingTwistConstraintSetSwingMotorSettings),
+/// disabling a joint (zjoltConstraintSetEnabled), or reading how much force a
+/// joint is taking (zjoltSwingTwistConstraintGetTotalLambdaPosition) to break
+/// a limb off. Every ragdoll part joint this ABI builds is a swing-twist
+/// constraint.
+ZJOLT_API ZJoltConstraint *zjoltRagdollGetConstraint(ZJoltRagdoll *ragdoll,
+                                                     uint32_t index);
+
+/// Where the ragdoll is: the world transform of the body built from the
+/// skeleton's first joint. What a camera, a footstep or a distance cull wants
+/// without reading every part back.
+///
+/// Fails with ZJOLT_RESULT_INVALID_ARGUMENT for a ragdoll with no parts (a
+/// skeleton with no joints), which Jolt itself would index past. When the
+/// body lock fails instead — the one silent path Jolt keeps here — the
+/// outputs are a zero position and an identity rotation, and the call still
+/// reports success, because Jolt does not say which happened.
+ZJOLT_API ZJoltResult zjoltRagdollGetRootTransform(const ZJoltRagdoll *ragdoll,
+                                                   ZJoltRVec3 *out_position,
+                                                   ZJoltQuat *out_rotation,
+                                                   bool lock_bodies);
+
+/// Moves every part into collision group `group_id`, keeping each part's
+/// sub-group id and group filter.
+///
+/// The id zjoltRagdollSettingsCreateRagdoll was given, changed afterwards.
+/// Two ragdolls spawned from settings that share a
+/// zjoltRagdollSettingsDisableParentChildCollisions filter must not hold the
+/// same id — a filter is only ever consulted within one group id, so sharing
+/// one makes every part of one ragdoll pass through every part of the other.
+/// So this is the call for reusing a pooled ragdoll under a fresh id, and the
+/// call that silently breaks a pool if the fresh id is not fresh.
+ZJOLT_API void zjoltRagdollSetGroupId(ZJoltRagdoll *ragdoll, uint32_t group_id,
+                                      bool lock_bodies);
 
 ZJOLT_API void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies);
 ZJOLT_API bool zjoltRagdollIsActive(const ZJoltRagdoll *ragdoll,
