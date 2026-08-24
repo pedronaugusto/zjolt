@@ -54,6 +54,7 @@ const debug_mod = @import("debug.zig");
 const ragdoll_mod = @import("ragdoll.zig");
 const hair_mod = @import("hair.zig");
 const constraint_mod = @import("constraint.zig");
+const scene_mod = @import("scene.zig");
 
 //=============================================================================
 // Public surface
@@ -156,6 +157,10 @@ pub const max_sub_groups = group_mod.max_sub_groups;
 
 pub const State = state_mod.State;
 pub const StateRecorderState = state_mod.RecorderState;
+
+pub const Scene = scene_mod.Scene;
+pub const SceneConstraint = scene_mod.SceneConstraint;
+pub const scene_world_body_index = scene_mod.world_body_index;
 
 pub const SoftBodySharedSettings = softbody_mod.SharedSettings;
 pub const SoftBodyDesc = softbody_mod.Desc;
@@ -427,6 +432,7 @@ test {
     _ = batch_mod;
     _ = group_mod;
     _ = state_mod;
+    _ = scene_mod;
     _ = softbody_mod;
     _ = debug_mod;
     _ = hair_mod;
