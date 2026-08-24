@@ -44,16 +44,6 @@ ZJoltResult Finish(JPH::Shape::ShapeResult &result, ZJoltShape **out) {
   return ZJOLT_RESULT_OK;
 }
 
-/// Guard shared by every constructor. `out` is cleared first so a caller that
-/// ignores the result never reads an uninitialised handle.
-ZJoltResult Begin(ZJoltShape **out) {
-  zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
-  return ZJOLT_RESULT_OK;
-}
-
 ZJoltShapeSubType ToCSubType(JPH::EShapeSubType sub_type) {
   switch (sub_type) {
     case JPH::EShapeSubType::Sphere:
@@ -91,9 +81,8 @@ extern "C" {
 ZJoltResult zjoltShapeCreateBox(const ZJoltVec3 *half_extent,
                                 float convex_radius, float density,
                                 ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (half_extent == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(half_extent, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BoxShapeSettings settings(zjolt::ToJolt(*half_extent), convex_radius);
   if (density > 0.0f) settings.SetDensity(density);
@@ -103,8 +92,8 @@ ZJoltResult zjoltShapeCreateBox(const ZJoltVec3 *half_extent,
 
 ZJoltResult zjoltShapeCreateSphere(float radius, float density,
                                    ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::SphereShapeSettings settings(radius);
   if (density > 0.0f) settings.SetDensity(density);
@@ -114,8 +103,8 @@ ZJoltResult zjoltShapeCreateSphere(float radius, float density,
 
 ZJoltResult zjoltShapeCreateCapsule(float half_height_of_cylinder, float radius,
                                     float density, ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::CapsuleShapeSettings settings(half_height_of_cylinder, radius);
   if (density > 0.0f) settings.SetDensity(density);
@@ -128,8 +117,8 @@ ZJoltResult zjoltShapeCreateConvexHull(const ZJoltVec3 *points,
                                        float max_convex_radius,
                                        float hull_tolerance, float density,
                                        ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (points == nullptr || num_points == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a convex hull needs at least one point");
@@ -157,8 +146,8 @@ ZJoltResult zjoltShapeCreateMesh(const ZJoltVec3 *vertices,
                                  uint32_t num_triangles,
                                  uint32_t max_triangles_per_leaf,
                                  ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (vertices == nullptr || indices == nullptr || num_vertices == 0 ||
       num_triangles == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -202,9 +191,8 @@ ZJoltResult zjoltShapeCreateMesh(const ZJoltVec3 *vertices,
 
 ZJoltResult zjoltShapeCreateScaled(const ZJoltShape *inner,
                                    const ZJoltVec3 *scale, ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (inner == nullptr || scale == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(inner, scale, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::ScaledShapeSettings settings(zjolt::ToJolt(inner),
                                     zjolt::ToJolt(*scale));
@@ -216,9 +204,8 @@ ZJoltResult zjoltShapeCreateRotatedTranslated(const ZJoltShape *inner,
                                               const ZJoltVec3 *translation,
                                               const ZJoltQuat *rotation,
                                               ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (inner == nullptr || translation == nullptr || rotation == nullptr)
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(inner, translation, rotation, out))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::RotatedTranslatedShapeSettings settings(
@@ -231,9 +218,8 @@ ZJoltResult zjoltShapeCreateRotatedTranslated(const ZJoltShape *inner,
 ZJoltResult zjoltShapeCreateOffsetCenterOfMass(const ZJoltShape *inner,
                                                const ZJoltVec3 *offset,
                                                ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
-  if (inner == nullptr || offset == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(inner, offset, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::OffsetCenterOfMassShapeSettings settings(zjolt::ToJolt(*offset),
                                                 zjolt::ToJolt(inner));
@@ -405,9 +391,8 @@ uint32_t JoltVersionStamp() {
 
 ZJoltResult zjoltShapeSave(const ZJoltShape *shape, void *buffer,
                            size_t capacity, size_t *out_size) {
-  zjolt::ClearError();
-  if (shape == nullptr || out_size == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
+  ZJOLT_ENTER(out_size);
+  if (!zjolt::Present(shape, out_size)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   uint8_t *bytes = static_cast<uint8_t *>(buffer);
 
@@ -443,8 +428,8 @@ ZJoltResult zjoltShapeSave(const ZJoltShape *shape, void *buffer,
 
 ZJoltResult zjoltShapeRestore(const void *data, size_t size,
                               ZJoltShape **out) {
-  const ZJoltResult ready = Begin(out);
-  if (ready != ZJOLT_RESULT_OK) return ready;
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (data == nullptr || size == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "no data to restore a shape from");

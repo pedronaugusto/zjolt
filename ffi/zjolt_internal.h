@@ -144,6 +144,72 @@ void HandleCreated();
 void HandleDestroyed();
 
 //===----------------------------------------------------------------------===//
+// Entry-point guards
+//
+// Every entry point that can fail opens the same way, and the order is not
+// arbitrary:
+//
+//   1. clear this thread's error detail, so a stale message never accompanies
+//      a fresh failure;
+//   2. clear the out-parameters, BEFORE anything can fail, so a caller that
+//      ignores the result never reads uninitialised storage;
+//   3. refuse the call if the library is not up.
+//
+// Which arguments are REQUIRED is the one part that is not uniform, so that
+// check stays at the entry point, written as a list — `Present(a, b, out)`.
+//
+// This is one thing rather than a habit repeated per translation unit because
+// the surface is growing to several hundred entry points, and a preamble that
+// can be half-written is a preamble that eventually will be.
+//===----------------------------------------------------------------------===//
+
+/// Zeroes one out-parameter, ignoring a NULL. A pointer becomes NULL, a struct
+/// becomes all-zero, a scalar becomes 0.
+template <typename T>
+inline void ClearOut(T *out) {
+  if (out != nullptr) *out = T{};
+}
+
+/// An out-parameter paired with the value that means "nothing was written",
+/// for the cases where that value is not zero.
+///
+/// There is exactly one such case today and it is a trap worth naming: a body
+/// id's empty value is ZJOLT_BODY_ID_INVALID, and 0 is a perfectly good body.
+/// Zeroing one on failure would hand back a reference to whichever body was
+/// created first.
+template <typename T>
+struct EmptyOut {
+  T *out;
+  T empty;
+};
+
+template <typename T>
+inline EmptyOut<T> OutIsEmptyAs(T *out, T empty) {
+  return EmptyOut<T>{out, empty};
+}
+
+template <typename T>
+inline void ClearOut(EmptyOut<T> out) {
+  if (out.out != nullptr) *out.out = out.empty;
+}
+
+/// Steps 1 to 3 above. Pass every out-parameter the entry point writes.
+template <typename... Outs>
+[[nodiscard]] inline ZJoltResult Enter(Outs... outs) {
+  ClearError();
+  (ClearOut(outs), ...);
+  if (!IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
+  return ZJOLT_RESULT_OK;
+}
+
+/// True when every pointer given is non-NULL, so the required arguments of an
+/// entry point read as a list rather than as a chain of `|| == nullptr`.
+template <typename... Ptrs>
+[[nodiscard]] inline bool Present(const Ptrs *...ptrs) {
+  return ((ptrs != nullptr) && ...);
+}
+
+//===----------------------------------------------------------------------===//
 // Scalar and vector conversion
 //
 // Jolt's Vec3 is a 16-byte SIMD register with a padding lane; the ABI's is
@@ -363,6 +429,18 @@ class ConstStreamIn final : public JPH::StreamIn {
 };
 
 }  // namespace zjolt
+
+/// Opens a result-returning entry point. Returns FROM THE CALLER when the
+/// library is not up — which is the reason it is a macro and not just a call.
+///
+/// Its arguments are the entry point's out-parameters, cleared before the
+/// check that can fail. Wrap one in zjolt::OutIsEmptyAs when its empty value
+/// is not zero.
+#define ZJOLT_ENTER(...)                                          \
+  do {                                                            \
+    const ZJoltResult zjolt_entered_ = zjolt::Enter(__VA_ARGS__); \
+    if (zjolt_entered_ != ZJOLT_RESULT_OK) return zjolt_entered_; \
+  } while (false)
 
 //===----------------------------------------------------------------------===//
 // Handle types zjolt owns (global namespace — they must match the C tag names)

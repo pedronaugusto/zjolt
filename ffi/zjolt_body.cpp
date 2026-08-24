@@ -65,11 +65,10 @@ template <typename Visitor>
 ZJoltResult VisitBodies(const ZJoltPhysicsSystem *system,
                         const ZJoltBodyId *ids, uint32_t count,
                         uint32_t *out_missing, Visitor visit) {
-  zjolt::ClearError();
-  if (out_missing != nullptr) *out_missing = 0;
-  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(out_missing);
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (count == 0) return ZJOLT_RESULT_OK;
-  if (ids == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::Present(ids)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   const JPH::BodyLockInterface &lock_interface =
       system->system.GetBodyLockInterface();
@@ -191,10 +190,8 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
 
 ZJoltResult zjoltBodyCreate(ZJoltPhysicsSystem *system,
                             const ZJoltBodyDesc *desc, ZJoltBodyId *out) {
-  zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  *out = ZJOLT_BODY_ID_INVALID;
-  if (system == nullptr || desc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out, (ZJoltBodyId)ZJOLT_BODY_ID_INVALID));
+  if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyCreationSettings settings;
   const ZJoltResult built = BuildCreationSettings(*desc, &settings);
