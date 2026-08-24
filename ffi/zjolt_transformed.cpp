@@ -193,6 +193,63 @@ JPH::RayCastSettings MakeRayCastSettings(const ZJoltRayCastSettings *settings) {
   return out;
 }
 
+JPH::EActiveEdgeMode ToJoltActiveEdgeMode(ZJoltActiveEdgeMode mode) {
+  return mode == ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_WITH_ALL
+             ? JPH::EActiveEdgeMode::CollideWithAll
+             : JPH::EActiveEdgeMode::CollideOnlyWithActive;
+}
+
+JPH::ECollectFacesMode ToJoltCollectFacesMode(ZJoltCollectFacesMode mode) {
+  return mode == ZJOLT_COLLECT_FACES_MODE_COLLECT_FACES
+             ? JPH::ECollectFacesMode::CollectFaces
+             : JPH::ECollectFacesMode::NoFaces;
+}
+
+/// TWINS OF zjolt_query.cpp's. Both files translate the same two public
+/// structs, and neither can see the other's anonymous namespace — the same
+/// trade MakeRayCastSettings above is already making, and the reason this file
+/// opens by saying so. A field added to ZJoltCollideShapeSettings or
+/// ZJoltShapeCastSettings has to be added in both places or the per-shape
+/// queries here quietly ignore it.
+///
+/// A NULL settings pointer means Jolt's own defaults, which is what an
+/// untouched settings object already is.
+JPH::CollideShapeSettings MakeCollideShapeSettings(
+    const ZJoltCollideShapeSettings *settings) {
+  JPH::CollideShapeSettings out;
+  if (settings == nullptr) return out;
+  out.mActiveEdgeMode = ToJoltActiveEdgeMode(settings->active_edge_mode);
+  out.mCollectFacesMode = ToJoltCollectFacesMode(settings->collect_faces_mode);
+  out.mCollisionTolerance = settings->collision_tolerance;
+  out.mPenetrationTolerance = settings->penetration_tolerance;
+  out.mActiveEdgeMovementDirection =
+      zjolt::ToJolt(settings->active_edge_movement_direction);
+  out.mMaxSeparationDistance = settings->max_separation_distance;
+  out.mBackFaceMode = ToJoltBackFaceMode(settings->back_face_mode);
+  return out;
+}
+
+/// @see MakeCollideShapeSettings for the twin this is half of.
+JPH::ShapeCastSettings MakeShapeCastSettings(
+    const ZJoltShapeCastSettings *settings) {
+  JPH::ShapeCastSettings out;
+  if (settings == nullptr) return out;
+  out.mActiveEdgeMode = ToJoltActiveEdgeMode(settings->active_edge_mode);
+  out.mCollectFacesMode = ToJoltCollectFacesMode(settings->collect_faces_mode);
+  out.mCollisionTolerance = settings->collision_tolerance;
+  out.mPenetrationTolerance = settings->penetration_tolerance;
+  out.mActiveEdgeMovementDirection =
+      zjolt::ToJolt(settings->active_edge_movement_direction);
+  out.mExtraConvexRadius = settings->extra_convex_radius;
+  out.mBackFaceModeTriangles =
+      ToJoltBackFaceMode(settings->back_face_mode_triangles);
+  out.mBackFaceModeConvex = ToJoltBackFaceMode(settings->back_face_mode_convex);
+  out.mUseShrunkenShapeAndConvexRadius =
+      settings->use_shrunken_shape_and_convex_radius;
+  out.mReturnDeepestPoint = settings->return_deepest_point;
+  return out;
+}
+
 zjolt::ShapeFilterAdapter MakeShapeFilter(const ZJoltShapeFilter *filter) {
   return zjolt::ShapeFilterAdapter(filter != nullptr ? *filter
                                                       : ZJoltShapeFilter{});
@@ -466,27 +523,31 @@ ZJoltResult zjoltTransformedShapeCollidePointAll(
 ZJoltResult zjoltTransformedShapeCollideShapeAll(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
-    const ZJoltQuat *rotation, float max_separation_distance,
-    const ZJoltRVec3 *base_offset, const ZJoltShapeFilter *filter,
+    const ZJoltQuat *rotation, const ZJoltRVec3 *base_offset,
+    const ZJoltCollideShapeSettings *settings, const ZJoltShapeFilter *filter,
     ZJoltCollideShapeHit *out_hits, uint32_t capacity, uint32_t *out_count) {
   ZJOLT_ENTER(out_count);
   if (!zjolt::Present(ts, shape, position, rotation, base_offset, out_count))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::CollideShapeSettings jolt_settings =
+      MakeCollideShapeSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   const JPH::Vec3 shape_scale =
       scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
   const JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(
       zjolt::ToJoltRotation(*rotation), zjolt::ToJoltR(*position));
 
-  JPH::CollideShapeSettings settings;
-  settings.mMaxSeparationDistance = max_separation_distance;
-
   zjolt::ShapeFilterAdapter shape_filter = MakeShapeFilter(filter);
   auto collector = MakeStream<JPH::CollideShapeCollector, ZJoltCollideShapeHit>(
       ProjectCollideHit{&ts->impl},
       FillBuffer<ZJoltCollideShapeHit>{out_hits, capacity});
-  ts->impl.CollideShape(zjolt::ToJolt(shape), shape_scale, transform, settings,
-                        zjolt::ToJoltR(*base_offset), collector, shape_filter);
+  ts->impl.CollideShape(zjolt::ToJolt(shape), shape_scale, transform,
+                        jolt_settings, zjolt::ToJoltR(*base_offset), collector,
+                        shape_filter);
 
   return ReportCount(collector.sink().count, out_hits, capacity, out_count);
 }
@@ -495,13 +556,19 @@ ZJoltResult zjoltTransformedShapeCastShapeClosest(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltRVec3 *base_offset, const ZJoltShapeFilter *filter,
-    ZJoltShapeCastHit *out_hit, bool *out_hit_any) {
+    const ZJoltRVec3 *base_offset, const ZJoltShapeCastSettings *settings,
+    const ZJoltShapeFilter *filter, ZJoltShapeCastHit *out_hit,
+    bool *out_hit_any) {
   ZJOLT_ENTER(out_hit, out_hit_any);
   if (!zjolt::Present(ts, shape, position, rotation, direction, base_offset,
                       out_hit, out_hit_any)) {
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
+
+  const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   const JPH::Vec3 shape_scale =
       scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
@@ -515,8 +582,8 @@ ZJoltResult zjoltTransformedShapeCastShapeClosest(
   auto collector = MakeStream<JPH::CastShapeCollector, ZJoltShapeCastHit>(
       ProjectShapeCastHit{&ts->impl},
       KeepBest<ZJoltShapeCastHit>{out_hit, &had_hit});
-  ts->impl.CastShape(cast, JPH::ShapeCastSettings(),
-                     zjolt::ToJoltR(*base_offset), collector, shape_filter);
+  ts->impl.CastShape(cast, jolt_settings, zjolt::ToJoltR(*base_offset),
+                     collector, shape_filter);
 
   *out_hit_any = had_hit;
   return ZJOLT_RESULT_OK;
@@ -526,13 +593,19 @@ ZJoltResult zjoltTransformedShapeCastShapeAll(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *direction,
-    const ZJoltRVec3 *base_offset, const ZJoltShapeFilter *filter,
-    ZJoltShapeCastHit *out_hits, uint32_t capacity, uint32_t *out_count) {
+    const ZJoltRVec3 *base_offset, const ZJoltShapeCastSettings *settings,
+    const ZJoltShapeFilter *filter, ZJoltShapeCastHit *out_hits,
+    uint32_t capacity, uint32_t *out_count) {
   ZJOLT_ENTER(out_count);
   if (!zjolt::Present(ts, shape, position, rotation, direction, base_offset,
                       out_count)) {
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
+
+  const JPH::ShapeCastSettings jolt_settings = MakeShapeCastSettings(settings);
+  const ZJoltResult tolerance =
+      zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
+  if (tolerance != ZJOLT_RESULT_OK) return tolerance;
 
   const JPH::Vec3 shape_scale =
       scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
@@ -545,8 +618,8 @@ ZJoltResult zjoltTransformedShapeCastShapeAll(
   auto collector = MakeStream<JPH::CastShapeCollector, ZJoltShapeCastHit>(
       ProjectShapeCastHit{&ts->impl},
       FillBuffer<ZJoltShapeCastHit>{out_hits, capacity});
-  ts->impl.CastShape(cast, JPH::ShapeCastSettings(),
-                     zjolt::ToJoltR(*base_offset), collector, shape_filter);
+  ts->impl.CastShape(cast, jolt_settings, zjolt::ToJoltR(*base_offset),
+                     collector, shape_filter);
 
   return ReportCount(collector.sink().count, out_hits, capacity, out_count);
 }
