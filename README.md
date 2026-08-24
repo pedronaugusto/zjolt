@@ -242,10 +242,15 @@ The `@cImport` is test-only; the shipped module never runs translate-c.
 Pairing fields *by name* is the part that matters. Two same-sized adjacent
 fields swapping places leaves the sequence of offsets identical, so a positional
 comparison — or a digest folded over offsets alone — passes a swap that
-reinterprets both fields. Nine kinds of deliberate drift are verified to fail
-the build, including that swap, a dropped parameter, a widened parameter, a
-renumbered enumerator, a narrowed enum tag, a moved mask bit and an extern
-deleted from the Zig side.
+reinterprets both fields.
+
+A check that guards everything else cannot be trusted on its own word: a
+refactor that quietly makes it vacuous looks exactly like a passing build. So
+`ci/check-abi-drift.sh` applies nine kinds of deliberate drift one at a time —
+that swap, a dropped parameter, a widened parameter, a renumbered enumerator, a
+narrowed enum tag, a moved mask bit, a drifted constant, an extern deleted from
+the Zig side, a field added to the header alone — and asserts each is refused
+with a `zjolt ABI drift:` message. It runs under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
 types are compared only by size and alignment — a `float *` declared as `*i32`
