@@ -355,6 +355,53 @@ inline void WriteQuat(ZJoltQuat *out, JPH::QuatArg q) {
   if (out != nullptr) *out = ToC(q);
 }
 
+/// Jolt's Mat44 is four SIMD columns; the ABI's is sixteen floats in the same
+/// column-major order, so the crossing is a transpose-free copy.
+inline ZJoltMat44 ToC(JPH::Mat44Arg m) {
+  ZJoltMat44 out{};
+  for (JPH::uint col = 0; col < 4; ++col) {
+    const JPH::Vec4 column = m.GetColumn4(col);
+    out.m[4 * col + 0] = column.GetX();
+    out.m[4 * col + 1] = column.GetY();
+    out.m[4 * col + 2] = column.GetZ();
+    out.m[4 * col + 3] = column.GetW();
+  }
+  return out;
+}
+
+/// Named apart from ToC(Mat44Arg) for the same reason ToCR(RVec3Arg) is named
+/// apart from ToC(Vec3Arg): in a float build JPH::RMat44 and JPH::Mat44 are
+/// the SAME type, so the two would collide on return type alone.
+///
+/// The translation column is read through GetTranslation rather than
+/// GetColumn4(3), because JPH::DMat44 keeps it as a DVec3 and asserts on
+/// GetColumn4(3) (DMat44.h:115). Its fourth element is therefore written as 1
+/// rather than read back — which is what a rigid transform carries, and every
+/// RMat44 that crosses this boundary is one.
+inline ZJoltRMat44 ToCR(JPH::RMat44Arg m) {
+  ZJoltRMat44 out{};
+  for (JPH::uint col = 0; col < 3; ++col) {
+    const JPH::Vec4 column = m.GetColumn4(col);
+    out.m[4 * col + 0] = static_cast<ZJoltReal>(column.GetX());
+    out.m[4 * col + 1] = static_cast<ZJoltReal>(column.GetY());
+    out.m[4 * col + 2] = static_cast<ZJoltReal>(column.GetZ());
+    out.m[4 * col + 3] = static_cast<ZJoltReal>(column.GetW());
+  }
+  const JPH::RVec3 translation = m.GetTranslation();
+  out.m[12] = static_cast<ZJoltReal>(translation.GetX());
+  out.m[13] = static_cast<ZJoltReal>(translation.GetY());
+  out.m[14] = static_cast<ZJoltReal>(translation.GetZ());
+  out.m[15] = static_cast<ZJoltReal>(1);
+  return out;
+}
+
+inline void WriteMat44(ZJoltMat44 *out, JPH::Mat44Arg m) {
+  if (out != nullptr) *out = ToC(m);
+}
+inline void WriteRMat44(ZJoltRMat44 *out, JPH::RMat44Arg m) {
+  if (out != nullptr) *out = ToCR(m);
+}
+
 //===----------------------------------------------------------------------===//
 // Query filter adapters
 //

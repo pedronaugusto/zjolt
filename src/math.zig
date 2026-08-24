@@ -23,6 +23,15 @@ pub const Real = c.Real;
 /// here to get wrong.
 pub const Quat = c.Quat;
 
+/// A 4x4 matrix: four COLUMNS of four floats, so column `c`'s row `r` is
+/// `m[4 * c + r]`. Column-major, matching Jolt — not row-major.
+pub const Mat44 = c.Mat44;
+
+/// A world-space transform. `Mat44` with `Real` elements, exactly as `RVec3`
+/// is `Vec3` with `Real` elements, so its width follows
+/// `-Ddouble_precision`.
+pub const RMat44 = c.RMat44;
+
 pub const AABox = c.AABox;
 pub const MassProperties = c.MassProperties;
 pub const ShapeStats = c.ShapeStats;
@@ -30,6 +39,19 @@ pub const ShapeStats = c.ShapeStats;
 pub const vec3_zero: Vec3 = .{ .x = 0, .y = 0, .z = 0 };
 pub const rvec3_zero: RVec3 = .{ .x = 0, .y = 0, .z = 0 };
 pub const quat_identity: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
+
+pub const mat44_identity: Mat44 = .{ .m = .{
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+} };
+pub const rmat44_identity: RMat44 = .{ .m = .{
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+} };
 
 /// Earth gravity along -Y, the axis Jolt treats as up by default.
 pub const gravity_earth: Vec3 = .{ .x = 0, .y = -9.81, .z = 0 };

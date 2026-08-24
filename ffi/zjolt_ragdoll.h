@@ -255,9 +255,10 @@ ZJOLT_API bool zjoltRagdollSettingsStabilize(ZJoltRagdollSettings *settings);
 /// spawned from these settings — see zjoltRagdollSettingsCreateRagdoll.
 ///
 /// Unlike Jolt's own DisableParentChildCollisions, this never runs the
-/// optional bind-pose collision pass (it takes a JPH::Mat44 array, and this
-/// ABI has no matrix type): only joints adjacent in the hierarchy are
-/// disabled, not joints that happen to overlap in the rest pose.
+/// optional bind-pose collision pass: only joints adjacent in the hierarchy
+/// are disabled, not joints that happen to overlap in the rest pose. That
+/// pass wants the bind pose as an array of matrices, and nothing here takes
+/// one yet.
 ZJOLT_API void zjoltRagdollSettingsDisableParentChildCollisions(
     ZJoltRagdollSettings *settings);
 

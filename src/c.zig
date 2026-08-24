@@ -117,6 +117,18 @@ pub const RVec3 = extern struct {
     z: Real,
 };
 
+/// Four columns of four floats, column-major: column `c`'s row `r` is
+/// `m[4 * c + r]`.
+pub const Mat44 = extern struct {
+    m: [16]f32,
+};
+
+/// `Mat44` with `Real` elements, the way `RVec3` is `Vec3` with `Real`
+/// elements. Its width follows `-Ddouble_precision`.
+pub const RMat44 = extern struct {
+    m: [16]Real,
+};
+
 pub const AABox = extern struct {
     min: Vec3,
     max: Vec3,
@@ -812,6 +824,9 @@ pub extern fn zjoltBodyGetMotionQuality(system: *const PhysicsSystem, body: Body
 pub extern fn zjoltBodySetPositionAndRotation(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 pub extern fn zjoltBodyGetPositionAndRotation(system: *const PhysicsSystem, body: BodyId, out_position: ?*RVec3, out_rotation: ?*Quat) void;
 pub extern fn zjoltBodyGetCenterOfMassPosition(system: *const PhysicsSystem, body: BodyId, out: *RVec3) void;
+pub extern fn zjoltBodyGetWorldTransform(system: *const PhysicsSystem, body: BodyId, out: *RMat44) void;
+pub extern fn zjoltBodyGetCenterOfMassTransform(system: *const PhysicsSystem, body: BodyId, out: *RMat44) void;
+pub extern fn zjoltBodyGetInverseInertia(system: *const PhysicsSystem, body: BodyId, out: *Mat44) Result;
 pub extern fn zjoltBodySetPositionAndRotationWhenChanged(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 pub extern fn zjoltBodyMoveKinematic(system: *PhysicsSystem, body: BodyId, target_position: *const RVec3, target_rotation: ?*const Quat, delta_time: f32) void;
 pub extern fn zjoltBodySetPositionRotationAndVelocity(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, linear_velocity: *const Vec3, angular_velocity: *const Vec3) void;

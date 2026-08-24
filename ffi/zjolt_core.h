@@ -284,6 +284,17 @@ typedef struct ZJoltQuat {
   float x, y, z, w;
 } ZJoltQuat;
 
+/// A 4x4 matrix in Jolt's own layout: four COLUMNS of four floats each, so
+/// column c's row r is `m[4 * c + r]`. Column-major, NOT row-major — the same
+/// layout ZJoltSoftBodyInvBind::matrix already uses.
+///
+/// Carries a transform (rotation in the first three columns, translation in
+/// the fourth) or a 3x3 tensor padded out to 4x4, which is how Jolt stores an
+/// inertia matrix.
+typedef struct ZJoltMat44 {
+  float m[16];
+} ZJoltMat44;
+
 /// Scalar type of a world-space position. `double` when the library was built
 /// with double precision, otherwise `float`.
 #ifdef ZJOLT_DOUBLE_PRECISION
@@ -298,6 +309,21 @@ typedef float ZJoltReal;
 typedef struct ZJoltRVec3 {
   ZJoltReal x, y, z;
 } ZJoltRVec3;
+
+/// A world-space transform: ZJoltMat44 with ZJoltReal elements, exactly as
+/// ZJoltRVec3 is ZJoltVec3 with ZJoltReal elements. Its width therefore
+/// follows ZJOLT_DOUBLE_PRECISION, which is already folded into
+/// ZJOLT_CONFIG_ID above — a consumer that disagrees about that setting
+/// disagrees about the size of this struct, and zjoltInit refuses it.
+///
+/// Jolt's own double-precision matrix keeps the rotation part in single
+/// precision and widens only the translation column (DMat44). This does not
+/// mirror that split: the twelve rotation entries are exact float values
+/// widened to ZJoltReal, so one element type describes the whole matrix and a
+/// consumer does not have to model two.
+typedef struct ZJoltRMat44 {
+  ZJoltReal m[16];
+} ZJoltRMat44;
 
 typedef struct ZJoltAABox {
   ZJoltVec3 min;
