@@ -63,7 +63,10 @@ typedef struct ZJoltSkeletonPose ZJoltSkeletonPose;
 typedef struct ZJoltRagdollSettings ZJoltRagdollSettings;
 
 /// A spawned ragdoll: real bodies and constraints in one PhysicsSystem.
-/// Reference counted, like the settings that created it.
+/// Reference counted, like the settings that created it — but unlike the
+/// three handles above it owns storage of its own beside the Jolt object, so
+/// it is also counted by zjoltLiveHandleCount and zjoltDeinit refuses while
+/// one is still alive.
 typedef struct ZJoltRagdoll ZJoltRagdoll;
 
 //===----------------------------------------------------------------------===//
@@ -289,7 +292,7 @@ ZJOLT_API void zjoltRagdollSettingsCalculateBodyIndexToConstraintIndex(
 /// filter is only ever consulted within one group id.
 ///
 /// Fails with ZJOLT_RESULT_OUT_OF_MEMORY if `system` has no room left for
-/// the new bodies.
+/// the new bodies, or if the handle itself could not be allocated.
 ZJOLT_API ZJoltResult zjoltRagdollSettingsCreateRagdoll(
     const ZJoltRagdollSettings *settings, ZJoltPhysicsSystem *system,
     uint32_t collision_group, uint64_t user_data, ZJoltRagdoll **out);
@@ -300,23 +303,28 @@ ZJOLT_API ZJoltResult zjoltRagdollSettingsCreateRagdoll(
 
 ZJOLT_API void zjoltRagdollAddRef(const ZJoltRagdoll *ragdoll);
 
-/// Drops one reference, and destroys every body the ragdoll owns once the
-/// last one goes.
+/// Drops one reference. The last one takes the ragdoll back out of its
+/// physics system first if it is still in it — constraints and bodies both,
+/// with body locking — and then destroys every body it owns.
 ///
-/// REMOVE THE RAGDOLL FROM ITS PHYSICS SYSTEM FIRST. Releasing the last
-/// reference to a ragdoll that is still added destroys bodies the broad
-/// phase still holds: Jolt asserts on it in a build with assertions, and
-/// silently corrupts the broad phase in one without. Jolt's own ownership
-/// rule, not a rule this library adds — `~Ragdoll` destroys the bodies
-/// directly and cannot remove them itself, because by then it no longer
-/// knows whether they were ever added.
+/// Call order is therefore free: releasing a ragdoll that is still added is
+/// as correct as removing it first, and having removed it first does not
+/// make the release remove it twice. That is this library's doing rather
+/// than Jolt's. `~Ragdoll` destroys the bodies where they stand and cannot
+/// remove them itself, because a JPH::Ragdoll does not expose the system it
+/// was spawned in; ZJoltRagdoll keeps it, and asks whether the ragdoll's
+/// first body is added — the question zjoltBodyIsAdded answers — before
+/// removing anything. That check is not a nicety: removing a ragdoll that
+/// was never added is itself an error in Jolt, since the constraints go
+/// first and Jolt asserts each one was added.
 ///
-///     zjoltRagdollRemoveFromPhysicsSystem(ragdoll, true);
-///     zjoltRagdollRelease(ragdoll);
-///
-/// Removing is not idempotent either, so remove exactly once — the pair
-/// above is the whole teardown for a ragdoll that was added.
+/// zjoltRagdollRemoveFromPhysicsSystem remains the call for taking a ragdoll
+/// OUT of the simulation while keeping it alive.
 ZJOLT_API void zjoltRagdollRelease(const ZJoltRagdoll *ragdoll);
+
+/// References outstanding: one from zjoltRagdollSettingsCreateRagdoll, plus
+/// one per zjoltRagdollAddRef, less one per zjoltRagdollRelease. 0 if
+/// `ragdoll` is NULL.
 ZJOLT_API uint32_t zjoltRagdollGetRefCount(const ZJoltRagdoll *ragdoll);
 
 /// Adds every body and constraint to the system passed to
@@ -325,6 +333,9 @@ ZJOLT_API void zjoltRagdollAddToPhysicsSystem(ZJoltRagdoll *ragdoll,
                                               ZJoltActivation activation,
                                               bool lock_bodies);
 
+/// Takes them back out again, leaving the ragdoll alive and addable again.
+/// Not idempotent — remove at most once per zjoltRagdollAddToPhysicsSystem —
+/// and not something zjoltRagdollRelease needs done for it.
 ZJOLT_API void zjoltRagdollRemoveFromPhysicsSystem(ZJoltRagdoll *ragdoll,
                                                    bool lock_bodies);
 
