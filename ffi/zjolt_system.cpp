@@ -93,10 +93,10 @@ ZJoltResult CopyBodyIds(const JPH::BodyIDVector &ids, ZJoltBodyId *out_ids,
                         uint32_t capacity, uint32_t *out_count) {
   const uint32_t count = static_cast<uint32_t>(ids.size());
   *out_count = count;
-  if (out_ids == nullptr) return ZJOLT_OK;
-  if (capacity < count) return ZJOLT_ERR_BUFFER_TOO_SMALL;
+  if (out_ids == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
   for (uint32_t i = 0; i < count; ++i) out_ids[i] = zjolt::ToC(ids[i]);
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 }  // namespace
@@ -129,13 +129,13 @@ JPH::ValidateResult ZJoltContactListenerAdapter::OnContactValidate(
   info.sub_shape_id2 = ToCSubShapeId(inCollisionResult.mSubShapeID2);
 
   switch (listener_.on_contact_validate(listener_.user, &info)) {
-    case ZJOLT_VALIDATE_ACCEPT_CONTACT:
+    case ZJOLT_VALIDATE_RESULT_ACCEPT_CONTACT:
       return JPH::ValidateResult::AcceptContact;
-    case ZJOLT_VALIDATE_REJECT_CONTACT:
+    case ZJOLT_VALIDATE_RESULT_REJECT_CONTACT:
       return JPH::ValidateResult::RejectContact;
-    case ZJOLT_VALIDATE_REJECT_ALL_CONTACTS_FOR_THIS_BODY_PAIR:
+    case ZJOLT_VALIDATE_RESULT_REJECT_ALL_CONTACTS_FOR_THIS_BODY_PAIR:
       return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
-    case ZJOLT_VALIDATE_ACCEPT_ALL_CONTACTS_FOR_THIS_BODY_PAIR:
+    case ZJOLT_VALIDATE_RESULT_ACCEPT_ALL_CONTACTS_FOR_THIS_BODY_PAIR:
       break;
   }
   return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
@@ -204,13 +204,13 @@ void zjoltPhysicsSystemDescInit(ZJoltPhysicsSystemDesc *desc) {
 ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
                                      ZJoltPhysicsSystem **out) {
   zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   *out = nullptr;
-  if (!zjolt::IsInitialized()) return ZJOLT_ERR_NOT_INITIALIZED;
-  if (desc == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (!zjolt::IsInitialized()) return ZJOLT_RESULT_NOT_INITIALIZED;
+  if (desc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   if (desc->max_bodies == 0) {
-    return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "max_bodies must be positive");
   }
   // Jolt packs a body's index and a generation counter into one 32-bit id, so
@@ -219,13 +219,13 @@ ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
   // Reproduced with max_bodies = 100,000,000.
   if (desc->max_bodies > JPH::BodyID::cMaxBodyIndex + 1u) {
     return zjolt::SetError(
-        ZJOLT_ERR_INVALID_ARGUMENT,
+        ZJOLT_RESULT_INVALID_ARGUMENT,
         "max_bodies exceeds Jolt's hard limit of 8388608 bodies");
   }
   if (desc->max_contact_constraints >
       JPH::ContactConstraintManager::cMaxContactConstraintsLimit) {
     return zjolt::SetError(
-        ZJOLT_ERR_INVALID_ARGUMENT,
+        ZJOLT_RESULT_INVALID_ARGUMENT,
         "max_contact_constraints exceeds what Jolt can address");
   }
   // The two required questions. Jolt would dereference a null vtable entry
@@ -233,13 +233,13 @@ ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
   if (desc->broad_phase_layers.num_broad_phase_layers == nullptr ||
       desc->broad_phase_layers.broad_phase_layer_for_object_layer == nullptr) {
     return zjolt::SetError(
-        ZJOLT_ERR_INVALID_ARGUMENT,
+        ZJOLT_RESULT_INVALID_ARGUMENT,
         "broad_phase_layers needs num_broad_phase_layers and "
         "broad_phase_layer_for_object_layer");
   }
 
   ZJoltPhysicsSystem *system = zjolt::New<ZJoltPhysicsSystem>(*desc);
-  if (system == nullptr) return ZJOLT_ERR_OUT_OF_MEMORY;
+  if (system == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   const size_t temp_size = desc->temp_allocator_size != 0
                                ? desc->temp_allocator_size
@@ -249,7 +249,7 @@ ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
           static_cast<JPH::uint>(temp_size));
   if (system->temp_allocator == nullptr) {
     zjolt::Delete(system);
-    return ZJOLT_ERR_OUT_OF_MEMORY;
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
   }
 
   system->system.Init(desc->max_bodies, desc->num_body_mutexes,
@@ -260,7 +260,7 @@ ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
 
   zjolt::HandleCreated();
   *out = system;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
@@ -326,13 +326,13 @@ uint32_t zjoltPhysicsSystemGetNumActiveBodies(
 ZJoltResult zjoltPhysicsSystemSetContactListener(
     ZJoltPhysicsSystem *system, const ZJoltContactListener *listener) {
   zjolt::ClearError();
-  if (system == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   if (listener == nullptr) {
     system->system.SetContactListener(nullptr);
     zjolt::Delete(system->contact_listener);
     system->contact_listener = nullptr;
-    return ZJOLT_OK;
+    return ZJOLT_RESULT_OK;
   }
 
   // Reported rather than swallowed. A listener that silently failed to install
@@ -340,36 +340,36 @@ ZJoltResult zjoltPhysicsSystemSetContactListener(
   // nothing about the call site would suggest why.
   ZJoltContactListenerAdapter *adapter =
       zjolt::New<ZJoltContactListenerAdapter>(*listener);
-  if (adapter == nullptr) return ZJOLT_ERR_OUT_OF_MEMORY;
+  if (adapter == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   // Install first, then free the old one: the system must never point at a
   // freed adapter, even for an instant.
   system->system.SetContactListener(adapter);
   zjolt::Delete(system->contact_listener);
   system->contact_listener = adapter;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltPhysicsSystemSetBodyActivationListener(
     ZJoltPhysicsSystem *system, const ZJoltBodyActivationListener *listener) {
   zjolt::ClearError();
-  if (system == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   if (listener == nullptr) {
     system->system.SetBodyActivationListener(nullptr);
     zjolt::Delete(system->activation_listener);
     system->activation_listener = nullptr;
-    return ZJOLT_OK;
+    return ZJOLT_RESULT_OK;
   }
 
   ZJoltBodyActivationListenerAdapter *adapter =
       zjolt::New<ZJoltBodyActivationListenerAdapter>(*listener);
-  if (adapter == nullptr) return ZJOLT_ERR_OUT_OF_MEMORY;
+  if (adapter == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   system->system.SetBodyActivationListener(adapter);
   zjolt::Delete(system->activation_listener);
   system->activation_listener = adapter;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//
@@ -383,20 +383,20 @@ ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
   zjolt::ClearError();
   if (out_error != nullptr) *out_error = ZJOLT_UPDATE_ERROR_NONE;
   if (system == nullptr || job_system == nullptr)
-    return ZJOLT_ERR_INVALID_ARGUMENT;
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (collision_steps < 1) {
-    return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "collision_steps must be at least 1");
   }
   // Jolt asserts on a non-positive delta; a host that hit a paused frame
   // should see nothing happen rather than an abort.
-  if (!(delta_time > 0.0f)) return ZJOLT_OK;
+  if (!(delta_time > 0.0f)) return ZJOLT_RESULT_OK;
 
   const JPH::EPhysicsUpdateError error = system->system.Update(
       delta_time, collision_steps, system->temp_allocator, job_system->impl);
 
   if (out_error != nullptr) *out_error = static_cast<uint32_t>(error);
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//
@@ -409,7 +409,7 @@ ZJoltResult zjoltPhysicsSystemGetActiveBodies(const ZJoltPhysicsSystem *system,
                                               uint32_t *out_count) {
   zjolt::ClearError();
   if (system == nullptr || out_count == nullptr)
-    return ZJOLT_ERR_INVALID_ARGUMENT;
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyIDVector ids;
   system->system.GetActiveBodies(JPH::EBodyType::RigidBody, ids);
@@ -421,7 +421,7 @@ ZJoltResult zjoltPhysicsSystemGetBodies(const ZJoltPhysicsSystem *system,
                                         uint32_t *out_count) {
   zjolt::ClearError();
   if (system == nullptr || out_count == nullptr)
-    return ZJOLT_ERR_INVALID_ARGUMENT;
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyIDVector ids;
   system->system.GetBodies(ids);

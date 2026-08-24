@@ -103,7 +103,7 @@ ZJOLT_API void zjoltShapeGetStats(const ZJoltShape *shape,
 ///
 /// Two-call protocol: pass buffer = NULL to learn the size, then call again
 /// with storage. `*out_size` is always written, so a too-small buffer reports
-/// ZJOLT_ERR_BUFFER_TOO_SMALL along with what was needed.
+/// ZJOLT_RESULT_BUFFER_TOO_SMALL along with what was needed.
 ///
 /// The payload is Jolt's own binary shape state, behind a 32-byte header
 /// carrying a magic tag, the container version, this library's config id, the
@@ -121,7 +121,7 @@ ZJOLT_API ZJoltResult zjoltShapeSave(const ZJoltShape *shape, void *buffer,
 
 /// Rebuilds a shape from zjoltShapeSave output. The buffer is read during the
 /// call only. A wrong tag, a wrong build, a length that disagrees with the
-/// buffer, or a failed checksum is ZJOLT_ERR_BAD_FORMAT; zjoltLastError says
+/// buffer, or a failed checksum is ZJOLT_RESULT_BAD_FORMAT; zjoltLastError says
 /// which.
 ZJOLT_API ZJoltResult zjoltShapeRestore(const void *data, size_t size,
                                         ZJoltShape **out);

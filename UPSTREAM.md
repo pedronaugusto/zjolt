@@ -77,7 +77,7 @@ The same hazard exists one level up, between `ffi/zjolt.h` and its consumer:
 `ZJoltReal` and `ZJoltObjectLayer` change width with the build, so a consumer
 compiled against different settings would misread every position it is handed.
 `zjoltInit` passes the header's `ZJOLT_CONFIG_ID` to the library and gets
-`ZJOLT_ERR_CONFIG_MISMATCH` if they differ — the same trick Jolt plays on its
+`ZJOLT_RESULT_CONFIG_MISMATCH` if they differ — the same trick Jolt plays on its
 clients, for the same reason, but returning rather than aborting.
 
 ## Known upstream behaviour worked around here
@@ -114,7 +114,7 @@ refused.
 new` is `return JPH::Allocate(inCount)` with no null check, so under a failing
 allocator a `new Factory()` would placement-construct at address zero. zjolt
 allocates the factory itself, through a checked helper (`zjolt::New` in
-`ffi/zjolt_internal.h`), which is what makes `ZJOLT_ERR_OUT_OF_MEMORY` at
+`ffi/zjolt_internal.h`), which is what makes `ZJOLT_RESULT_OUT_OF_MEMORY` at
 start-up an error rather than a null dereference.
 
 What that does **not** cover is Jolt's own internal allocations. Its containers

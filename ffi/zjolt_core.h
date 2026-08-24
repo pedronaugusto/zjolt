@@ -108,27 +108,27 @@ ZJOLT_API uint32_t zjoltConfigId(void);
 //===----------------------------------------------------------------------===//
 
 typedef enum ZJoltResult {
-  ZJOLT_OK = 0,
+  ZJOLT_RESULT_OK = 0,
   /// A call was made before zjoltInit, or after zjoltDeinit.
-  ZJOLT_ERR_NOT_INITIALIZED = 1,
+  ZJOLT_RESULT_NOT_INITIALIZED = 1,
   /// zjoltInit was called twice without an intervening zjoltDeinit.
-  ZJOLT_ERR_ALREADY_INITIALIZED = 2,
+  ZJOLT_RESULT_ALREADY_INITIALIZED = 2,
   /// The consumer's ZJOLT_CONFIG_ID does not match the library's.
-  ZJOLT_ERR_CONFIG_MISMATCH = 3,
+  ZJOLT_RESULT_CONFIG_MISMATCH = 3,
   /// The installed allocator returned NULL.
-  ZJOLT_ERR_OUT_OF_MEMORY = 4,
+  ZJOLT_RESULT_OUT_OF_MEMORY = 4,
   /// A NULL handle, a NULL required callback, or an out-of-domain scalar.
-  ZJOLT_ERR_INVALID_ARGUMENT = 5,
+  ZJOLT_RESULT_INVALID_ARGUMENT = 5,
   /// A caller-provided output buffer was too small; the required count is
   /// still written to the out-count parameter.
-  ZJOLT_ERR_BUFFER_TOO_SMALL = 6,
+  ZJOLT_RESULT_BUFFER_TOO_SMALL = 6,
   /// Jolt refused to build the shape. zjoltLastError has its message.
-  ZJOLT_ERR_SHAPE_INVALID = 7,
+  ZJOLT_RESULT_SHAPE_INVALID = 7,
   /// A serialised shape could not be restored: truncated, or not a shape.
-  ZJOLT_ERR_BAD_FORMAT = 8,
+  ZJOLT_RESULT_BAD_FORMAT = 8,
   /// The body id does not name a body in this system (it may have been
   /// destroyed).
-  ZJOLT_ERR_BODY_NOT_FOUND = 9,
+  ZJOLT_RESULT_BODY_NOT_FOUND = 9,
 } ZJoltResult;
 
 /// Static, never-NULL description of a result code. Borrowed; do not free.
@@ -222,7 +222,7 @@ ZJOLT_API ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc,
 /// Installs the allocator and hooks, creates Jolt's factory and registers its
 /// types. Must be called before anything else, and is process-wide.
 ///
-/// `desc` may be NULL for all defaults. Returns ZJOLT_ERR_CONFIG_MISMATCH if
+/// `desc` may be NULL for all defaults. Returns ZJOLT_RESULT_CONFIG_MISMATCH if
 /// this header was compiled with different layout-affecting settings than the
 /// library.
 static inline ZJoltResult zjoltInit(const ZJoltInitDesc *desc) {
@@ -347,9 +347,9 @@ typedef enum ZJoltAllowedDofs {
 
 typedef enum ZJoltOverrideMassProperties {
   /// Use the shape's mass and inertia.
-  ZJOLT_OVERRIDE_MASS_CALCULATE_MASS_AND_INERTIA = 0,
+  ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_MASS_AND_INERTIA = 0,
   /// Use ZJoltBodyDesc::mass, scale the shape's inertia to match.
-  ZJOLT_OVERRIDE_MASS_CALCULATE_INERTIA = 1,
+  ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA = 1,
 } ZJoltOverrideMassProperties;
 
 /// Shape kinds this ABI can produce. Reported by zjoltShapeGetSubType, and
@@ -367,8 +367,8 @@ typedef enum ZJoltShapeSubType {
 } ZJoltShapeSubType;
 
 typedef enum ZJoltBackFaceMode {
-  ZJOLT_BACK_FACE_IGNORE = 0,
-  ZJOLT_BACK_FACE_COLLIDE = 1,
+  ZJOLT_BACK_FACE_MODE_IGNORE = 0,
+  ZJOLT_BACK_FACE_MODE_COLLIDE = 1,
 } ZJoltBackFaceMode;
 
 typedef enum ZJoltGroundState {
@@ -384,10 +384,10 @@ typedef enum ZJoltGroundState {
 
 /// What a contact-validate callback decides about a body pair.
 typedef enum ZJoltValidateResult {
-  ZJOLT_VALIDATE_ACCEPT_ALL_CONTACTS_FOR_THIS_BODY_PAIR = 0,
-  ZJOLT_VALIDATE_ACCEPT_CONTACT = 1,
-  ZJOLT_VALIDATE_REJECT_CONTACT = 2,
-  ZJOLT_VALIDATE_REJECT_ALL_CONTACTS_FOR_THIS_BODY_PAIR = 3,
+  ZJOLT_VALIDATE_RESULT_ACCEPT_ALL_CONTACTS_FOR_THIS_BODY_PAIR = 0,
+  ZJOLT_VALIDATE_RESULT_ACCEPT_CONTACT = 1,
+  ZJOLT_VALIDATE_RESULT_REJECT_CONTACT = 2,
+  ZJOLT_VALIDATE_RESULT_REJECT_ALL_CONTACTS_FOR_THIS_BODY_PAIR = 3,
 } ZJoltValidateResult;
 
 /// Bit mask reported by zjoltPhysicsSystemStep. Non-zero means the step
@@ -452,15 +452,21 @@ ZJOLT_API void zjoltJobSystemDestroy(ZJoltJobSystem *job_system);
 /// scheduler.
 ZJOLT_API uint32_t zjoltJobSystemGetMaxConcurrency(const ZJoltJobSystem *job_system);
 //===----------------------------------------------------------------------===//
-// ABI layout guard
+// Build report
 //
-// The Zig wrapper hand-declares `extern struct`s mirroring the types above.
-// Nothing in either compiler checks that those two declarations agree — a
-// field reordered here and not there is silent memory corruption, not a build
-// error. zjoltAbiLayout reports what the C++ side actually compiled to, so the
-// other side can assert against it in a test.
+// A consumer that hand-declares the types above gets no help from either
+// compiler in keeping them right: a field reordered here and not there is
+// silent memory corruption, not a build error. The answer is to compare
+// against THIS header — the Zig wrapper does it by reflection, in a test, with
+// no hand-written list (src/abi_check.zig).
 //
-// In the other direction, static_asserts in zjolt_abi.cpp fail the BUILD if a
+// What comparing against the header cannot tell you is which build the linked
+// library actually is. ZJoltReal and ZJoltObjectLayer change width with the
+// macros below, so a library built with different ones presents an identical
+// header and describes different structs. zjoltAbiLayout answers that, and
+// zjoltInit refuses a ZJOLT_CONFIG_ID mismatch outright.
+//
+// In a third direction, static_asserts in zjolt_abi.cpp fail the BUILD if a
 // vendored Jolt upgrade changes a type this package converts to or from.
 //===----------------------------------------------------------------------===//
 
@@ -471,6 +477,19 @@ ZJOLT_API uint32_t zjoltJobSystemGetMaxConcurrency(const ZJoltJobSystem *job_sys
 #define ZJOLT_BUILD_FLAG_ASSERTS_ENABLED (1u << 2)
 #define ZJOLT_BUILD_FLAG_CROSS_PLATFORM_DETERMINISTIC (1u << 3)
 
+/// What this library was built as, for a consumer that cannot check the header
+/// against its own declarations by reflection.
+///
+/// This used to carry a field-by-field layout report and a digest over it.
+/// Both are gone: the report was a hand-written duplicate of every struct in
+/// this header, so it could only catch a change to a field somebody remembered
+/// to list. Consumers that can enumerate their own declarations compare against
+/// the header directly instead — see src/abi_check.zig for the Zig side.
+///
+/// What is left is what reflection cannot tell you: which build this actually
+/// is. `config_id` is the same value `zjoltInit` refuses a mismatch on, so a
+/// host can check it up front and report a useful message instead of an error
+/// code.
 typedef struct ZJoltAbiLayout {
   /// sizeof(ZJoltAbiLayout). Read this first: if it disagrees with the
   /// consumer's own sizeof, the struct itself has changed and no field below
@@ -479,91 +498,14 @@ typedef struct ZJoltAbiLayout {
   uint32_t config_id;
   uint32_t build_flags;
 
-  /// A hash folded over the size, alignment and EVERY field offset of every
-  /// type in this header, in declaration order.
-  ///
-  /// The individual sizes and offsets below are the diagnosis; this is the
-  /// detection. They are listed by hand, so they can only catch a change to a
-  /// field somebody remembered to list — two adjacent floats swapped in
-  /// ZJoltBodyDesc move no reported offset and change no size, and would pass
-  /// every one of them. A consumer that can enumerate its own fields (Zig can)
-  /// computes this the same way and compares one number, which cannot miss a
-  /// field because it never had to know their names.
-  uint32_t layout_digest;
-
+  /// Widths the build options decide. Everything that carries a position or an
+  /// object layer changes shape with these, so a consumer that disagrees here
+  /// disagrees about most of the ABI.
   uint32_t real_size;
   uint32_t object_layer_size;
+
+  /// Alignment the default allocator guarantees, for a host bridging its own.
   uint32_t default_allocate_alignment;
-
-  uint32_t vec3_size, vec3_align;
-  uint32_t rvec3_size, rvec3_align;
-  uint32_t quat_size, quat_align;
-  uint32_t aabox_size, aabox_align;
-  uint32_t mass_properties_size, mass_properties_align;
-  uint32_t shape_stats_size, shape_stats_align;
-
-  uint32_t allocator_size, allocator_align;
-  uint32_t allocator_offset_allocate;
-  uint32_t allocator_offset_reallocate;
-  uint32_t allocator_offset_free;
-  uint32_t allocator_offset_aligned_allocate;
-  uint32_t allocator_offset_aligned_free;
-  uint32_t allocator_offset_user;
-
-  uint32_t init_desc_size, init_desc_align;
-
-  uint32_t broad_phase_layer_interface_size;
-  uint32_t broad_phase_layer_interface_align;
-  uint32_t object_vs_broad_phase_filter_size;
-  uint32_t object_layer_pair_filter_size;
-
-  uint32_t system_desc_size, system_desc_align;
-  uint32_t system_desc_offset_broad_phase_layers;
-  uint32_t system_desc_offset_object_vs_broad_phase_filter;
-  uint32_t system_desc_offset_object_layer_pair_filter;
-
-  uint32_t contact_manifold_size, contact_manifold_align;
-  uint32_t contact_manifold_offset_points_on_1;
-  uint32_t contact_manifold_offset_points_on_2;
-  uint32_t contact_info_size, contact_info_align;
-  uint32_t contact_info_offset_manifold;
-  uint32_t contact_settings_size, contact_settings_align;
-  uint32_t contact_validate_info_size, contact_validate_info_align;
-  uint32_t sub_shape_id_pair_size;
-  uint32_t contact_listener_size;
-  uint32_t body_activation_listener_size;
-
-  uint32_t body_desc_size, body_desc_align;
-  uint32_t body_desc_offset_position;
-  uint32_t body_desc_offset_rotation;
-  uint32_t body_desc_offset_shape;
-  uint32_t body_desc_offset_user_data;
-  uint32_t body_desc_offset_object_layer;
-  uint32_t body_desc_offset_motion_type;
-  uint32_t body_desc_offset_gravity_factor;
-
-  uint32_t body_lock_size, body_lock_align;
-  uint32_t body_lock_offset_body;
-
-  uint32_t query_filters_size, query_filters_align;
-  uint32_t ray_cast_hit_size, ray_cast_hit_align;
-  uint32_t shape_cast_hit_size, shape_cast_hit_align;
-  uint32_t collide_shape_hit_size, collide_shape_hit_align;
-
-  uint32_t character_desc_size, character_desc_align;
-  uint32_t character_desc_offset_shape;
-  uint32_t character_desc_offset_position;
-  uint32_t character_desc_offset_up;
-  uint32_t character_update_settings_size;
-  uint32_t character_update_settings_align;
-
-  /// Number of enumerators, so a consumer can assert its own mapping is
-  /// exhaustive.
-  uint32_t result_count;
-  uint32_t motion_type_count;
-  uint32_t ground_state_count;
-  uint32_t shape_sub_type_count;
-  uint32_t validate_result_count;
 } ZJoltAbiLayout;
 
 /// Fills `out` with the layout the library was compiled with. Never fails.

@@ -5,15 +5,16 @@
 //! wrapper wants. The cost of hand-writing is drift: nothing in either
 //! compiler checks that this file still agrees with the header.
 //!
-//! Three things close that gap, and between them they cover both halves of a
+//! Two things close that gap, between them covering both halves of a
 //! declaration:
 //!
-//!   * `zjoltAbiLayout`, asserted in a test in `zjolt.zig`, covers every
-//!     struct — sizes, alignments and field offsets.
-//!   * `ci/check-abi.sh` compares the function NAMES and arities in this file
-//!     against the header, which the layout report cannot see.
+//!   * `abi_check.zig` compares this file against the real header at comptime
+//!     — every struct field by name and offset, every function's arity and
+//!     per-parameter size, every enumerator's value. It discovers what to
+//!     check by reflection, so it cannot fall behind what is declared here.
 //!   * `zjoltInitWithConfig` refuses a library whose layout-affecting build
-//!     settings differ from the ones `options` reports here.
+//!     settings differ from the ones `options` reports here, which is the one
+//!     thing comparing against the header cannot tell you.
 
 const std = @import("std");
 const options = @import("zjolt_options");
@@ -492,99 +493,9 @@ pub const AbiLayout = extern struct {
     layout_size: u32,
     config_id: u32,
     build_flags: u32,
-    layout_digest: u32,
-
     real_size: u32,
     object_layer_size: u32,
     default_allocate_alignment: u32,
-
-    vec3_size: u32,
-    vec3_align: u32,
-    rvec3_size: u32,
-    rvec3_align: u32,
-    quat_size: u32,
-    quat_align: u32,
-    aabox_size: u32,
-    aabox_align: u32,
-    mass_properties_size: u32,
-    mass_properties_align: u32,
-    shape_stats_size: u32,
-    shape_stats_align: u32,
-
-    allocator_size: u32,
-    allocator_align: u32,
-    allocator_offset_allocate: u32,
-    allocator_offset_reallocate: u32,
-    allocator_offset_free: u32,
-    allocator_offset_aligned_allocate: u32,
-    allocator_offset_aligned_free: u32,
-    allocator_offset_user: u32,
-
-    init_desc_size: u32,
-    init_desc_align: u32,
-
-    broad_phase_layer_interface_size: u32,
-    broad_phase_layer_interface_align: u32,
-    object_vs_broad_phase_filter_size: u32,
-    object_layer_pair_filter_size: u32,
-
-    system_desc_size: u32,
-    system_desc_align: u32,
-    system_desc_offset_broad_phase_layers: u32,
-    system_desc_offset_object_vs_broad_phase_filter: u32,
-    system_desc_offset_object_layer_pair_filter: u32,
-
-    contact_manifold_size: u32,
-    contact_manifold_align: u32,
-    contact_manifold_offset_points_on_1: u32,
-    contact_manifold_offset_points_on_2: u32,
-    contact_info_size: u32,
-    contact_info_align: u32,
-    contact_info_offset_manifold: u32,
-    contact_settings_size: u32,
-    contact_settings_align: u32,
-    contact_validate_info_size: u32,
-    contact_validate_info_align: u32,
-    sub_shape_id_pair_size: u32,
-    contact_listener_size: u32,
-    body_activation_listener_size: u32,
-
-    body_desc_size: u32,
-    body_desc_align: u32,
-    body_desc_offset_position: u32,
-    body_desc_offset_rotation: u32,
-    body_desc_offset_shape: u32,
-    body_desc_offset_user_data: u32,
-    body_desc_offset_object_layer: u32,
-    body_desc_offset_motion_type: u32,
-    body_desc_offset_gravity_factor: u32,
-
-    body_lock_size: u32,
-    body_lock_align: u32,
-    body_lock_offset_body: u32,
-
-    query_filters_size: u32,
-    query_filters_align: u32,
-    ray_cast_hit_size: u32,
-    ray_cast_hit_align: u32,
-    shape_cast_hit_size: u32,
-    shape_cast_hit_align: u32,
-    collide_shape_hit_size: u32,
-    collide_shape_hit_align: u32,
-
-    character_desc_size: u32,
-    character_desc_align: u32,
-    character_desc_offset_shape: u32,
-    character_desc_offset_position: u32,
-    character_desc_offset_up: u32,
-    character_update_settings_size: u32,
-    character_update_settings_align: u32,
-
-    result_count: u32,
-    motion_type_count: u32,
-    ground_state_count: u32,
-    shape_sub_type_count: u32,
-    validate_result_count: u32,
 };
 
 //=============================================================================
@@ -741,76 +652,3 @@ pub extern fn zjoltCharacterUpdateGroundVelocity(character: *Character) void;
 pub extern fn zjoltCharacterSetShape(character: *Character, shape: *const Shape, max_penetration_depth: f32, filters: ?*const QueryFilters, out_changed: ?*bool) Result;
 pub extern fn zjoltCharacterGetShape(character: *const Character) ?*const Shape;
 pub extern fn zjoltCharacterGetInnerBodyId(character: *const Character) BodyId;
-
-//=============================================================================
-// Layout digest
-//
-// The C library folds the size, alignment and every field offset of every ABI
-// type into `AbiLayout.layout_digest`, from a list written out by hand. This
-// computes the same fold by REFLECTION, which is the point: it cannot miss a
-// field because it never had to know their names. Two same-sized adjacent
-// fields swapping places moves no offset anyone thought to report, changes no
-// size — and changes this.
-//
-// The type order and the field order must match the C side's. Field order is
-// declaration order on both, which is what `extern struct` guarantees.
-//=============================================================================
-
-fn fold(hash: *u32, value: u32) void {
-    var byte: u5 = 0;
-    while (byte < 4) : (byte += 1) {
-        hash.* ^= @as(u8, @truncate(value >> (@as(u5, byte) * 8)));
-        hash.* = hash.* *% 16777619; // FNV-1a
-    }
-}
-
-fn foldType(hash: *u32, comptime T: type) void {
-    fold(hash, @sizeOf(T));
-    fold(hash, @alignOf(T));
-    inline for (@typeInfo(T).@"struct".fields) |field| {
-        // The name matters as much as the offset. Two same-sized adjacent
-        // fields swapping places leaves the sequence of offsets untouched, so
-        // a digest over offsets alone would not notice — and neither would any
-        // hand-written table of the offsets somebody thought to report.
-        for (field.name) |byte| fold(hash, byte);
-        fold(hash, @offsetOf(T, field.name));
-    }
-}
-
-/// Must equal `AbiLayout.layout_digest`, asserted in the ABI test.
-pub fn layoutDigest() u32 {
-    var hash: u32 = 2166136261; // FNV-1a offset basis
-    inline for (.{
-        Vec3,
-        Quat,
-        RVec3,
-        AABox,
-        MassProperties,
-        ShapeStats,
-        Allocator,
-        InitDesc,
-        BroadPhaseLayerInterface,
-        ObjectVsBroadPhaseLayerFilter,
-        ObjectLayerPairFilter,
-        PhysicsSystemDesc,
-        ContactManifold,
-        ContactInfo,
-        ContactSettings,
-        ContactValidateInfo,
-        SubShapeIdPair,
-        ContactListener,
-        BodyActivationListener,
-        BodyDesc,
-        BodyLock,
-        BroadPhaseLayerFilter,
-        ObjectLayerFilter,
-        BodyFilter,
-        QueryFilters,
-        RayCastHit,
-        ShapeCastHit,
-        CollideShapeHit,
-        CharacterDesc,
-        CharacterUpdateSettings,
-    }) |T| foldType(&hash, T);
-    return hash;
-}

@@ -241,28 +241,32 @@ test {
     _ = system_mod;
     _ = character_mod;
     _ = @import("integration_test.zig");
+
+    // Test-only: this one @cImport-s the C header. Reached from a test block
+    // and nowhere else, so a normal build never analyses it and the shipped
+    // module stays translate-c-free.
+    _ = @import("abi_check.zig");
 }
 
-test "the C library agrees with the extern declarations in c.zig" {
-    // This is the guard that makes hand-written externs safe. Every struct the
-    // Zig side believes in is checked against what the C++ translation unit
-    // compiled to. A reordered field fails here rather than in production.
+test "the library reports the build the wrapper was compiled for" {
+    // What abi_check.zig cannot see. It compares this wrapper against the
+    // header as THIS build's preprocessor rendered it — which says nothing
+    // about whether the library linked here was compiled with the same macros.
+    // ZJoltReal and ZJoltObjectLayer change width with those macros, so a
+    // library built with different ones describes different structs while
+    // presenting an identical header. This is the check that catches it.
     var layout: c.AbiLayout = undefined;
     c.zjoltAbiLayout(&layout);
 
     try std.testing.expectEqual(@as(u32, @sizeOf(c.AbiLayout)), layout.layout_size);
-
-    // Scalars whose width the build options decide. If these disagree, the two
-    // sides were built from different settings and every position read across
-    // the boundary would be garbage.
     try std.testing.expectEqual(@as(u32, @sizeOf(c.Real)), layout.real_size);
     try std.testing.expectEqual(@as(u32, @sizeOf(c.ObjectLayer)), layout.object_layer_size);
     try std.testing.expectEqual(c.config_id, layout.config_id);
     try std.testing.expectEqual(c.zjoltConfigId(), layout.config_id);
-
-    // The single check that cannot miss a field. Everything below it is
-    // diagnosis: if this one fires, the ones that follow say where.
-    try std.testing.expectEqual(layout.layout_digest, c.layoutDigest());
+    try std.testing.expectEqual(
+        @as(u32, @intCast(c.zjoltDefaultAllocateAlignment())),
+        layout.default_allocate_alignment,
+    );
 
     // The options module and the C library must describe the same build.
     const double_bit = (layout.build_flags & c.build_flag_double_precision) != 0;
@@ -274,237 +278,6 @@ test "the C library agrees with the extern declarations in c.zig" {
     const deterministic_bit =
         (layout.build_flags & c.build_flag_cross_platform_deterministic) != 0;
     try std.testing.expectEqual(options.cross_platform_deterministic, deterministic_bit);
-
-    const expect = struct {
-        fn sizeAlign(
-            comptime T: type,
-            reported_size: u32,
-            reported_align: u32,
-        ) !void {
-            try std.testing.expectEqual(@as(u32, @sizeOf(T)), reported_size);
-            try std.testing.expectEqual(@as(u32, @alignOf(T)), reported_align);
-        }
-    };
-
-    try expect.sizeAlign(c.Vec3, layout.vec3_size, layout.vec3_align);
-    try expect.sizeAlign(c.RVec3, layout.rvec3_size, layout.rvec3_align);
-    try expect.sizeAlign(c.Quat, layout.quat_size, layout.quat_align);
-    try expect.sizeAlign(c.AABox, layout.aabox_size, layout.aabox_align);
-    try expect.sizeAlign(
-        c.MassProperties,
-        layout.mass_properties_size,
-        layout.mass_properties_align,
-    );
-    try expect.sizeAlign(c.ShapeStats, layout.shape_stats_size, layout.shape_stats_align);
-    try expect.sizeAlign(c.Allocator, layout.allocator_size, layout.allocator_align);
-    try expect.sizeAlign(c.InitDesc, layout.init_desc_size, layout.init_desc_align);
-    try expect.sizeAlign(
-        c.BroadPhaseLayerInterface,
-        layout.broad_phase_layer_interface_size,
-        layout.broad_phase_layer_interface_align,
-    );
-    try expect.sizeAlign(
-        c.PhysicsSystemDesc,
-        layout.system_desc_size,
-        layout.system_desc_align,
-    );
-    try expect.sizeAlign(
-        c.ContactManifold,
-        layout.contact_manifold_size,
-        layout.contact_manifold_align,
-    );
-    try expect.sizeAlign(
-        c.ContactInfo,
-        layout.contact_info_size,
-        layout.contact_info_align,
-    );
-    try expect.sizeAlign(
-        c.ContactSettings,
-        layout.contact_settings_size,
-        layout.contact_settings_align,
-    );
-    try expect.sizeAlign(
-        c.ContactValidateInfo,
-        layout.contact_validate_info_size,
-        layout.contact_validate_info_align,
-    );
-    try expect.sizeAlign(c.BodyDesc, layout.body_desc_size, layout.body_desc_align);
-    try expect.sizeAlign(c.BodyLock, layout.body_lock_size, layout.body_lock_align);
-    try expect.sizeAlign(
-        c.QueryFilters,
-        layout.query_filters_size,
-        layout.query_filters_align,
-    );
-    try expect.sizeAlign(
-        c.RayCastHit,
-        layout.ray_cast_hit_size,
-        layout.ray_cast_hit_align,
-    );
-    try expect.sizeAlign(
-        c.ShapeCastHit,
-        layout.shape_cast_hit_size,
-        layout.shape_cast_hit_align,
-    );
-    try expect.sizeAlign(
-        c.CollideShapeHit,
-        layout.collide_shape_hit_size,
-        layout.collide_shape_hit_align,
-    );
-    try expect.sizeAlign(
-        c.CharacterDesc,
-        layout.character_desc_size,
-        layout.character_desc_align,
-    );
-    try expect.sizeAlign(
-        c.CharacterUpdateSettings,
-        layout.character_update_settings_size,
-        layout.character_update_settings_align,
-    );
-
-    try std.testing.expectEqual(
-        @as(u32, @sizeOf(c.ObjectVsBroadPhaseLayerFilter)),
-        layout.object_vs_broad_phase_filter_size,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @sizeOf(c.ObjectLayerPairFilter)),
-        layout.object_layer_pair_filter_size,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @sizeOf(c.SubShapeIdPair)),
-        layout.sub_shape_id_pair_size,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @sizeOf(c.ContactListener)),
-        layout.contact_listener_size,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @sizeOf(c.BodyActivationListener)),
-        layout.body_activation_listener_size,
-    );
-
-    // Field offsets, where a reorder would be silent corruption rather than a
-    // size change.
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.Allocator, "allocate")),
-        layout.allocator_offset_allocate,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.Allocator, "reallocate")),
-        layout.allocator_offset_reallocate,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.Allocator, "free")),
-        layout.allocator_offset_free,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.Allocator, "aligned_allocate")),
-        layout.allocator_offset_aligned_allocate,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.Allocator, "aligned_free")),
-        layout.allocator_offset_aligned_free,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.Allocator, "user")),
-        layout.allocator_offset_user,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.PhysicsSystemDesc, "broad_phase_layers")),
-        layout.system_desc_offset_broad_phase_layers,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.PhysicsSystemDesc, "object_vs_broad_phase_filter")),
-        layout.system_desc_offset_object_vs_broad_phase_filter,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.PhysicsSystemDesc, "object_layer_pair_filter")),
-        layout.system_desc_offset_object_layer_pair_filter,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.ContactManifold, "points_on_1")),
-        layout.contact_manifold_offset_points_on_1,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.ContactManifold, "points_on_2")),
-        layout.contact_manifold_offset_points_on_2,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.ContactInfo, "manifold")),
-        layout.contact_info_offset_manifold,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "position")),
-        layout.body_desc_offset_position,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "rotation")),
-        layout.body_desc_offset_rotation,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "shape")),
-        layout.body_desc_offset_shape,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "user_data")),
-        layout.body_desc_offset_user_data,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "object_layer")),
-        layout.body_desc_offset_object_layer,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "motion_type")),
-        layout.body_desc_offset_motion_type,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyDesc, "gravity_factor")),
-        layout.body_desc_offset_gravity_factor,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.BodyLock, "body")),
-        layout.body_lock_offset_body,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.CharacterDesc, "shape")),
-        layout.character_desc_offset_shape,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.CharacterDesc, "position")),
-        layout.character_desc_offset_position,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @offsetOf(c.CharacterDesc, "up")),
-        layout.character_desc_offset_up,
-    );
-
-    // Every Zig enum mirroring a C one must be exhaustive over it.
-    try std.testing.expectEqual(
-        @as(u32, @typeInfo(c.Result).@"enum".fields.len),
-        layout.result_count,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @typeInfo(c.MotionType).@"enum".fields.len),
-        layout.motion_type_count,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @typeInfo(c.GroundState).@"enum".fields.len),
-        layout.ground_state_count,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @typeInfo(c.ShapeSubType).@"enum".fields.len),
-        layout.shape_sub_type_count,
-    );
-    try std.testing.expectEqual(
-        @as(u32, @typeInfo(c.ValidateResult).@"enum".fields.len),
-        layout.validate_result_count,
-    );
-
-    // Jolt's plain allocate takes no alignment yet demands one; the wrapper
-    // reads it rather than assuming 16.
-    try std.testing.expectEqual(
-        @as(u32, @intCast(c.zjoltDefaultAllocateAlignment())),
-        layout.default_allocate_alignment,
-    );
 }
 
 test "version reporting is wired up" {

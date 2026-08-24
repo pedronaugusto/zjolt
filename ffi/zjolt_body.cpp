@@ -67,9 +67,9 @@ ZJoltResult VisitBodies(const ZJoltPhysicsSystem *system,
                         uint32_t *out_missing, Visitor visit) {
   zjolt::ClearError();
   if (out_missing != nullptr) *out_missing = 0;
-  if (system == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
-  if (count == 0) return ZJOLT_OK;
-  if (ids == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (system == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (count == 0) return ZJOLT_RESULT_OK;
+  if (ids == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   const JPH::BodyLockInterface &lock_interface =
       system->system.GetBodyLockInterface();
@@ -93,7 +93,7 @@ ZJoltResult VisitBodies(const ZJoltPhysicsSystem *system,
   }
 
   if (out_missing != nullptr) *out_missing = missing;
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 }  // namespace
@@ -122,7 +122,7 @@ void zjoltBodyDescInit(ZJoltBodyDesc *desc) {
   desc->motion_type = ToCMotionType(defaults.mMotionType);
   desc->motion_quality = ZJOLT_MOTION_QUALITY_DISCRETE;
   desc->allowed_dofs = ZJOLT_ALLOWED_DOFS_ALL;
-  desc->override_mass_properties = ZJOLT_OVERRIDE_MASS_CALCULATE_MASS_AND_INERTIA;
+  desc->override_mass_properties = ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_MASS_AND_INERTIA;
   desc->mass = 0.0f;
   desc->allow_dynamic_or_kinematic = defaults.mAllowDynamicOrKinematic;
   desc->is_sensor = defaults.mIsSensor;
@@ -142,7 +142,7 @@ namespace {
 ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
                                   JPH::BodyCreationSettings *out) {
   if (desc.shape == nullptr) {
-    return zjolt::SetError(ZJOLT_ERR_INVALID_ARGUMENT,
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a body needs a shape");
   }
 
@@ -170,10 +170,10 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
   out->mMaxAngularVelocity = desc.max_angular_velocity;
   out->mGravityFactor = desc.gravity_factor;
 
-  if (desc.override_mass_properties == ZJOLT_OVERRIDE_MASS_CALCULATE_INERTIA) {
+  if (desc.override_mass_properties == ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
     if (!(desc.mass > 0.0f)) {
       return zjolt::SetError(
-          ZJOLT_ERR_INVALID_ARGUMENT,
+          ZJOLT_RESULT_INVALID_ARGUMENT,
           "override_mass_properties asks for an explicit mass, so mass must "
           "be positive");
     }
@@ -184,7 +184,7 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
     out->mOverrideMassProperties =
         JPH::EOverrideMassProperties::CalculateMassAndInertia;
   }
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 }  // namespace
@@ -192,22 +192,22 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
 ZJoltResult zjoltBodyCreate(ZJoltPhysicsSystem *system,
                             const ZJoltBodyDesc *desc, ZJoltBodyId *out) {
   zjolt::ClearError();
-  if (out == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (out == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
   *out = ZJOLT_BODY_ID_INVALID;
-  if (system == nullptr || desc == nullptr) return ZJOLT_ERR_INVALID_ARGUMENT;
+  if (system == nullptr || desc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyCreationSettings settings;
   const ZJoltResult built = BuildCreationSettings(*desc, &settings);
-  if (built != ZJOLT_OK) return built;
+  if (built != ZJOLT_RESULT_OK) return built;
 
   JPH::Body *body = Interface(system)->CreateBody(settings);
   if (body == nullptr) {
     return zjolt::SetError(
-        ZJOLT_ERR_OUT_OF_MEMORY,
+        ZJOLT_RESULT_OUT_OF_MEMORY,
         "the system is already holding max_bodies bodies");
   }
   *out = zjolt::ToC(body->GetID());
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
@@ -215,9 +215,9 @@ ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                   ZJoltActivation activation,
                                   ZJoltBodyId *out) {
   const ZJoltResult created = zjoltBodyCreate(system, desc, out);
-  if (created != ZJOLT_OK) return created;
+  if (created != ZJOLT_RESULT_OK) return created;
   Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(activation));
-  return ZJOLT_OK;
+  return ZJOLT_RESULT_OK;
 }
 
 void zjoltBodyDestroy(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
