@@ -359,11 +359,11 @@ int main(void) {
      the entry points could quietly drop. */
   CHECK(!zjoltIsInitialized(), "should not be initialized yet");
   ZJoltShape *before_init = (ZJoltShape *)&init; /* deliberate garbage */
-  CHECK(zjoltShapeCreateSphere(1.0f, 0.0f, &before_init) ==
+  CHECK(zjoltShapeCreateSphere(1.0f, 0.0f, NULL, &before_init) ==
             ZJOLT_RESULT_NOT_INITIALIZED,
         "a call before init is refused");
   CHECK(before_init == NULL, "a refused call still clears its out-parameter");
-  CHECK(zjoltShapeCreateSphere(1.0f, 0.0f, NULL) ==
+  CHECK(zjoltShapeCreateSphere(1.0f, 0.0f, NULL, NULL) ==
             ZJOLT_RESULT_NOT_INITIALIZED,
         "not being up outranks a bad argument");
 
@@ -389,7 +389,7 @@ int main(void) {
   //-------------------------------------------------------------------------
 
   ZJoltShape *sphere = NULL;
-  CHECK_OK(zjoltShapeCreateSphere(0.5f, 1000.0f, &sphere));
+  CHECK_OK(zjoltShapeCreateSphere(0.5f, 1000.0f, NULL, &sphere));
   CHECK(zjoltShapeGetRefCount(sphere) == 1, "a fresh shape has one reference");
   CHECK(zjoltShapeGetSubType(sphere) == ZJOLT_SHAPE_SUB_TYPE_SPHERE,
         "sphere sub type");
@@ -400,7 +400,7 @@ int main(void) {
 
   const ZJoltVec3 half_extent = {0.5f, 0.5f, 0.5f};
   ZJoltShape *box = NULL;
-  CHECK_OK(zjoltShapeCreateBox(&half_extent, 0.05f, 1000.0f, &box));
+  CHECK_OK(zjoltShapeCreateBox(&half_extent, 0.05f, 1000.0f, NULL, &box));
 
   /* Decorated: the box, offset and rotated inside a parent. */
   const ZJoltVec3 offset = {0.0f, 1.0f, 0.0f};
@@ -418,7 +418,7 @@ int main(void) {
   makeBoxMesh(0.5f, 0.5f, 0.5f, hull_points, mesh_indices);
   ZJoltShape *hull = NULL;
   CHECK_OK(zjoltShapeCreateConvexHull(hull_points, 8, 0.05f, 0.0f, 1000.0f,
-                                      &hull));
+                                      NULL, &hull));
   CHECK(zjoltShapeGetSubType(hull) == ZJOLT_SHAPE_SUB_TYPE_CONVEX_HULL,
         "hull sub type");
 
@@ -427,8 +427,8 @@ int main(void) {
   uint32_t floor_indices[36];
   makeBoxMesh(20.0f, 0.5f, 20.0f, floor_vertices, floor_indices);
   ZJoltShape *floor_shape = NULL;
-  CHECK_OK(zjoltShapeCreateMesh(floor_vertices, 8, floor_indices, 12, 0,
-                                &floor_shape));
+  CHECK_OK(zjoltShapeCreateMesh(floor_vertices, 8, floor_indices, 12, NULL,
+                                NULL, 0, 0, &floor_shape));
   CHECK(zjoltShapeGetSubType(floor_shape) == ZJOLT_SHAPE_SUB_TYPE_MESH,
         "floor is a mesh");
 
@@ -854,7 +854,8 @@ int main(void) {
   //-------------------------------------------------------------------------
 
   ZJoltShape *character_shape = NULL;
-  CHECK_OK(zjoltShapeCreateCapsule(0.5f, 0.3f, 1000.0f, &character_shape));
+  CHECK_OK(zjoltShapeCreateCapsule(0.5f, 0.3f, 1000.0f, NULL,
+                                   &character_shape));
 
   ZJoltCharacterDesc character_desc;
   zjoltCharacterDescInit(&character_desc);
@@ -901,6 +902,114 @@ int main(void) {
             character_position.y < (ZJoltReal)0.95,
         "the character settled on the floor at y = %f",
         (double)character_position.y);
+
+  //-------------------------------------------------------------------------
+  // Materials, and the shapes that carry more than one
+  //
+  // Driven from C on purpose. The ABI cross-check compares pointee types only
+  // by size and alignment, so a `const ZJoltPhysicsMaterial *const *` declared
+  // on the Zig side as an array of something else the same width passes it
+  // and produces a wrong answer only here.
+  //-------------------------------------------------------------------------
+
+  ZJoltColor gravel_color = {160, 150, 140, 255};
+  ZJoltPhysicsMaterial *gravel = NULL;
+  CHECK_OK(zjoltPhysicsMaterialCreate("gravel", &gravel_color, &gravel));
+  CHECK(zjoltPhysicsMaterialGetRefCount(gravel) == 1,
+        "a fresh material has one reference");
+  CHECK(strcmp(zjoltPhysicsMaterialGetDebugName(gravel), "gravel") == 0,
+        "a material remembers its debug name");
+
+  ZJoltColor read_back;
+  zjoltPhysicsMaterialGetDebugColor(gravel, &read_back);
+  CHECK(read_back.r == 160 && read_back.g == 150 && read_back.b == 140 &&
+            read_back.a == 255,
+        "a material remembers its debug colour");
+
+  ZJoltPhysicsMaterial *metal = NULL;
+  CHECK_OK(zjoltPhysicsMaterialCreate("metal", NULL, &metal));
+
+  /* A convex shape carries one material, read at the empty sub-shape id.
+     Jolt ASSERTS the id is empty there, so any other value would abort this
+     process rather than return. */
+  ZJoltShape *pebble = NULL;
+  CHECK_OK(zjoltShapeCreateSphere(0.5f, 1000.0f, gravel, &pebble));
+  CHECK(zjoltPhysicsMaterialGetRefCount(gravel) == 2,
+        "the shape took a reference of its own");
+  CHECK(zjoltShapeGetMaterial(pebble, ZJOLT_SUB_SHAPE_ID_EMPTY) == gravel,
+        "a convex shape reports the material it was built with");
+
+  /* A shape built without one reports the shared default, not NULL. */
+  ZJoltShape *plain = NULL;
+  CHECK_OK(zjoltShapeCreateSphere(0.5f, 1000.0f, NULL, &plain));
+  CHECK(zjoltShapeGetMaterial(plain, ZJOLT_SUB_SHAPE_ID_EMPTY) ==
+            zjoltPhysicsMaterialDefault(),
+        "no material means the default, which is a material and not a NULL");
+  zjoltShapeRelease(plain);
+
+  /* A mesh carries one per triangle, and a hit's sub-shape id is what maps
+     back to it — Jolt reorders the triangles while it builds the tree, so
+     nothing else can. Two triangles forming a flat quad, wound to face up:
+     triangle 0 covers x < z, triangle 1 covers x > z. */
+  const ZJoltVec3 quad_vertices[4] = {
+      {0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f},
+      {2.0f, 0.0f, 2.0f}, {0.0f, 0.0f, 2.0f},
+  };
+  const uint32_t quad_indices[6] = {0, 3, 2, 0, 2, 1};
+  const uint32_t quad_triangle_materials[2] = {0, 1};
+  const ZJoltPhysicsMaterial *quad_materials[2] = {gravel, metal};
+
+  ZJoltShape *quad = NULL;
+  CHECK_OK(zjoltShapeCreateMesh(quad_vertices, 4, quad_indices, 2,
+                                quad_triangle_materials, quad_materials, 2, 0,
+                                &quad));
+
+  ZJoltBodyDesc quad_desc;
+  zjoltBodyDescInit(&quad_desc);
+  quad_desc.shape = quad;
+  quad_desc.object_layer = LAYER_STATIC;
+  quad_desc.motion_type = ZJOLT_MOTION_TYPE_STATIC;
+  quad_desc.position.y = (ZJoltReal)3.0;
+
+  ZJoltBodyId quad_id = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltBodyCreateAndAdd(system, &quad_desc,
+                                 ZJOLT_ACTIVATION_DONT_ACTIVATE, &quad_id));
+  zjoltPhysicsSystemOptimizeBroadPhase(system);
+
+  const ZJoltVec3 straight_down = {0.0f, -20.0f, 0.0f};
+  ZJoltRVec3 over_gravel = {(ZJoltReal)0.5, (ZJoltReal)10.0, (ZJoltReal)1.5};
+  ZJoltRVec3 over_metal = {(ZJoltReal)1.5, (ZJoltReal)10.0, (ZJoltReal)0.5};
+
+  ZJoltRayCastHit gravel_hit, metal_hit;
+  bool got_gravel = false, got_metal = false;
+  CHECK_OK(zjoltCastRayClosest(system, &over_gravel, &straight_down, NULL,
+                               &gravel_hit, &got_gravel));
+  CHECK_OK(zjoltCastRayClosest(system, &over_metal, &straight_down, NULL,
+                               &metal_hit, &got_metal));
+  CHECK(got_gravel && got_metal, "both halves of the quad were hit");
+  CHECK(gravel_hit.body == quad_id && metal_hit.body == quad_id,
+        "both rays found the quad");
+  CHECK(gravel_hit.sub_shape_id != metal_hit.sub_shape_id,
+        "the two triangles are different leaves of one shape");
+  CHECK(zjoltShapeGetMaterial(quad, gravel_hit.sub_shape_id) == gravel,
+        "the triangle at x < z kept its material");
+  CHECK(zjoltShapeGetMaterial(quad, metal_hit.sub_shape_id) == metal,
+        "the triangle at x > z kept its material");
+  CHECK(zjoltBodyGetMaterial(system, quad_id, metal_hit.sub_shape_id) == metal,
+        "and the body answers the same as the shape");
+
+  /* Not a way to test whether a body exists: Jolt's body lock fails and it
+     answers with the shared default rather than reporting anything. */
+  CHECK(zjoltBodyGetMaterial(system, ZJOLT_BODY_ID_INVALID,
+                             ZJOLT_SUB_SHAPE_ID_EMPTY) ==
+            zjoltPhysicsMaterialDefault(),
+        "a stale body id reads as the default material, not as a failure");
+
+  zjoltBodyDestroy(system, quad_id);
+  zjoltShapeRelease(quad);
+  zjoltShapeRelease(pebble);
+  zjoltPhysicsMaterialRelease(metal);
+  zjoltPhysicsMaterialRelease(gravel);
 
   //-------------------------------------------------------------------------
   // Teardown

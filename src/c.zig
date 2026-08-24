@@ -117,6 +117,21 @@ pub const ShapeStats = extern struct {
     num_triangles: u32,
 };
 
+pub const Color = extern struct {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+};
+
+/// One child of a compound shape, in the parent's local space.
+pub const CompoundChild = extern struct {
+    shape: ?*const Shape = null,
+    position: Vec3 = .{ .x = 0, .y = 0, .z = 0 },
+    rotation: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 },
+    user_data: u32 = 0,
+};
+
 //=============================================================================
 // Enumerations
 //=============================================================================
@@ -179,6 +194,16 @@ pub const ShapeSubType = enum(c_int) {
     scaled = 6,
     rotated_translated = 7,
     offset_center_of_mass = 8,
+    triangle = 9,
+    cylinder = 10,
+    tapered_capsule = 11,
+    tapered_cylinder = 12,
+    static_compound = 13,
+    mutable_compound = 14,
+    height_field = 15,
+    plane = 16,
+    empty = 17,
+    soft_body = 18,
 };
 
 pub const BackFaceMode = enum(c_int) {
@@ -223,6 +248,7 @@ pub const UpdateError = packed struct(u32) {
 //=============================================================================
 
 pub const Shape = opaque {};
+pub const PhysicsMaterial = opaque {};
 pub const PhysicsSystem = opaque {};
 pub const JobSystem = opaque {};
 pub const Body = opaque {};
@@ -564,11 +590,11 @@ pub extern fn zjoltJobSystemCreateSingleThreaded(max_jobs: u32, out: **JobSystem
 pub extern fn zjoltJobSystemDestroy(job_system: ?*JobSystem) void;
 pub extern fn zjoltJobSystemGetMaxConcurrency(job_system: *const JobSystem) u32;
 
-pub extern fn zjoltShapeCreateBox(half_extent: *const Vec3, convex_radius: f32, density: f32, out: **Shape) Result;
-pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, out: **Shape) Result;
-pub extern fn zjoltShapeCreateCapsule(half_height_of_cylinder: f32, radius: f32, density: f32, out: **Shape) Result;
-pub extern fn zjoltShapeCreateConvexHull(points: [*]const Vec3, num_points: u32, max_convex_radius: f32, hull_tolerance: f32, density: f32, out: **Shape) Result;
-pub extern fn zjoltShapeCreateMesh(vertices: [*]const Vec3, num_vertices: u32, indices: [*]const u32, num_triangles: u32, max_triangles_per_leaf: u32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateBox(half_extent: *const Vec3, convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateCapsule(half_height_of_cylinder: f32, radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateConvexHull(points: [*]const Vec3, num_points: u32, max_convex_radius: f32, hull_tolerance: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateMesh(vertices: [*]const Vec3, num_vertices: u32, indices: [*]const u32, num_triangles: u32, triangle_materials: ?[*]const u32, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, max_triangles_per_leaf: u32, out: **Shape) Result;
 pub extern fn zjoltShapeCreateScaled(inner: *const Shape, scale: *const Vec3, out: **Shape) Result;
 pub extern fn zjoltShapeCreateRotatedTranslated(inner: *const Shape, translation: *const Vec3, rotation: *const Quat, out: **Shape) Result;
 pub extern fn zjoltShapeCreateOffsetCenterOfMass(inner: *const Shape, offset: *const Vec3, out: **Shape) Result;
@@ -583,6 +609,30 @@ pub extern fn zjoltShapeGetMassProperties(shape: *const Shape, out: *MassPropert
 pub extern fn zjoltShapeGetStats(shape: *const Shape, out: *ShapeStats) void;
 pub extern fn zjoltShapeSave(shape: *const Shape, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 pub extern fn zjoltShapeRestore(data: [*]const u8, size: usize, out: **Shape) Result;
+pub extern fn zjoltShapeCreateCylinder(half_height: f32, radius: f32, convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateTriangle(v1: *const Vec3, v2: *const Vec3, v3: *const Vec3, convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateTaperedCapsule(half_height_of_tapered_cylinder: f32, top_radius: f32, bottom_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateTaperedCylinder(half_height: f32, top_radius: f32, bottom_radius: f32, convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreatePlane(normal: *const Vec3, constant: f32, half_extent: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateEmpty(center_of_mass: ?*const Vec3, out: **Shape) Result;
+pub extern fn zjoltShapeCreateHeightField(samples: [*]const f32, sample_count: u32, offset: ?*const Vec3, scale: ?*const Vec3, material_indices: ?[*]const u8, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, block_size: u32, bits_per_sample: u32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateStaticCompound(children: [*]const CompoundChild, num_children: u32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateMutableCompound(children: [*]const CompoundChild, num_children: u32, out: **Shape) Result;
+pub extern fn zjoltShapeCompoundGetNumChildren(shape: *const Shape) u32;
+pub extern fn zjoltShapeCompoundGetChildUserData(shape: *const Shape, index: u32) u32;
+pub extern fn zjoltShapeMutableCompoundAddChild(shape: *Shape, child: *const CompoundChild, out_index: *u32) Result;
+pub extern fn zjoltShapeMutableCompoundRemoveChild(shape: *Shape, index: u32) Result;
+pub extern fn zjoltShapeMutableCompoundMoveChild(shape: *Shape, index: u32, position: *const Vec3, rotation: ?*const Quat) Result;
+pub extern fn zjoltShapeMutableCompoundAdjustCenterOfMass(shape: *Shape) Result;
+pub extern fn zjoltShapeGetMaterial(shape: *const Shape, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
+
+pub extern fn zjoltPhysicsMaterialCreate(debug_name: ?[*:0]const u8, debug_color: ?*const Color, out: **PhysicsMaterial) Result;
+pub extern fn zjoltPhysicsMaterialDefault() ?*const PhysicsMaterial;
+pub extern fn zjoltPhysicsMaterialAddRef(material: *const PhysicsMaterial) void;
+pub extern fn zjoltPhysicsMaterialRelease(material: *const PhysicsMaterial) void;
+pub extern fn zjoltPhysicsMaterialGetRefCount(material: *const PhysicsMaterial) u32;
+pub extern fn zjoltPhysicsMaterialGetDebugName(material: *const PhysicsMaterial) [*:0]const u8;
+pub extern fn zjoltPhysicsMaterialGetDebugColor(material: *const PhysicsMaterial, out: *Color) void;
 
 pub extern fn zjoltPhysicsSystemDescInit(desc: *PhysicsSystemDesc) void;
 pub extern fn zjoltPhysicsSystemCreate(desc: *const PhysicsSystemDesc, out: **PhysicsSystem) Result;
@@ -635,6 +685,8 @@ pub extern fn zjoltBodySetRestitution(system: *PhysicsSystem, body: BodyId, rest
 pub extern fn zjoltBodyGetRestitution(system: *const PhysicsSystem, body: BodyId) f32;
 pub extern fn zjoltBodySetGravityFactor(system: *PhysicsSystem, body: BodyId, factor: f32) void;
 pub extern fn zjoltBodyGetGravityFactor(system: *const PhysicsSystem, body: BodyId) f32;
+pub extern fn zjoltBodyGetMaterial(system: *const PhysicsSystem, body: BodyId, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
+pub extern fn zjoltBodyNotifyShapeChanged(system: *PhysicsSystem, body: BodyId, previous_center_of_mass: *const Vec3, update_mass_properties: bool, activation: Activation) void;
 
 pub extern fn zjoltBodyGetTransforms(system: *const PhysicsSystem, ids: [*]const BodyId, count: u32, out_positions: ?[*]RVec3, out_rotations: ?[*]Quat, out_missing: ?*u32) Result;
 pub extern fn zjoltBodyGetMotions(system: *const PhysicsSystem, ids: [*]const BodyId, count: u32, out_center_of_mass: ?[*]RVec3, out_linear_velocities: ?[*]Vec3, out_missing: ?*u32) Result;

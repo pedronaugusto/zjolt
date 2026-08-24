@@ -170,6 +170,36 @@ ZJOLT_API void zjoltBodySetGravityFactor(ZJoltPhysicsSystem *system,
 ZJOLT_API float zjoltBodyGetGravityFactor(const ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body);
 
+/// The material of one leaf of the body's shape. @see zjoltShapeGetMaterial
+/// for what a material is and for the sub-shape id rules.
+///
+/// THIS IS NOT A WAY TO TEST WHETHER A BODY EXISTS. Jolt takes a body lock and
+/// returns the shared default material when it fails, so a body that was
+/// destroyed and a body whose shape has no materials of its own answer
+/// identically. That answer is forwarded rather than replaced with an invented
+/// NULL, because reporting a failure Jolt did not report would be a different
+/// contract, not a stricter one. Use zjoltBodyIsAdded when the question is
+/// about the body, or take the lock yourself and read the shape through
+/// zjoltBodyGetShapeLocked.
+///
+/// NULL only when `system` is NULL or the library is not initialised.
+ZJOLT_API const ZJoltPhysicsMaterial *zjoltBodyGetMaterial(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    ZJoltSubShapeId sub_shape_id);
+
+/// Tells the system a body's shape changed underneath it — which is what the
+/// zjoltShapeMutableCompound* calls do.
+///
+/// `previous_center_of_mass` is the shape's centre of mass BEFORE the change,
+/// read with zjoltShapeGetCenterOfMass; the body is moved so that its geometry
+/// stays where it was. With `update_mass_properties` the mass and inertia are
+/// recomputed from the new shape. Without this call the broad phase and the
+/// contact cache go on describing the shape as it used to be.
+ZJOLT_API void zjoltBodyNotifyShapeChanged(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    const ZJoltVec3 *previous_center_of_mass, bool update_mass_properties,
+    ZJoltActivation activation);
+
 //===----------------------------------------------------------------------===//
 // Bulk read-back
 //

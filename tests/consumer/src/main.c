@@ -12,7 +12,7 @@ int main(void) {
   if (zjoltInit(NULL) != ZJOLT_RESULT_OK) return 1;
 
   ZJoltShape *sphere = NULL;
-  if (zjoltShapeCreateSphere(0.5f, 1000.0f, &sphere) != ZJOLT_RESULT_OK) return 1;
+  if (zjoltShapeCreateSphere(0.5f, 1000.0f, NULL, &sphere) != ZJOLT_RESULT_OK) return 1;
 
   ZJoltShapeStats stats;
   zjoltShapeGetStats(sphere, &stats);

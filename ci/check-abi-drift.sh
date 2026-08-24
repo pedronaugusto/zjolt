@@ -106,12 +106,12 @@ try "same-sized adjacent fields swapped" src/c.zig \
     x: f32,'
 
 try "a parameter dropped from a function" src/c.zig \
-'pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, out: **Shape) Result;' \
-'pub extern fn zjoltShapeCreateSphere(radius: f32, out: **Shape) Result;'
+'pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;' \
+'pub extern fn zjoltShapeCreateSphere(radius: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;'
 
 try "a parameter widened (f32 -> f64)" src/c.zig \
-'pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, out: **Shape) Result;' \
-'pub extern fn zjoltShapeCreateSphere(radius: f64, density: f32, out: **Shape) Result;'
+'pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;' \
+'pub extern fn zjoltShapeCreateSphere(radius: f64, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;'
 
 try "an enumerator renumbered" src/c.zig \
 '    in_air = 3,' \

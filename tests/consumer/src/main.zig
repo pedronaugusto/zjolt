@@ -51,7 +51,7 @@ pub fn main() !void {
     defer system.deinit();
     system.setGravity(zjolt.gravity_earth);
 
-    const shape = try zjolt.Shape.initSphere(0.5, 1000);
+    const shape = try zjolt.Shape.initSphere(0.5, .{ .density = 1000 });
     defer shape.release();
 
     const ball = try system.bodies().createAndAdd(.{

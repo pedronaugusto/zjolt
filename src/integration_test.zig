@@ -121,7 +121,7 @@ test "init installs the allocator and deinit gives every byte back" {
 
     try std.testing.expect(zjolt.isInitialized());
 
-    const shape = try zjolt.Shape.initSphere(1.0, 0);
+    const shape = try zjolt.Shape.initSphere(1.0, .{});
     defer shape.release();
     try std.testing.expect(shape.volume() > 0);
 }
@@ -138,7 +138,7 @@ test "calls before init are refused rather than crashing" {
     try std.testing.expect(!zjolt.isInitialized());
     try std.testing.expectError(
         zjolt.Error.NotInitialized,
-        zjolt.Shape.initSphere(1.0, 0),
+        zjolt.Shape.initSphere(1.0, .{}),
     );
     try std.testing.expectError(
         zjolt.Error.NotInitialized,
@@ -177,7 +177,7 @@ test "misuse is refused rather than fatal" {
 
     // A save buffer too small to hold even the container header. The failure
     // has to come back as a size, not as a write past the end of it.
-    const sphere = try zjolt.Shape.initSphere(0.5, 0);
+    const sphere = try zjolt.Shape.initSphere(0.5, .{});
     defer sphere.release();
 
     const needed = try sphere.saveSize();
@@ -271,7 +271,7 @@ test "every shape kind builds and reports itself" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    const sphere = try zjolt.Shape.initSphere(0.5, 0);
+    const sphere = try zjolt.Shape.initSphere(0.5, .{});
     defer sphere.release();
     try std.testing.expectEqual(zjolt.ShapeSubType.sphere, sphere.subType());
     try std.testing.expectEqual(@as(u32, 1), sphere.refCount());
@@ -284,7 +284,7 @@ test "every shape kind builds and reports itself" {
     try std.testing.expectApproxEqAbs(@as(f32, -1), bounds.min.x, 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 3), bounds.max.z, 1e-5);
 
-    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, 0);
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
     defer capsule.release();
     try std.testing.expectEqual(zjolt.ShapeSubType.capsule, capsule.subType());
 
@@ -299,7 +299,7 @@ test "every shape kind builds and reports itself" {
     // corners slightly, so this is approximate on purpose.
     try std.testing.expectApproxEqAbs(@as(f32, 8), hull.volume(), 0.5);
 
-    const mesh = try zjolt.Shape.initMesh(&cube_points, &cube_indices, 0);
+    const mesh = try zjolt.Shape.initMesh(&cube_points, &cube_indices, .{});
     defer mesh.release();
     try std.testing.expectEqual(zjolt.ShapeSubType.mesh, mesh.subType());
     try std.testing.expectEqual(@as(u32, 12), mesh.stats().num_triangles);
@@ -343,7 +343,7 @@ test "a malformed mesh is refused with a reason" {
     const bad_indices = [_]u32{ 0, 1, 99 };
     try std.testing.expectError(
         zjolt.Error.InvalidArgument,
-        zjolt.Shape.initMesh(&points, &bad_indices, 0),
+        zjolt.Shape.initMesh(&points, &bad_indices, .{}),
     );
     try std.testing.expect(zjolt.lastError().len > 0);
 
@@ -351,7 +351,7 @@ test "a malformed mesh is refused with a reason" {
     const short_indices = [_]u32{ 0, 1 };
     try std.testing.expectError(
         zjolt.Error.InvalidArgument,
-        zjolt.Shape.initMesh(&points, &short_indices, 0),
+        zjolt.Shape.initMesh(&points, &short_indices, .{}),
     );
 
     const no_points: []const zjolt.Vec3 = &.{};
@@ -369,7 +369,7 @@ test "a shape survives a save and restore, and refuses damaged input" {
     var indices: [36]u32 = undefined;
     makeBoxMesh(3, 1, 2, &points, &indices);
 
-    const mesh = try zjolt.Shape.initMesh(&points, &indices, 0);
+    const mesh = try zjolt.Shape.initMesh(&points, &indices, .{});
     defer mesh.release();
 
     const saved = try mesh.saveAlloc(std.testing.allocator);
@@ -447,7 +447,7 @@ test "a truncated payload inside a well-formed container is still refused" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    const sphere = try zjolt.Shape.initSphere(0.5, 0);
+    const sphere = try zjolt.Shape.initSphere(0.5, .{});
     defer sphere.release();
 
     const saved = try sphere.saveAlloc(std.testing.allocator);
@@ -500,7 +500,7 @@ test "a dynamic body falls under gravity and comes to rest on the floor" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -619,7 +619,7 @@ test "a rotation that is not unit length is renormalised, not fatal" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -683,7 +683,7 @@ test "an impulse changes velocity immediately and a force does not" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -717,7 +717,7 @@ test "a body constrained to a plane stays in it" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -817,7 +817,7 @@ test "a step reports which limit it ran out of" {
         .position = zjolt.rvec3(0, -0.5, 0),
     }, .dont_activate);
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
     for (0..40) |i| {
         const f: f32 = @floatFromInt(i);
@@ -940,7 +940,7 @@ test "contact and activation listeners fire with the right bodies" {
         zjolt.bodyActivationListener(ActivationRecorder, &activations);
     try world.system.setBodyActivationListener(&activation_listener);
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -1008,7 +1008,7 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -1492,7 +1492,7 @@ test "bulk read-back matches the per-body accessors" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.4, 0);
+    const shape = try zjolt.Shape.initSphere(0.4, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -1562,7 +1562,7 @@ test "a body lock reads and writes the body it holds" {
     var world = try World.init();
     defer world.deinit();
 
-    const shape = try zjolt.Shape.initSphere(0.5, 0);
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const bodies = world.system.bodies();
@@ -1622,7 +1622,7 @@ test "a character settles on the floor and reports the body under it" {
     var world = try World.init();
     defer world.deinit();
 
-    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, 0);
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
     defer capsule.release();
 
     const character = try zjolt.Character.init(world.system, .{
@@ -1666,7 +1666,7 @@ test "a character settles on the floor and reports the body under it" {
     try std.testing.expectApproxEqAbs(@as(zjolt.Real, 0.8), position.y, 0.1);
 
     // Crouching: a shorter shape always fits.
-    const crouched = try zjolt.Shape.initCapsule(0.2, 0.3, 0);
+    const crouched = try zjolt.Shape.initCapsule(0.2, 0.3, .{});
     defer crouched.release();
     try std.testing.expect(try character.setShape(crouched, 0.02, null));
     try std.testing.expectEqual(crouched.handle, (character.getShape() orelse
@@ -1680,7 +1680,7 @@ test "a character with an inner body is visible to ray casts" {
     var world = try World.init();
     defer world.deinit();
 
-    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, 0);
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
     defer capsule.release();
 
     const character = try zjolt.Character.init(world.system, .{
@@ -1703,6 +1703,583 @@ test "a character with an inner body is visible to ray casts" {
     )) orelse return error.TestUnexpectedResult;
     // Without the inner body this ray would have found the floor.
     try std.testing.expectEqual(inner, hit.body);
+}
+
+//=============================================================================
+// The rest of the shape catalogue
+//=============================================================================
+
+test "the remaining shape kinds build and report themselves" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const triangle = try zjolt.Shape.initTriangle(
+        zjolt.vec3(0, 0, 0),
+        zjolt.vec3(0, 0, 1),
+        zjolt.vec3(1, 0, 1),
+        .{},
+    );
+    defer triangle.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.triangle, triangle.subType());
+
+    const cylinder = try zjolt.Shape.initCylinder(1.0, 0.5, .{});
+    defer cylinder.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.cylinder, cylinder.subType());
+    // pi * r^2 * h, with the convex radius rounding the rim slightly.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, std.math.pi * 0.25 * 2.0),
+        cylinder.volume(),
+        0.05,
+    );
+
+    const tapered_capsule = try zjolt.Shape.initTaperedCapsule(0.5, 0.2, 0.4, .{});
+    defer tapered_capsule.release();
+    try std.testing.expectEqual(
+        zjolt.ShapeSubType.tapered_capsule,
+        tapered_capsule.subType(),
+    );
+
+    // Jolt simplifies as it builds, and the surprise is worth pinning rather
+    // than merely documenting: a tapered capsule whose larger sphere swallows
+    // the smaller one is not a tapered capsule at all. Equal radii do the same
+    // to a tapered cylinder.
+    const swallowed = try zjolt.Shape.initTaperedCapsule(0.05, 0.1, 1.0, .{});
+    defer swallowed.release();
+    try std.testing.expect(swallowed.subType() != .tapered_capsule);
+
+    const tapered_cylinder = try zjolt.Shape.initTaperedCylinder(0.5, 0.2, 0.4, .{});
+    defer tapered_cylinder.release();
+    try std.testing.expectEqual(
+        zjolt.ShapeSubType.tapered_cylinder,
+        tapered_cylinder.subType(),
+    );
+
+    const untapered = try zjolt.Shape.initTaperedCylinder(0.5, 0.4, 0.4, .{});
+    defer untapered.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.cylinder, untapered.subType());
+
+    const plane = try zjolt.Shape.initPlane(zjolt.vec3(0, 1, 0), 0, .{ .half_extent = 20 });
+    defer plane.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.plane, plane.subType());
+
+    // Authored data, so a normal that is not unit length is refused rather
+    // than normalised — the opposite of what happens to a body's rotation.
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        zjolt.Shape.initPlane(zjolt.vec3(0, 3, 0), 0, .{}),
+    );
+
+    const empty = try zjolt.Shape.initEmpty(zjolt.vec3(0, 1, 0));
+    defer empty.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.empty, empty.subType());
+    try std.testing.expectEqual(@as(f32, 0), empty.volume());
+    try std.testing.expectApproxEqAbs(@as(f32, 1), empty.centerOfMass().y, 1e-5);
+
+    var samples = [_]f32{0} ** 16;
+    const field = try zjolt.Shape.initHeightField(&samples, 4, .{});
+    defer field.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.height_field, field.subType());
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.5, 0.5), .{});
+    defer box.release();
+
+    const children = [_]zjolt.CompoundChild{
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(-1, 0, 0), .user_data = 11 }),
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(1, 0, 0), .user_data = 22 }),
+    };
+
+    const static_compound = try zjolt.Shape.initStaticCompound(&children);
+    defer static_compound.release();
+    try std.testing.expectEqual(
+        zjolt.ShapeSubType.static_compound,
+        static_compound.subType(),
+    );
+    try std.testing.expectEqual(@as(u32, 2), static_compound.compoundChildCount());
+    try std.testing.expectEqual(@as(u32, 22), static_compound.compoundChildUserData(1));
+
+    // The other simplification: a static compound of exactly one unmoved child
+    // is that child, and one that is moved is a rotated-translated shape.
+    const one_child = try zjolt.Shape.initStaticCompound(&.{zjolt.compoundChild(box, .{})});
+    defer one_child.release();
+    try std.testing.expectEqual(zjolt.ShapeSubType.box, one_child.subType());
+
+    const moved_child = try zjolt.Shape.initStaticCompound(
+        &.{zjolt.compoundChild(box, .{ .position = zjolt.vec3(0, 2, 0) })},
+    );
+    defer moved_child.release();
+    try std.testing.expectEqual(
+        zjolt.ShapeSubType.rotated_translated,
+        moved_child.subType(),
+    );
+
+    // A mutable compound never simplifies, because the child count is not
+    // final.
+    const mutable = try zjolt.MutableCompound.init(&children);
+    defer mutable.release();
+    try std.testing.expectEqual(
+        zjolt.ShapeSubType.mutable_compound,
+        mutable.asShape().subType(),
+    );
+
+    // A compound cannot encode "no children", so no constructor accepts it.
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        zjolt.Shape.initStaticCompound(&.{}),
+    );
+    // And a MUTABLE compound cannot go to one either: it does not simplify,
+    // so a single child would leave Jolt computing CountLeadingZeros(0) — a
+    // bare __builtin_clz on ARM, where zero is undefined. Refused at both
+    // ends, so the shape can never be in that state.
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        zjolt.MutableCompound.init(&.{zjolt.compoundChild(box, .{})}),
+    );
+    try std.testing.expectError(zjolt.Error.InvalidArgument, mutable.removeChild(0));
+
+    // And the mutators are for mutable compounds only, which is a returned
+    // error rather than a bad cast because there is no RTTI to ask.
+    const not_a_compound = zjolt.MutableCompound{ .handle = @constCast(box.handle) };
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        not_a_compound.adjustCenterOfMass(),
+    );
+    // Jolt's own RemoveShape and ModifyShape index their array with neither a
+    // bounds check nor an assertion, so the range check is this side's job.
+    try std.testing.expectError(zjolt.Error.InvalidArgument, mutable.removeChild(7));
+    try std.testing.expectError(
+        zjolt.Error.InvalidArgument,
+        mutable.moveChild(7, zjolt.vec3_zero, zjolt.quat_identity),
+    );
+}
+
+test "a plane holds a body up" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    // A half space five metres above the fixture's floor. If it does not
+    // collide, the ball carries on down to the floor at y = 0.5 and the
+    // difference is unmistakable.
+    const plane = try zjolt.Shape.initPlane(zjolt.vec3(0, 1, 0), 0, .{ .half_extent = 20 });
+    defer plane.release();
+
+    const bodies = world.system.bodies();
+    _ = try bodies.createAndAdd(.{
+        .shape = plane,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .dont_activate);
+
+    const ball_shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer ball_shape.release();
+    const ball = try bodies.createAndAdd(.{
+        .shape = ball_shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 8, 0),
+    }, .activate);
+
+    world.system.optimizeBroadPhase();
+    try world.stepFor(2.0);
+
+    const y = bodies.getTransform(ball).position.y;
+    try std.testing.expectApproxEqAbs(@as(zjolt.Real, 5.5), y, 0.05);
+}
+
+test "a height field's surface is where its samples say, and a hole is a hole" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    // 4x4 samples is the smallest field the default block size allows: Jolt
+    // wants at least two blocks along each axis.
+    var samples = [_]f32{0} ** 16;
+    // One sample of the sentinel removes the one quad it is a corner of.
+    samples[0] = zjolt.height_field_no_collision;
+
+    const field = try zjolt.Shape.initHeightField(&samples, 4, .{});
+    defer field.release();
+
+    const bodies = world.system.bodies();
+    const terrain = try bodies.createAndAdd(.{
+        .shape = field,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const queries = world.system.queries();
+
+    // Middle of a solid quad: the surface is exactly where the samples put it.
+    const solid = (try queries.castRayClosest(
+        zjolt.rvec3(2.5, 10, 2.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(terrain, solid.body);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 4.0),
+        10.0 - 20.0 * solid.fraction,
+        0.05,
+    );
+
+    // Middle of the hole: the ray goes straight through to the fixture's
+    // floor, five metres below.
+    const through = (try queries.castRayClosest(
+        zjolt.rvec3(0.5, 10, 0.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(world.floor, through.body);
+}
+
+test "a static compound collides at each of its children and nowhere between" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(0.4, 0.4, 0.4), .{});
+    defer box.release();
+
+    const compound = try zjolt.Shape.initStaticCompound(&.{
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(-2, 0, 0) }),
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(2, 0, 0) }),
+    });
+    defer compound.release();
+
+    const bodies = world.system.bodies();
+    const body = try bodies.createAndAdd(.{
+        .shape = compound,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const queries = world.system.queries();
+
+    // Above each child, and above the gap in the middle. A single box of the
+    // same bounds would answer the same for all three.
+    for ([_]f32{ -2, 2 }) |x| {
+        const hit = (try queries.castRayClosest(
+            zjolt.rvec3(x, 10, 0),
+            zjolt.vec3(0, -20, 0),
+            null,
+        )) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(body, hit.body);
+    }
+
+    const between = (try queries.castRayClosest(
+        zjolt.rvec3(0, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(world.floor, between.body);
+
+    // The two children were hit at different sub-shape ids, which is the whole
+    // reason a compound is not one box.
+    const left = (try queries.castRayClosest(
+        zjolt.rvec3(-2, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )).?;
+    const right = (try queries.castRayClosest(
+        zjolt.rvec3(2, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )).?;
+    try std.testing.expect(left.sub_shape_id != right.sub_shape_id);
+}
+
+test "a mutable compound reflects a runtime edit on the next step" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(1, 0.25, 1), .{});
+    defer box.release();
+
+    // Three shelves, because taking one away has to leave two: a mutable
+    // compound cannot go below that. @see MutableCompound.init.
+    const shelf = try zjolt.MutableCompound.init(&.{
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(-4, 0, 0) }),
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(4, 0, 0) }),
+        zjolt.compoundChild(box, .{ .position = zjolt.vec3(0, 0, 8) }),
+    });
+    defer shelf.release();
+
+    const bodies = world.system.bodies();
+    const platform = try bodies.createAndAdd(.{
+        .shape = shelf.asShape(),
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .dont_activate);
+
+    const ball_shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer ball_shape.release();
+    const ball = try bodies.createAndAdd(.{
+        .shape = ball_shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(4, 6, 0),
+    }, .activate);
+
+    world.system.optimizeBroadPhase();
+    try world.stepFor(2.0);
+
+    // Resting on the right-hand shelf, four and a bit metres up.
+    try std.testing.expectApproxEqAbs(
+        @as(zjolt.Real, 4.75),
+        bodies.getTransform(ball).position.y,
+        0.05,
+    );
+
+    // Take the shelf away underneath it. The centre of mass moves, so it is
+    // read before the edit and handed to notifyShapeChanged, which is also
+    // what invalidates the broad phase and the contact cache — without it the
+    // step would go on colliding against geometry that is no longer there.
+    const previous_center_of_mass = shelf.asShape().centerOfMass();
+    try shelf.removeChild(1);
+    try shelf.adjustCenterOfMass();
+    try std.testing.expectEqual(@as(u32, 2), shelf.childCount());
+    bodies.notifyShapeChanged(platform, previous_center_of_mass, false, .activate);
+
+    bodies.activate(ball);
+    try world.stepFor(2.0);
+
+    // Down to the floor, because there is nothing above it any more.
+    try std.testing.expectApproxEqAbs(
+        @as(zjolt.Real, 0.5),
+        bodies.getTransform(ball).position.y,
+        0.05,
+    );
+}
+
+//=============================================================================
+// Materials
+//
+// A material is an identity and nothing else — no friction, no restitution, no
+// user data. What these assert is the only thing it is for: telling one
+// surface apart from another inside a single shape, through the sub-shape id a
+// hit carries.
+//=============================================================================
+
+test "a convex shape reports the material it was built with, at the empty sub-shape id" {
+    AssertSink.reset();
+    try zjolt.init(.{
+        .allocator = std.testing.allocator,
+        .assert_failed = AssertSink.onAssert,
+    });
+    defer zjolt.deinit();
+
+    const gravel = try zjolt.PhysicsMaterial.init(.{
+        .debug_name = "gravel",
+        .debug_color = zjolt.color(160, 150, 140),
+    });
+    defer gravel.release();
+
+    try std.testing.expectEqual(@as(u32, 1), gravel.refCount());
+    try std.testing.expectEqualStrings("gravel", gravel.debugName());
+    try std.testing.expectEqual(@as(u8, 160), gravel.debugColor().r);
+    try std.testing.expectEqual(@as(u8, 255), gravel.debugColor().a);
+
+    const sphere = try zjolt.Shape.initSphere(0.5, .{ .material = gravel });
+    defer sphere.release();
+
+    // The shape holds a reference of its own, which is what makes "create the
+    // material, build the shapes, release" correct.
+    try std.testing.expectEqual(@as(u32, 2), gravel.refCount());
+
+    const found = sphere.material(zjolt.sub_shape_id_empty) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(found.eql(gravel));
+
+    // The constant, pinned against what Jolt itself treats as empty rather
+    // than against a number typed twice. ConvexShape::GetMaterial asserts the
+    // id is empty, so the right value fires no assertion...
+    try std.testing.expectEqual(@as(u32, 0), AssertSink.count);
+    // ...and any other value does. Only observable in a build that kept Jolt's
+    // assertions; without them there is no assertion to count, and without the
+    // hook installed above this line would take the process down rather than
+    // return.
+    if (zjolt.options.enable_asserts) {
+        _ = sphere.material(0);
+        try std.testing.expect(AssertSink.count > 0);
+        AssertSink.reset();
+    }
+
+    // A shape built without one is not a shape with no material: it reports
+    // the shared default, which is a real material and not a null.
+    const bare = try zjolt.Shape.initBox(zjolt.vec3(1, 1, 1), .{});
+    defer bare.release();
+    const default = zjolt.PhysicsMaterial.default() orelse
+        return error.TestUnexpectedResult;
+    const bare_material = bare.material(zjolt.sub_shape_id_empty) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(bare_material.eql(default));
+    try std.testing.expect(!bare_material.eql(gravel));
+    try std.testing.expectEqualStrings("Default", default.debugName());
+}
+
+test "a mesh reports the material of the triangle that was hit" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const gravel = try zjolt.PhysicsMaterial.init(.{ .debug_name = "gravel" });
+    defer gravel.release();
+    const metal = try zjolt.PhysicsMaterial.init(.{ .debug_name = "metal" });
+    defer metal.release();
+
+    // A flat two-triangle quad in the XZ plane, wound so both faces point up.
+    // Triangle 0 covers the half where x < z, triangle 1 the half where x > z.
+    const vertices = [_]zjolt.Vec3{
+        zjolt.vec3(0, 0, 0),
+        zjolt.vec3(2, 0, 0),
+        zjolt.vec3(2, 0, 2),
+        zjolt.vec3(0, 0, 2),
+    };
+    const indices = [_]u32{ 0, 3, 2, 0, 2, 1 };
+
+    const mesh = try zjolt.Shape.initMesh(&vertices, &indices, .{
+        .materials = &.{ gravel, metal },
+        .triangle_materials = &.{ 0, 1 },
+    });
+    defer mesh.release();
+
+    // Both materials are kept alive by the mesh.
+    try std.testing.expectEqual(@as(u32, 2), gravel.refCount());
+    try std.testing.expectEqual(@as(u32, 2), metal.refCount());
+
+    const bodies = world.system.bodies();
+    const ground = try bodies.createAndAdd(.{
+        .shape = mesh,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 3, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const queries = world.system.queries();
+
+    const gravel_hit = (try queries.castRayClosest(
+        zjolt.rvec3(0.5, 10, 1.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ground, gravel_hit.body);
+
+    const metal_hit = (try queries.castRayClosest(
+        zjolt.rvec3(1.5, 10, 0.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(ground, metal_hit.body);
+
+    // The two triangles are different leaves of one shape, and the sub-shape
+    // id is what tells them apart. Jolt reorders triangles spatially while it
+    // builds the tree, so this is the only thing that can map a hit back to
+    // the material the triangle was authored with.
+    try std.testing.expect(gravel_hit.sub_shape_id != metal_hit.sub_shape_id);
+    try std.testing.expect(
+        (mesh.material(gravel_hit.sub_shape_id) orelse
+            return error.TestUnexpectedResult).eql(gravel),
+    );
+    try std.testing.expect(
+        (mesh.material(metal_hit.sub_shape_id) orelse
+            return error.TestUnexpectedResult).eql(metal),
+    );
+
+    // The same answer through the body, which is where a contact callback
+    // starts from.
+    try std.testing.expect(
+        (bodies.getMaterial(ground, metal_hit.sub_shape_id) orelse
+            return error.TestUnexpectedResult).eql(metal),
+    );
+
+    // And the caveat the header spells out: a body id that names nothing is
+    // NOT reported as a failure. Jolt's body lock fails and it answers with
+    // the shared default, so this reads exactly like a shape with no materials
+    // of its own.
+    const default = zjolt.PhysicsMaterial.default() orelse
+        return error.TestUnexpectedResult;
+    const stale = bodies.getMaterial(zjolt.invalid_body_id, zjolt.sub_shape_id_empty) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(stale.eql(default));
+
+    // Out-of-range indices are refused before Jolt sees them, with a reason.
+    try std.testing.expectError(zjolt.Error.InvalidArgument, zjolt.Shape.initMesh(
+        &vertices,
+        &indices,
+        .{ .materials = &.{gravel}, .triangle_materials = &.{ 0, 1 } },
+    ));
+}
+
+test "a height field reports the material of the quad that was hit" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const grass = try zjolt.PhysicsMaterial.init(.{ .debug_name = "grass" });
+    defer grass.release();
+    const rock = try zjolt.PhysicsMaterial.init(.{ .debug_name = "rock" });
+    defer rock.release();
+
+    const samples = [_]f32{0} ** 16;
+    // One index per quad — (4 - 1)^2 of them, not one per sample. Quad (2, 2)
+    // is the odd one out.
+    var quad_materials = [_]u8{0} ** 9;
+    quad_materials[2 + 2 * 3] = 1;
+
+    const field = try zjolt.Shape.initHeightField(&samples, 4, .{
+        .materials = &.{ grass, rock },
+        .quad_materials = &quad_materials,
+    });
+    defer field.release();
+
+    const bodies = world.system.bodies();
+    _ = try bodies.createAndAdd(.{
+        .shape = field,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const queries = world.system.queries();
+
+    const on_rock = (try queries.castRayClosest(
+        zjolt.rvec3(2.5, 10, 2.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(
+        (field.material(on_rock.sub_shape_id) orelse
+            return error.TestUnexpectedResult).eql(rock),
+    );
+
+    const on_grass = (try queries.castRayClosest(
+        zjolt.rvec3(1.5, 10, 1.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(
+        (field.material(on_grass.sub_shape_id) orelse
+            return error.TestUnexpectedResult).eql(grass),
+    );
 }
 
 //=============================================================================
