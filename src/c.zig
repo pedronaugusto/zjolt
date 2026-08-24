@@ -56,6 +56,18 @@ pub const shape_header_size: usize = 32;
 pub const max_physics_jobs: u32 = 2048;
 pub const max_physics_barriers: u32 = 8;
 
+/// How many physics systems may have a combine callback installed at once.
+/// Jolt's combine hook carries no user pointer, so one fixed slot table on the
+/// C side is what carries it.
+pub const combine_slot_count: u32 = 64;
+
+/// The group and sub-group id that mean "no group": a body carrying it
+/// collides with everything.
+pub const collision_group_invalid: u32 = 0xffff_ffff;
+
+/// Past this, Jolt's `(n * (n - 1)) / 2` table sizing overflows 32 bits.
+pub const group_filter_max_sub_groups: u32 = 65535;
+
 pub const build_flag_double_precision: u32 = 1 << 0;
 pub const build_flag_object_layer_32: u32 = 1 << 1;
 pub const build_flag_asserts_enabled: u32 = 1 << 2;
@@ -218,6 +230,29 @@ pub const UpdateError = packed struct(u32) {
     }
 };
 
+/// Which parts of a simulation `zjoltPhysicsSystemSaveState` writes.
+///
+/// A packed struct for the same reason as `UpdateError`: the C header spells
+/// it as an enum of bits only because C has no better way to name them.
+pub const StateRecorderState = packed struct(u32) {
+    global: bool = false,
+    bodies: bool = false,
+    contacts: bool = false,
+    constraints: bool = false,
+    _reserved: u28 = 0,
+
+    pub const none: StateRecorderState = .{};
+
+    /// What rollback wants. Anything less leaves part of the solver holding
+    /// data from a different frame.
+    pub const all: StateRecorderState = .{
+        .global = true,
+        .bodies = true,
+        .contacts = true,
+        .constraints = true,
+    };
+};
+
 //=============================================================================
 // Opaque handles
 //=============================================================================
@@ -227,6 +262,9 @@ pub const PhysicsSystem = opaque {};
 pub const JobSystem = opaque {};
 pub const Body = opaque {};
 pub const Character = opaque {};
+pub const GroupFilter = opaque {};
+pub const StepListener = opaque {};
+pub const BodyAddBatch = opaque {};
 
 //=============================================================================
 // Allocator and hooks
@@ -362,6 +400,89 @@ pub const PhysicsSystemDesc = extern struct {
     broad_phase_layers: BroadPhaseLayerInterface,
     object_vs_broad_phase_filter: ObjectVsBroadPhaseLayerFilter,
     object_layer_pair_filter: ObjectLayerPairFilter,
+};
+
+/// Jolt's `PhysicsSettings`, field for field. What each one means is
+/// documented on the C side, in `ffi/zjolt_system.h`.
+pub const PhysicsSettings = extern struct {
+    max_in_flight_body_pairs: i32,
+    step_listeners_batch_size: i32,
+    step_listener_batches_per_job: i32,
+    baumgarte: f32,
+    speculative_contact_distance: f32,
+    penetration_slop: f32,
+    linear_cast_threshold: f32,
+    linear_cast_max_penetration: f32,
+    manifold_tolerance: f32,
+    max_penetration_distance: f32,
+    body_pair_cache_max_delta_position_sq: f32,
+    body_pair_cache_cos_max_delta_rotation_div2: f32,
+    contact_normal_cos_max_delta_rotation: f32,
+    contact_point_preserve_lambda_max_dist_sq: f32,
+    internal_edge_removal_vertex_tolerance_sq: f32,
+    num_velocity_steps: u32,
+    num_position_steps: u32,
+    min_velocity_for_restitution: f32,
+    time_before_sleep: f32,
+    point_velocity_sleep_threshold: f32,
+    deterministic_simulation: bool,
+    constraint_warm_start: bool,
+    use_body_pair_contact_cache: bool,
+    use_manifold_reduction: bool,
+    use_large_island_splitter: bool,
+    allow_sleeping: bool,
+    check_active_edges: bool,
+};
+
+pub const CombineInfo = extern struct {
+    body1: BodyId,
+    sub_shape_id1: SubShapeId,
+    user_data1: u64,
+    value1: f32,
+    body2: BodyId,
+    sub_shape_id2: SubShapeId,
+    user_data2: u64,
+    value2: f32,
+};
+
+pub const CombineFn = *const fn (user: ?*anyopaque, info: *const CombineInfo) callconv(.c) f32;
+
+pub const StepListenerContext = extern struct {
+    delta_time: f32,
+    is_first_step: bool,
+    is_last_step: bool,
+};
+
+pub const StepListenerFn = *const fn (user: ?*anyopaque, context: *const StepListenerContext) callconv(.c) void;
+
+//=============================================================================
+// Broad-phase queries
+//=============================================================================
+
+pub const BroadPhaseFilters = extern struct {
+    broad_phase_layer: BroadPhaseLayerFilter = .{},
+    object_layer: ObjectLayerFilter = .{},
+};
+
+pub const BroadPhaseCastHit = extern struct {
+    body: BodyId,
+    fraction: f32,
+};
+
+pub const OrientedBox = extern struct {
+    center: RVec3,
+    rotation: Quat,
+    half_extent: Vec3,
+};
+
+//=============================================================================
+// Collision groups
+//=============================================================================
+
+pub const CollisionGroup = extern struct {
+    filter: ?*const GroupFilter = null,
+    group_id: u32 = collision_group_invalid,
+    sub_group_id: u32 = collision_group_invalid,
 };
 
 //=============================================================================
@@ -654,3 +775,46 @@ pub extern fn zjoltCharacterUpdateGroundVelocity(character: *Character) void;
 pub extern fn zjoltCharacterSetShape(character: *Character, shape: *const Shape, max_penetration_depth: f32, filters: ?*const QueryFilters, out_changed: ?*bool) Result;
 pub extern fn zjoltCharacterGetShape(character: *const Character) ?*const Shape;
 pub extern fn zjoltCharacterGetInnerBodyId(character: *const Character) BodyId;
+
+pub extern fn zjoltPhysicsSystemGetMaxBodies(system: *const PhysicsSystem) u32;
+pub extern fn zjoltPhysicsSystemWereBodiesInContact(system: *const PhysicsSystem, body1: BodyId, body2: BodyId) bool;
+pub extern fn zjoltPhysicsSettingsInit(settings: *PhysicsSettings) void;
+pub extern fn zjoltPhysicsSystemGetSettings(system: *const PhysicsSystem, out: *PhysicsSettings) void;
+pub extern fn zjoltPhysicsSystemSetSettings(system: *PhysicsSystem, settings: *const PhysicsSettings) Result;
+pub extern fn zjoltPhysicsSystemSetCombineFriction(system: *PhysicsSystem, combine: ?CombineFn, user: ?*anyopaque) Result;
+pub extern fn zjoltPhysicsSystemSetCombineRestitution(system: *PhysicsSystem, combine: ?CombineFn, user: ?*anyopaque) Result;
+pub extern fn zjoltPhysicsSystemAddStepListener(system: *PhysicsSystem, listener: ?StepListenerFn, user: ?*anyopaque, out: **StepListener) Result;
+pub extern fn zjoltPhysicsSystemRemoveStepListener(system: *PhysicsSystem, listener: *StepListener) Result;
+
+pub extern fn zjoltBroadPhaseCastRay(system: *const PhysicsSystem, origin: *const RVec3, direction: *const Vec3, filters: ?*const BroadPhaseFilters, out_hits: ?[*]BroadPhaseCastHit, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltBroadPhaseCollideAABox(system: *const PhysicsSystem, box: *const AABox, filters: ?*const BroadPhaseFilters, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltBroadPhaseCollideSphere(system: *const PhysicsSystem, center: *const RVec3, radius: f32, filters: ?*const BroadPhaseFilters, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltBroadPhaseCollidePoint(system: *const PhysicsSystem, point: *const RVec3, filters: ?*const BroadPhaseFilters, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltBroadPhaseCollideOrientedBox(system: *const PhysicsSystem, box: *const OrientedBox, filters: ?*const BroadPhaseFilters, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltBroadPhaseCastAABox(system: *const PhysicsSystem, box: *const AABox, direction: *const Vec3, filters: ?*const BroadPhaseFilters, out_hits: ?[*]BroadPhaseCastHit, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltBroadPhaseGetBounds(system: *const PhysicsSystem, out: *AABox) void;
+
+pub extern fn zjoltBodyAddBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32, activation: Activation) Result;
+pub extern fn zjoltBodyAddBatchPrepare(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32, out: **BodyAddBatch) Result;
+pub extern fn zjoltBodyAddBatchFinalize(system: *PhysicsSystem, batch: *BodyAddBatch, activation: Activation) Result;
+pub extern fn zjoltBodyAddBatchAbort(system: *PhysicsSystem, batch: *BodyAddBatch) Result;
+pub extern fn zjoltBodyRemoveBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
+pub extern fn zjoltBodyDestroyBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
+pub extern fn zjoltBodyActivateBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
+pub extern fn zjoltBodyDeactivateBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
+pub extern fn zjoltBodyActivateInBox(system: *PhysicsSystem, box: *const AABox, filters: ?*const BroadPhaseFilters) Result;
+
+pub extern fn zjoltGroupFilterTableCreate(num_sub_groups: u32, out: **GroupFilter) Result;
+pub extern fn zjoltGroupFilterAddRef(filter: *const GroupFilter) void;
+pub extern fn zjoltGroupFilterRelease(filter: *const GroupFilter) void;
+pub extern fn zjoltGroupFilterGetRefCount(filter: *const GroupFilter) u32;
+pub extern fn zjoltGroupFilterGetNumSubGroups(filter: *const GroupFilter) u32;
+pub extern fn zjoltGroupFilterTableDisableCollision(filter: *GroupFilter, sub_group1: u32, sub_group2: u32) Result;
+pub extern fn zjoltGroupFilterTableEnableCollision(filter: *GroupFilter, sub_group1: u32, sub_group2: u32) Result;
+pub extern fn zjoltGroupFilterTableIsCollisionEnabled(filter: *const GroupFilter, sub_group1: u32, sub_group2: u32, out_enabled: *bool) Result;
+pub extern fn zjoltBodySetCollisionGroup(system: *PhysicsSystem, body: BodyId, group: ?*const CollisionGroup) void;
+pub extern fn zjoltBodyGetCollisionGroup(system: *const PhysicsSystem, body: BodyId, out: *CollisionGroup) void;
+pub extern fn zjoltBodyInvalidateContactCache(system: *PhysicsSystem, body: BodyId) void;
+
+pub extern fn zjoltPhysicsSystemSaveState(system: *const PhysicsSystem, state: StateRecorderState, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
+pub extern fn zjoltPhysicsSystemRestoreState(system: *PhysicsSystem, data: [*]const u8, size: usize) Result;

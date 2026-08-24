@@ -449,6 +449,18 @@ typedef struct ZJoltBody ZJoltBody;
 /// A shape-based character controller that is not a rigid body.
 typedef struct ZJoltCharacter ZJoltCharacter;
 
+/// Decides whether two collision groups collide. Reference counted like a
+/// shape, and shareable between bodies and between systems.
+typedef struct ZJoltGroupFilter ZJoltGroupFilter;
+
+/// A host callback invoked before every collision step. Owned by the system it
+/// was added to, and destroyed with it.
+typedef struct ZJoltStepListener ZJoltStepListener;
+
+/// Bodies sorted and staged for insertion, between zjoltBodyAddBatchPrepare
+/// and the call that consumes it. Owned by the system.
+typedef struct ZJoltBodyAddBatch ZJoltBodyAddBatch;
+
 //===----------------------------------------------------------------------===//
 // Job system
 //
