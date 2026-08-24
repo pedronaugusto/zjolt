@@ -54,8 +54,10 @@ typedef enum ZJoltStateRecorderState {
   /// starts the next step from. Leaving this out is what makes a restored
   /// world settle differently from the one it was copied out of.
   ZJOLT_STATE_RECORDER_STATE_CONTACTS = 1 << 2,
-  /// Constraint state. zjolt exposes no constraints yet, so this part is empty
-  /// today and costs nothing to include.
+  /// Constraint state, including vehicle constraints. Required for a world
+  /// with joints: a restore without it leaves every constraint warm-started
+  /// from a different frame than the bodies it acts on, which reads as a
+  /// world that was fine a moment ago and is now tearing itself apart.
   ZJOLT_STATE_RECORDER_STATE_CONSTRAINTS = 1 << 3,
   ZJOLT_STATE_RECORDER_STATE_ALL = 0b1111,
 } ZJoltStateRecorderState;
