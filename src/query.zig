@@ -55,8 +55,8 @@ pub const Filters = c.QueryFilters;
 pub const HitAction = c.HitAction;
 pub const RayCastSettings = c.RayCastSettings;
 
-/// Jolt's collision settings, reachable only through the shape-versus-shape
-/// queries below. Every field defaults to Jolt's own value, so
+/// Jolt's collision settings, taken by every shape cast and every overlap in
+/// this file. Every field defaults to Jolt's own value, so
 /// `.{ .max_separation_distance = 1 }` changes one thing and leaves the rest.
 pub const CollideShapeSettings = c.CollideShapeSettings;
 pub const ShapeCastSettings = c.ShapeCastSettings;
@@ -317,6 +317,12 @@ pub const Queries = struct {
         direction: math.Vec3,
         /// Null means (1, 1, 1).
         scale: ?math.Vec3 = null,
+        /// Null takes Jolt's defaults, which IGNORE back faces — so a sweep
+        /// beginning inside geometry finds nothing there at all. Set
+        /// `back_face_mode_convex` or `back_face_mode_triangles` to `.collide`
+        /// when the question is "is this placement clear", rather than
+        /// concluding from an empty result that it is.
+        settings: ?ShapeCastSettings = null,
     };
 
     /// Sweeps a shape along `direction`. The centre of mass at the hit is
@@ -339,6 +345,7 @@ pub const Queries = struct {
             &cast.position,
             &cast.rotation,
             &cast.direction,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filters,
             &hit,
             &did_hit,
@@ -359,6 +366,7 @@ pub const Queries = struct {
             &cast.position,
             &cast.rotation,
             &cast.direction,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filters,
             null,
             0,
@@ -381,6 +389,7 @@ pub const Queries = struct {
             &cast.position,
             &cast.rotation,
             &cast.direction,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filters,
             buffer.ptr,
             @intCast(buffer.len),
@@ -405,6 +414,7 @@ pub const Queries = struct {
             &cast.position,
             &cast.rotation,
             &cast.direction,
+            optionalPtr(ShapeCastSettings, &cast.settings),
             filters,
             V.onHit,
             &visitor,
@@ -421,9 +431,11 @@ pub const Queries = struct {
         position: math.RVec3,
         rotation: math.Quat = math.quat_identity,
         scale: ?math.Vec3 = null,
-        /// Reports near misses too, with a negative penetration depth. Useful
-        /// for "is there anything within a metre of here".
-        max_separation_distance: f32 = 0,
+        /// Null takes Jolt's defaults. `max_separation_distance` lives here
+        /// rather than beside `scale`, where it used to sit: it is a field of
+        /// `CollideShapeSettings` as well, and an overlap cannot be told two
+        /// different things about how far a near miss counts.
+        settings: ?CollideShapeSettings = null,
     };
 
     /// The single deepest overlap — the hit with the largest
@@ -445,7 +457,7 @@ pub const Queries = struct {
             optionalPtr(math.Vec3, &overlap.scale),
             &overlap.position,
             &overlap.rotation,
-            overlap.max_separation_distance,
+            optionalPtr(CollideShapeSettings, &overlap.settings),
             filters,
             &hit,
             &did_hit,
@@ -465,7 +477,7 @@ pub const Queries = struct {
             optionalPtr(math.Vec3, &overlap.scale),
             &overlap.position,
             &overlap.rotation,
-            overlap.max_separation_distance,
+            optionalPtr(CollideShapeSettings, &overlap.settings),
             filters,
             null,
             0,
@@ -488,7 +500,7 @@ pub const Queries = struct {
             optionalPtr(math.Vec3, &overlap.scale),
             &overlap.position,
             &overlap.rotation,
-            overlap.max_separation_distance,
+            optionalPtr(CollideShapeSettings, &overlap.settings),
             filters,
             buffer.ptr,
             @intCast(buffer.len),
@@ -515,7 +527,7 @@ pub const Queries = struct {
             optionalPtr(math.Vec3, &overlap.scale),
             &overlap.position,
             &overlap.rotation,
-            overlap.max_separation_distance,
+            optionalPtr(CollideShapeSettings, &overlap.settings),
             filters,
             V.onHit,
             &visitor,

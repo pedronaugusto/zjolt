@@ -1273,6 +1273,105 @@ fn containsBody(haystack: []const zjolt.BodyId, needle: zjolt.BodyId) bool {
     return false;
 }
 
+test "a sweep starting inside a mesh reports a hit only when back faces count" {
+    // What the settings parameter is for. A mesh triangle met from the inside
+    // is a back face, and Jolt's default is to ignore those — so a sweep that
+    // begins inside geometry reports NOTHING, which reads exactly like a clear
+    // placement and is the opposite of one. The two casts below differ in one
+    // field, and that field is the whole answer.
+    //
+    // Both the system-level query and the per-shape one are checked, because
+    // they translate the same settings struct through separate code.
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    // A closed box of triangles, wound so its normals face outward, centred
+    // well clear of the fixture's floor.
+    const box_centre = zjolt.rvec3(0, 10, 0);
+    var points: [8]zjolt.Vec3 = undefined;
+    var indices: [36]u32 = undefined;
+    makeBoxMesh(1, 1, 1, &points, &indices);
+
+    const mesh = try zjolt.Shape.initMesh(&points, &indices, .{});
+    defer mesh.release();
+
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = mesh,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = box_centre,
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const probe_radius = 0.1;
+    const probe = try zjolt.Shape.initSphere(probe_radius, .{});
+    defer probe.release();
+
+    // From the dead centre of the box, straight out through the +z wall.
+    const travel = 4.0;
+    const from_inside: zjolt.Queries.ShapeCast = .{
+        .shape = probe,
+        .position = box_centre,
+        .direction = zjolt.vec3(0, 0, travel),
+    };
+
+    // Jolt's defaults: the only triangles on the way out are back faces, so
+    // there is nothing to report.
+    try std.testing.expectEqual(
+        @as(?zjolt.ShapeCastHit, null),
+        try world.system.queries().castShapeClosest(from_inside, null),
+    );
+
+    // The same sweep, with back-facing triangles collided with.
+    var with_back_faces = from_inside;
+    with_back_faces.settings = .{ .back_face_mode_triangles = .collide };
+
+    const hit = (try world.system.queries().castShapeClosest(
+        with_back_faces,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(hit.is_back_face_hit);
+
+    // The sphere's centre travels one metre to the wall less its own radius,
+    // out of the four the sweep was given.
+    try std.testing.expectApproxEqAbs(
+        @as(f32, (1.0 - probe_radius) / travel),
+        hit.fraction,
+        1.0e-2,
+    );
+
+    // And the per-shape queries, which reach Jolt by a different route with a
+    // second copy of the same translation.
+    const placed = try zjolt.TransformedShape.init(mesh, box_centre, .{});
+    defer placed.deinit();
+
+    const alone: zjolt.TransformedShape.ShapeCast = .{
+        .shape = probe,
+        .position = box_centre,
+        .direction = zjolt.vec3(0, 0, travel),
+    };
+    try std.testing.expectEqual(
+        @as(?zjolt.ShapeCastHit, null),
+        try placed.castShapeClosest(alone, null),
+    );
+
+    var alone_with_back_faces = alone;
+    alone_with_back_faces.settings = .{ .back_face_mode_triangles = .collide };
+
+    const alone_hit = (try placed.castShapeClosest(
+        alone_with_back_faces,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectApproxEqAbs(
+        hit.fraction,
+        alone_hit.fraction,
+        1.0e-3,
+    );
+}
+
 test "a streaming query visits exactly the hits a fill query collects" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
@@ -1526,7 +1625,7 @@ test "an error out of a hit callback leaves the system usable" {
         stack.queries().collideShapeEach(.{
             .shape = stack.shape,
             .position = zjolt.rvec3(0, 4, 0),
-            .max_separation_distance = 4,
+            .settings = .{ .max_separation_distance = 4 },
         }, null, &overlap_failure),
     );
     try std.testing.expect(overlap_failure.seen > 0);
