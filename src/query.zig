@@ -55,6 +55,14 @@ pub const Filters = c.QueryFilters;
 pub const HitAction = c.HitAction;
 pub const RayCastSettings = c.RayCastSettings;
 
+/// Jolt's collision settings, reachable only through the shape-versus-shape
+/// queries below. Every field defaults to Jolt's own value, so
+/// `.{ .max_separation_distance = 1 }` changes one thing and leaves the rest.
+pub const CollideShapeSettings = c.CollideShapeSettings;
+pub const ShapeCastSettings = c.ShapeCastSettings;
+pub const ActiveEdgeMode = c.ActiveEdgeMode;
+pub const CollectFacesMode = c.CollectFacesMode;
+
 //=============================================================================
 // Ready-made filters
 //=============================================================================
@@ -581,6 +589,242 @@ pub const Queries = struct {
     }
 };
 
+//=============================================================================
+// Shape versus shape
+//
+// Two shapes, two placements, and no `Queries` — no physics system is involved
+// at all. "Would these overlap if I put them here", asked before a body
+// exists: placement validation, an editor's drag handle, a sweep against
+// geometry that is not in the world.
+//
+// These are also the only queries in this package that take Jolt's collision
+// settings. Everything else uses its defaults.
+//
+// No hit names a body, because there is none: `hit.body` is `invalid_body_id`
+// and a `ShapeFilter` is handed that same invalid id, leaving it the two
+// sub-shape ids to decide on. `hit.material` still resolves, off the second
+// shape.
+//
+// There is no `...Each` form here, for the reason `transformed.zig` gives: the
+// result set behind two already-named shapes is bounded by their own leaf
+// counts rather than by however much of a world a broad phase hands back.
+//=============================================================================
+
+/// A shape and where it sits, for the shape-versus-shape queries.
+pub const PlacedShape = struct {
+    /// Borrowed for the call; nothing here takes a reference on it.
+    shape: shape_mod.Shape,
+    /// The shape's own world placement, NOT its centre of mass — Jolt collides
+    /// in centre-of-mass space and the conversion happens on the C side, so a
+    /// shape built with `Shape.initOffsetCenterOfMass` sits where it is put.
+    position: math.RVec3,
+    rotation: math.Quat = math.quat_identity,
+    /// Null means (1, 1, 1). A scale the shape cannot take — a zero component,
+    /// or a non-uniform one on a sphere — is `error.InvalidArgument` rather
+    /// than an abort inside Jolt. `Shape.isValidScale` asks the same question
+    /// ahead of time.
+    scale: ?math.Vec3 = null,
+};
+
+/// Two placed shapes, and the frame their contact points come back in.
+pub const ShapePair = struct {
+    first: PlacedShape,
+    second: PlacedShape,
+    /// Contact points come back RELATIVE TO this; zero gives world space.
+    /// They are floats, so in a double-precision build a contact point far
+    /// from the origin does not survive the conversion — passing one of the
+    /// two positions here is what keeps the precision.
+    base_offset: math.RVec3 = math.rvec3_zero,
+};
+
+/// A shape swept against another, both placed, neither in a world.
+pub const ShapeCastPair = struct {
+    /// The shape that moves.
+    cast: PlacedShape,
+    /// Carries the sweep's length: nothing beyond it is reported.
+    direction: math.Vec3,
+    /// The shape that does not.
+    target: PlacedShape,
+    /// @see `ShapePair.base_offset`.
+    base_offset: math.RVec3 = math.rvec3_zero,
+};
+
+/// The deepest overlap between the two shapes, or null.
+///
+/// `error.Unsupported` when Jolt has no collision function for the pair — two
+/// surfaces (mesh, height field, plane, soft body) have no inside to separate,
+/// so nothing is registered for them. `lastError` names both sub-types.
+/// The check looks THROUGH a compound or a decorated shape, because Jolt
+/// does: those re-dispatch what they hold, so wrapping a mesh does not rescue
+/// a mesh-versus-mesh pair. One side has to be convex all the way down.
+pub fn collideShapeVsShapeClosest(
+    pair: ShapePair,
+    settings: ?CollideShapeSettings,
+    filter: ?*const ShapeFilter,
+) err.Error!?CollideShapeHit {
+    var hit: CollideShapeHit = undefined;
+    var did_hit: bool = false;
+    try err.check(c.zjoltCollideShapeVsShapeClosest(
+        pair.first.shape.handle,
+        optionalPtr(math.Vec3, &pair.first.scale),
+        &pair.first.position,
+        &pair.first.rotation,
+        pair.second.shape.handle,
+        optionalPtr(math.Vec3, &pair.second.scale),
+        &pair.second.position,
+        &pair.second.rotation,
+        &pair.base_offset,
+        optionalPtr(CollideShapeSettings, &settings),
+        filter,
+        &hit,
+        &did_hit,
+    ));
+    return if (did_hit) hit else null;
+}
+
+/// How many overlaps the two shapes have, without collecting them.
+pub fn countShapeVsShapeOverlaps(
+    pair: ShapePair,
+    settings: ?CollideShapeSettings,
+    filter: ?*const ShapeFilter,
+) err.Error!u32 {
+    var count: u32 = 0;
+    try err.check(c.zjoltCollideShapeVsShapeAll(
+        pair.first.shape.handle,
+        optionalPtr(math.Vec3, &pair.first.scale),
+        &pair.first.position,
+        &pair.first.rotation,
+        pair.second.shape.handle,
+        optionalPtr(math.Vec3, &pair.second.scale),
+        &pair.second.position,
+        &pair.second.rotation,
+        &pair.base_offset,
+        optionalPtr(CollideShapeSettings, &settings),
+        filter,
+        null,
+        0,
+        &count,
+    ));
+    return count;
+}
+
+/// Every overlap between the two shapes — one per pair of leaves that touch,
+/// so a compound or a mesh reports many. `error.BufferTooSmall` if they do not
+/// fit; use `countShapeVsShapeOverlaps` first.
+pub fn collideShapeVsShapeAll(
+    pair: ShapePair,
+    settings: ?CollideShapeSettings,
+    filter: ?*const ShapeFilter,
+    buffer: []CollideShapeHit,
+) err.Error![]CollideShapeHit {
+    var count: u32 = 0;
+    try err.check(c.zjoltCollideShapeVsShapeAll(
+        pair.first.shape.handle,
+        optionalPtr(math.Vec3, &pair.first.scale),
+        &pair.first.position,
+        &pair.first.rotation,
+        pair.second.shape.handle,
+        optionalPtr(math.Vec3, &pair.second.scale),
+        &pair.second.position,
+        &pair.second.rotation,
+        &pair.base_offset,
+        optionalPtr(CollideShapeSettings, &settings),
+        filter,
+        buffer.ptr,
+        @intCast(buffer.len),
+        &count,
+    ));
+    return buffer[0..count];
+}
+
+/// The nearest hit as `pair.cast` sweeps along `pair.direction` into
+/// `pair.target`. The swept shape's centre of mass at the hit is where it
+/// started plus `hit.fraction * pair.direction`.
+///
+/// A sweep that starts already overlapping reports fraction 0 only if
+/// `settings.back_face_mode_convex` is `.collide`; Jolt's default ignores back
+/// faces, and such a sweep then reports nothing at all.
+pub fn castShapeVsShapeClosest(
+    pair: ShapeCastPair,
+    settings: ?ShapeCastSettings,
+    filter: ?*const ShapeFilter,
+) err.Error!?ShapeCastHit {
+    var hit: ShapeCastHit = undefined;
+    var did_hit: bool = false;
+    try err.check(c.zjoltCastShapeVsShapeClosest(
+        pair.cast.shape.handle,
+        optionalPtr(math.Vec3, &pair.cast.scale),
+        &pair.cast.position,
+        &pair.cast.rotation,
+        &pair.direction,
+        pair.target.shape.handle,
+        optionalPtr(math.Vec3, &pair.target.scale),
+        &pair.target.position,
+        &pair.target.rotation,
+        &pair.base_offset,
+        optionalPtr(ShapeCastSettings, &settings),
+        filter,
+        &hit,
+        &did_hit,
+    ));
+    return if (did_hit) hit else null;
+}
+
+pub fn countShapeVsShapeCastHits(
+    pair: ShapeCastPair,
+    settings: ?ShapeCastSettings,
+    filter: ?*const ShapeFilter,
+) err.Error!u32 {
+    var count: u32 = 0;
+    try err.check(c.zjoltCastShapeVsShapeAll(
+        pair.cast.shape.handle,
+        optionalPtr(math.Vec3, &pair.cast.scale),
+        &pair.cast.position,
+        &pair.cast.rotation,
+        &pair.direction,
+        pair.target.shape.handle,
+        optionalPtr(math.Vec3, &pair.target.scale),
+        &pair.target.position,
+        &pair.target.rotation,
+        &pair.base_offset,
+        optionalPtr(ShapeCastSettings, &settings),
+        filter,
+        null,
+        0,
+        &count,
+    ));
+    return count;
+}
+
+/// Every hit along the sweep, unsorted. `error.BufferTooSmall` if they do not
+/// fit; use `countShapeVsShapeCastHits` first.
+pub fn castShapeVsShapeAll(
+    pair: ShapeCastPair,
+    settings: ?ShapeCastSettings,
+    filter: ?*const ShapeFilter,
+    buffer: []ShapeCastHit,
+) err.Error![]ShapeCastHit {
+    var count: u32 = 0;
+    try err.check(c.zjoltCastShapeVsShapeAll(
+        pair.cast.shape.handle,
+        optionalPtr(math.Vec3, &pair.cast.scale),
+        &pair.cast.position,
+        &pair.cast.rotation,
+        &pair.direction,
+        pair.target.shape.handle,
+        optionalPtr(math.Vec3, &pair.target.scale),
+        &pair.target.position,
+        &pair.target.rotation,
+        &pair.base_offset,
+        optionalPtr(ShapeCastSettings, &settings),
+        filter,
+        buffer.ptr,
+        @intCast(buffer.len),
+        &count,
+    ));
+    return buffer[0..count];
+}
+
 test "the mirrored ray cast defaults are the library's" {
     // `RayCastSettings` carries Zig field defaults so a caller can override
     // one thing and leave the rest; that is a second copy of numbers the C++
@@ -588,4 +832,81 @@ test "the mirrored ray cast defaults are the library's" {
     var from_library: RayCastSettings = undefined;
     c.zjoltRayCastSettingsInit(&from_library);
     try std.testing.expectEqual(RayCastSettings{}, from_library);
+}
+
+test "the mirrored shape query settings defaults are the library's" {
+    // Same reason as the ray cast defaults above: `CollideShapeSettings` and
+    // `ShapeCastSettings` carry Zig field defaults so a caller can override
+    // one thing, and that is a second copy of numbers the C++ side owns.
+    var collide: CollideShapeSettings = undefined;
+    c.zjoltCollideShapeSettingsInit(&collide);
+    try std.testing.expectEqual(CollideShapeSettings{}, collide);
+
+    var cast: ShapeCastSettings = undefined;
+    c.zjoltShapeCastSettingsInit(&cast);
+    try std.testing.expectEqual(ShapeCastSettings{}, cast);
+}
+
+test "two boxes overlap by exactly as much as they are pushed together" {
+    // The characteristic behaviour of the shape-versus-shape surface: no
+    // system, no body, no step — two shapes and two placements, and a
+    // penetration depth that is the overlap and not something near it.
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const half = 0.5;
+    const box = try shape_mod.Shape.initBox(math.vec3(half, half, half), .{});
+    defer box.release();
+
+    // Overlapping along x by 0.1: the gap between centres is 0.9 and the two
+    // half extents sum to 1.
+    const overlap = 0.1;
+    const together: ShapePair = .{
+        .first = .{ .shape = box, .position = math.rvec3_zero },
+        .second = .{
+            .shape = box,
+            .position = math.rvec3(2 * half - overlap, 0, 0),
+        },
+    };
+
+    const hit = try collideShapeVsShapeClosest(together, null, null);
+    try std.testing.expect(hit != null);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, overlap),
+        hit.?.penetration_depth,
+        1.0e-3,
+    );
+
+    // Nothing found them, so nothing names a body.
+    try std.testing.expectEqual(body_mod.invalid_body_id, hit.?.body);
+
+    // And the count-then-fill pair agrees with the closest form.
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        try countShapeVsShapeOverlaps(together, null, null),
+    );
+
+    // Pulled apart by half a metre, with no separation distance asked for,
+    // there is nothing to report.
+    var apart = together;
+    apart.second.position = math.rvec3(2 * half + 0.5, 0, 0);
+    try std.testing.expectEqual(
+        @as(?CollideShapeHit, null),
+        try collideShapeVsShapeClosest(apart, null, null),
+    );
+
+    // Unless it is asked for: a metre of separation distance turns the same
+    // miss into a hit whose depth is the NEGATIVE gap.
+    const near_miss = try collideShapeVsShapeClosest(
+        apart,
+        .{ .max_separation_distance = 1 },
+        null,
+    );
+    try std.testing.expect(near_miss != null);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, -0.5),
+        near_miss.?.penetration_depth,
+        1.0e-3,
+    );
 }
