@@ -69,8 +69,14 @@ pub const World = struct {
         errdefer system.deinit();
         system.setGravity(zjolt.gravity_earth);
 
+        // 400 m square, not 100. A vehicle test accelerates for a few seconds
+        // and then needs room to brake, and a floor that runs out mid-test
+        // reads as a physics failure — the car simply drives off the end and
+        // falls, with every wheel reporting no contact and nothing to brake
+        // against. That is what a 100 m floor did here: one build stopped a
+        // metre inside the edge and another crossed it.
         const floor_shape = try zjolt.Shape.initBox(
-            zjolt.vec3(50, 0.5, 50),
+            zjolt.vec3(200, 0.5, 200),
             .{ .convex_radius = 0.05 },
         );
         errdefer floor_shape.release();
