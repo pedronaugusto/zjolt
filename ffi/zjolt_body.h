@@ -93,9 +93,9 @@ ZJOLT_API void zjoltBodyDeactivate(ZJoltPhysicsSystem *system,
 ZJOLT_API void zjoltBodyResetSleepTimer(ZJoltPhysicsSystem *system,
                                         ZJoltBodyId body);
 
-/// Which kind of body this is. There is no constructor for a soft body yet, so
-/// this is only ever ZJOLT_BODY_TYPE_RIGID_BODY through this ABI — it exists so
-/// a body read back by id always answers.
+/// Which kind of body this is: rigid, or a soft body created through
+/// zjoltSoftBodyCreate in zjolt_softbody.h. Worth asking before reaching for
+/// anything in zjolt_softbody.h with a body id from a query or a contact.
 ///
 /// ZJOLT_BODY_TYPE_RIGID_BODY when `system` is NULL or the body lock fails,
 /// which is Jolt's own default rather than one this binding invented.

@@ -101,6 +101,15 @@ list**, so a name that breaks convention is a build failure, not a style nit:
 | constant `foo_bar` | `ZJOLT_FOO_BAR` |
 | enum `Foo`'s field `bar` | `ZJOLT_FOO_BAR` |
 
+**One verb per ownership model, and the verb is the documentation.** A handle
+zjolt allocates and frees outright is `zjoltFooDestroy` in C and `deinit` in
+Zig: the first drop is the last one, and a second is a double free. A handle
+that is a Jolt `RefTarget` is `zjoltFooRelease` and `release`: there may be
+other holders, and dropping yours need not free anything. Never give a
+reference-counted type a `deinit` alias, however well it reads at a `defer` —
+the whole value of the two verbs is that the call site says which model
+applies without going to look.
+
 Enumerators take the **full type name**, always: `ZJOLT_MOTION_TYPE_STATIC`,
 not `ZJOLT_STATIC`. translate-c flattens a C enum to a plain integer alias, so
 the strict prefix is the only thing that can pair an enumerator back to the
