@@ -17,6 +17,7 @@ const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const system_mod = @import("system.zig");
+const constraint_mod = @import("constraint.zig");
 
 pub const ControllerKind = c.VehicleControllerKind;
 pub const CollisionTesterKind = c.VehicleCollisionTesterKind;
@@ -322,6 +323,54 @@ pub const VehicleConstraint = struct {
     }
 
     //=========================================================================
+    // Driver input and drivetrain readback — every controller kind
+    //
+    // forward/brake, engine RPM, current gear, clutch friction and gear
+    // ratio mean the same thing whichever controller this constraint has,
+    // so each of these is one method rather than a wheeled/tracked pair a
+    // caller could pick the wrong one of for the kind it actually has.
+    //=========================================================================
+
+    pub fn forwardInput(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetForwardInput(self.handle);
+    }
+
+    pub fn brakeInput(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetBrakeInput(self.handle);
+    }
+
+    pub fn engineRpm(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetEngineRpm(self.handle);
+    }
+
+    /// -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
+    pub fn currentGear(self: VehicleConstraint) i32 {
+        return c.zjoltVehicleConstraintGetCurrentGear(self.handle);
+    }
+
+    pub fn isSwitchingGear(self: VehicleConstraint) bool {
+        return c.zjoltVehicleConstraintIsSwitchingGear(self.handle);
+    }
+
+    pub fn clutchFriction(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetClutchFriction(self.handle);
+    }
+
+    /// Current gear ratio times the differential ratio; 0 in neutral.
+    pub fn gearRatio(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetGearRatio(self.handle);
+    }
+
+    /// Drives a manual transmission (`.transmission.mode = .manual`): sets
+    /// the current gear and the clutch's friction fraction directly,
+    /// bypassing auto mode's shift points and timers entirely.
+    /// @param gear -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
+    /// @param clutch_friction [0, 1]: 0 = fully disengaged, 1 = fully engaged.
+    pub fn setGear(self: VehicleConstraint, gear: i32, clutch_friction: f32) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintSetGear(self.handle, gear, clutch_friction));
+    }
+
+    //=========================================================================
     // Wheeled and motorcycle controller
     //
     // Also valid against `.motorcycle` — see the module doc comment.
@@ -347,33 +396,12 @@ pub const VehicleConstraint = struct {
         ));
     }
 
-    pub fn wheeledForwardInput(self: VehicleConstraint) f32 {
-        return c.zjoltVehicleConstraintGetWheeledForwardInput(self.handle);
-    }
-
     pub fn wheeledRightInput(self: VehicleConstraint) f32 {
         return c.zjoltVehicleConstraintGetWheeledRightInput(self.handle);
     }
 
-    pub fn wheeledBrakeInput(self: VehicleConstraint) f32 {
-        return c.zjoltVehicleConstraintGetWheeledBrakeInput(self.handle);
-    }
-
     pub fn wheeledHandBrakeInput(self: VehicleConstraint) f32 {
         return c.zjoltVehicleConstraintGetWheeledHandBrakeInput(self.handle);
-    }
-
-    pub fn wheeledEngineRpm(self: VehicleConstraint) f32 {
-        return c.zjoltVehicleConstraintGetWheeledEngineRpm(self.handle);
-    }
-
-    /// -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
-    pub fn wheeledCurrentGear(self: VehicleConstraint) i32 {
-        return c.zjoltVehicleConstraintGetWheeledCurrentGear(self.handle);
-    }
-
-    pub fn isWheeledSwitchingGear(self: VehicleConstraint) bool {
-        return c.zjoltVehicleConstraintIsWheeledSwitchingGear(self.handle);
     }
 
     //=========================================================================
@@ -400,12 +428,12 @@ pub const VehicleConstraint = struct {
         ));
     }
 
-    pub fn trackedEngineRpm(self: VehicleConstraint) f32 {
-        return c.zjoltVehicleConstraintGetTrackedEngineRpm(self.handle);
+    pub fn trackedLeftRatio(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetTrackedLeftRatio(self.handle);
     }
 
-    pub fn trackedCurrentGear(self: VehicleConstraint) i32 {
-        return c.zjoltVehicleConstraintGetTrackedCurrentGear(self.handle);
+    pub fn trackedRightRatio(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetTrackedRightRatio(self.handle);
     }
 
     //=========================================================================
@@ -425,5 +453,187 @@ pub const VehicleConstraint = struct {
 
     pub fn isMotorcycleLeanControllerEnabled(self: VehicleConstraint) bool {
         return c.zjoltVehicleConstraintIsMotorcycleLeanControllerEnabled(self.handle);
+    }
+
+    /// Caps how far the steering angle can go as the motorcycle leans, so it
+    /// cannot steer into itself. Disabling makes it steer like a car with
+    /// two close-together front wheels instead of leaning into turns.
+    pub fn setMotorcycleLeanSteeringLimitEnabled(
+        self: VehicleConstraint,
+        enabled: bool,
+    ) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintSetMotorcycleLeanSteeringLimitEnabled(
+            self.handle,
+            enabled,
+        ));
+    }
+
+    pub fn isMotorcycleLeanSteeringLimitEnabled(self: VehicleConstraint) bool {
+        return c.zjoltVehicleConstraintIsMotorcycleLeanSteeringLimitEnabled(self.handle);
+    }
+
+    /// Distance between the front and rear wheel's ground contact; 0
+    /// against a non-motorcycle constraint.
+    pub fn motorcycleWheelBase(self: VehicleConstraint) f32 {
+        return c.zjoltVehicleConstraintGetMotorcycleWheelBase(self.handle);
+    }
+
+    //=========================================================================
+    // Gravity override
+    //
+    // Replaces the physics system's own gravity for this vehicle only.
+    //=========================================================================
+
+    pub fn overrideGravity(self: VehicleConstraint, gravity: math.Vec3) void {
+        c.zjoltVehicleConstraintOverrideGravity(self.handle, &gravity);
+    }
+
+    /// Also restores the vehicle body's gravity factor to 1.
+    pub fn resetGravityOverride(self: VehicleConstraint) void {
+        c.zjoltVehicleConstraintResetGravityOverride(self.handle);
+    }
+
+    pub fn isGravityOverridden(self: VehicleConstraint) bool {
+        return c.zjoltVehicleConstraintIsGravityOverridden(self.handle);
+    }
+
+    pub fn gravityOverride(self: VehicleConstraint) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltVehicleConstraintGetGravityOverride(self.handle, &out);
+        return out;
+    }
+
+    //=========================================================================
+    // Wheel-ground collision test frequency
+    //
+    // Skipping steps between wheel-ground collision tests is a cheap way to
+    // spend less time on vehicles far from the camera or barely moving; the
+    // wheels keep their last contact between tests.
+    //=========================================================================
+
+    pub fn numStepsBetweenCollisionTestActive(self: VehicleConstraint) u32 {
+        return c.zjoltVehicleConstraintGetNumStepsBetweenCollisionTestActive(self.handle);
+    }
+
+    pub fn setNumStepsBetweenCollisionTestActive(self: VehicleConstraint, steps: u32) void {
+        c.zjoltVehicleConstraintSetNumStepsBetweenCollisionTestActive(self.handle, steps);
+    }
+
+    pub fn numStepsBetweenCollisionTestInactive(self: VehicleConstraint) u32 {
+        return c.zjoltVehicleConstraintGetNumStepsBetweenCollisionTestInactive(self.handle);
+    }
+
+    pub fn setNumStepsBetweenCollisionTestInactive(self: VehicleConstraint, steps: u32) void {
+        c.zjoltVehicleConstraintSetNumStepsBetweenCollisionTestInactive(self.handle, steps);
+    }
+
+    //=========================================================================
+    // Wheel force and pose readback
+    //
+    // The lambdas are the solver's own accumulated impulses for the wheel
+    // this step, divided by delta time to read as a force.
+    //=========================================================================
+
+    pub fn wheelContactSubShapeId(self: VehicleConstraint, wheel_index: u32) c.SubShapeId {
+        return c.zjoltVehicleConstraintGetWheelContactSubShapeId(self.handle, wheel_index);
+    }
+
+    /// True when the suspension has bottomed out against its hard limit
+    /// this step.
+    pub fn wheelHasHitHardPoint(self: VehicleConstraint, wheel_index: u32) bool {
+        return c.zjoltVehicleConstraintHasWheelHitHardPoint(self.handle, wheel_index);
+    }
+
+    pub fn wheelSuspensionLambda(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelSuspensionLambda(self.handle, wheel_index);
+    }
+
+    pub fn wheelLongitudinalLambda(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelLongitudinalLambda(self.handle, wheel_index);
+    }
+
+    pub fn wheelLateralLambda(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelLateralLambda(self.handle, wheel_index);
+    }
+
+    pub const WheelBasis = struct {
+        forward: math.Vec3,
+        up: math.Vec3,
+        right: math.Vec3,
+    };
+
+    /// The wheel's forward/up/right axes in the vehicle body's local space,
+    /// after steering — feed `.up`/`.right` into the two poses below to
+    /// place a wheel mesh whose own local axes do not match theirs.
+    pub fn wheelLocalBasis(self: VehicleConstraint, wheel_index: u32) WheelBasis {
+        var out: WheelBasis = .{ .forward = math.vec3_zero, .up = math.vec3_zero, .right = math.vec3_zero };
+        c.zjoltVehicleConstraintGetWheelLocalBasis(self.handle, wheel_index, &out.forward, &out.up, &out.right);
+        return out;
+    }
+
+    pub const WheelPose = struct {
+        position: math.Vec3,
+        rotation: math.Quat,
+    };
+
+    /// The wheel's pose in the vehicle body's local space — suspension
+    /// travel, steering and spin all folded in. `wheel_right`/`wheel_up`
+    /// are the wheel mesh's own local axes, typically a prior
+    /// `wheelLocalBasis` call's `.right`/`.up`.
+    pub fn wheelLocalTransform(
+        self: VehicleConstraint,
+        wheel_index: u32,
+        wheel_right: math.Vec3,
+        wheel_up: math.Vec3,
+    ) WheelPose {
+        var out: WheelPose = .{ .position = math.vec3_zero, .rotation = math.quat_identity };
+        c.zjoltVehicleConstraintGetWheelLocalTransform(
+            self.handle,
+            wheel_index,
+            &wheel_right,
+            &wheel_up,
+            &out.position,
+            &out.rotation,
+        );
+        return out;
+    }
+
+    pub const WheelWorldPose = struct {
+        position: math.RVec3,
+        rotation: math.Quat,
+    };
+
+    /// The wheel's pose in world space — what a wheel mesh should be drawn
+    /// at each frame.
+    pub fn wheelWorldTransform(
+        self: VehicleConstraint,
+        wheel_index: u32,
+        wheel_right: math.Vec3,
+        wheel_up: math.Vec3,
+    ) WheelWorldPose {
+        var out: WheelWorldPose = .{ .position = math.rvec3_zero, .rotation = math.quat_identity };
+        c.zjoltVehicleConstraintGetWheelWorldTransform(
+            self.handle,
+            wheel_index,
+            &wheel_right,
+            &wheel_up,
+            &out.position,
+            &out.rotation,
+        );
+        return out;
+    }
+
+    //=========================================================================
+    // Viewed as a plain constraint
+    //=========================================================================
+
+    /// A borrowed view through the generic constraint API — `setEnabled`,
+    /// `subType`, `isAdded`, `setPriority` and friends on
+    /// `zjolt.Constraint` all work through it. Borrowed: never `.release()`
+    /// or `.deinit()` it, and it is valid only until this vehicle's own
+    /// `deinit`. Null for a destroyed/never-created constraint.
+    pub fn asConstraint(self: VehicleConstraint) ?constraint_mod.Constraint {
+        const handle = c.zjoltVehicleConstraintAsConstraint(self.handle) orelse return null;
+        return .{ .handle = handle };
     }
 };
