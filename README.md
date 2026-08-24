@@ -482,6 +482,23 @@ destroying it rather than leaving the broad phase holding freed bodies; and a
 character on a ramp is supported by it while one pressed against a wall is
 not.
 
+Every subsystem now owes at least one such test, and the ones added last cover
+the parts a caller most easily gets subtly wrong: a box's mass and inertia
+follow from its dimensions and density; a compound's centre of mass sits where
+its children put it rather than at its origin; a material attached to one mesh
+triangle comes back through a ray hit as that same material and not its
+neighbour's; two bodies excluded by a collision-group filter pass through each
+other while the same pair in different groups do not; `collideShapeClosest`
+returns the DEEPEST overlap rather than whichever the traversal reached first;
+a shape cast that starts inside a mesh reports nothing under the default
+back-face mode and a hit under the other; an aborted body batch leaves the
+system exactly as it was; a vehicle accelerates along its forward axis, spins
+every wheel, upshifts as engine RPM climbs, and brakes to rest; a tracked
+vehicle turns when its two tracks run at different rates; and a world saved,
+stepped further, and restored is back where the save was taken — position and
+velocity both — while a restore into a world whose body set changed is refused
+rather than half-applied.
+
 Two reflective sweeps run alongside those, and they are mechanical on purpose:
 one calls every entry point in the ABI with nulls, and one calls every entry
 point before `init`. Both discover the list by reflection rather than being
@@ -514,7 +531,7 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 ```
 
 The default is trimmed rather than complete, which is a concession to what Jolt
-is: 172 translation units per configuration, so one is tens of seconds rather
+is: 174 translation units per configuration, so one is tens of seconds rather
 than the couple of seconds a smaller library would take. On the machine this
 was written on, `--full` is 22 checks — 14 of them building and running the
 suite, 8 cross-compiling — in about four minutes from a cold cache; the
