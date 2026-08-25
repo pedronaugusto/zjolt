@@ -329,7 +329,6 @@ test "releasing a still-added ragdoll removes it before destroying its bodies" {
     try std.testing.expect(world.system.bodies().isAdded(world.floor));
 }
 
-
 //=============================================================================
 // Introspection
 //=============================================================================

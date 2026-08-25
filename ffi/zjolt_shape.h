@@ -329,6 +329,130 @@ typedef struct ZJoltShapeStats {
 ZJOLT_API void zjoltShapeGetStats(const ZJoltShape *shape,
                                   ZJoltShapeStats *out);
 
+//===----------------------------------------------------------------------===//
+// Convex-primitive dimension introspection
+//
+// zjoltShapeGetSubType says WHICH kind of shape a handle names; these are the
+// other half — the dimensions it was built with. Without them, a shape that
+// arrived as an opaque ZJoltShape* (a hit result, a compound child, a
+// deserialised shape) can be measured only in generic terms (zjoltShapeGetVolume,
+// zjoltShapeGetLocalBounds), never in the terms it was actually constructed
+// with.
+//
+// Every getter below reads a field that exists on some convex shape kinds and
+// not others, and Jolt names it with a plain, non-virtual method on the
+// concrete subtype rather than something zjoltShapeGetSubType-dispatchable
+// generically — so each one checks GetSubType() itself and returns
+// ZJOLT_RESULT_INVALID_ARGUMENT for a shape it does not apply to, rather than
+// guessing. Two exceptions are genuinely generic and take no such detour:
+// zjoltShapeGetInnerRadius is a plain virtual on the Shape base every kind
+// implements, so it is infallible like zjoltShapeGetVolume; zjoltShapeGetPlane
+// is PlaneShape-only but there is nothing else a plane HAS to check against.
+//
+// A shape Jolt SIMPLIFIED at construction (zjoltShapeCreateTaperedCapsule and
+// friends document when) answers these in terms of what it actually is now,
+// which may not be the constructor that built it — the same caveat
+// zjoltShapeGetSubType itself carries.
+//===----------------------------------------------------------------------===//
+
+/// The radius of the largest sphere that fits inside `shape`, used as Jolt's
+/// own convex-collision margin. Defined for every shape kind — 0 for one with
+/// no meaningful interior, such as a plane or an empty shape — so unlike the
+/// rest of this section it needs no subtype check. 0 for a NULL `shape`.
+ZJOLT_API float zjoltShapeGetInnerRadius(const ZJoltShape *shape);
+
+/// Sphere, capsule or cylinder radius. ZJOLT_RESULT_INVALID_ARGUMENT for any
+/// other kind, including a box or a tapered capsule/cylinder — those round a
+/// different dimension, see zjoltShapeGetConvexRadius and
+/// zjoltShapeGetTopRadius/zjoltShapeGetBottomRadius.
+ZJOLT_API ZJoltResult zjoltShapeGetRadius(const ZJoltShape *shape,
+                                          float *out_radius);
+
+/// A box's half extent, the same value zjoltShapeCreateBox took.
+/// ZJOLT_RESULT_INVALID_ARGUMENT for any other kind.
+ZJOLT_API ZJoltResult zjoltShapeGetHalfExtent(const ZJoltShape *shape,
+                                              ZJoltVec3 *out_half_extent);
+
+/// Cylinder, tapered capsule or tapered cylinder half height.
+/// ZJOLT_RESULT_INVALID_ARGUMENT for any other kind — a plain capsule's is
+/// zjoltShapeGetHalfHeightOfCylinder instead, because Jolt gives that one a
+/// distinct name (the capsule's own half height still excludes the
+/// hemispherical caps zjoltShapeCreateCapsule's `radius` adds).
+ZJOLT_API ZJoltResult zjoltShapeGetHalfHeight(const ZJoltShape *shape,
+                                              float *out_half_height);
+
+/// A capsule's half height of cylinder, the same value
+/// zjoltShapeCreateCapsule took. ZJOLT_RESULT_INVALID_ARGUMENT for any other
+/// kind.
+ZJOLT_API ZJoltResult zjoltShapeGetHalfHeightOfCylinder(
+    const ZJoltShape *shape, float *out_half_height_of_cylinder);
+
+/// A tapered capsule or tapered cylinder's radius at its `+half_height` end.
+/// ZJOLT_RESULT_INVALID_ARGUMENT for any other kind — including a shape
+/// zjoltShapeCreateTaperedCapsule/zjoltShapeCreateTaperedCylinder SIMPLIFIED
+/// into a sphere or a plain cylinder, which no longer has one.
+ZJOLT_API ZJoltResult zjoltShapeGetTopRadius(const ZJoltShape *shape,
+                                             float *out_top_radius);
+
+/// The radius at the `-half_height` end. @see zjoltShapeGetTopRadius.
+ZJOLT_API ZJoltResult zjoltShapeGetBottomRadius(const ZJoltShape *shape,
+                                                float *out_bottom_radius);
+
+/// The convex radius a box, cylinder, convex hull or tapered cylinder rounds
+/// its edges by. ZJOLT_RESULT_INVALID_ARGUMENT for any other kind — a sphere
+/// or capsule has no separate convex radius, because its own radius already
+/// plays that role, and a tapered capsule has none at all.
+ZJOLT_API ZJoltResult zjoltShapeGetConvexRadius(const ZJoltShape *shape,
+                                                float *out_convex_radius);
+
+/// A convex hull's face count. ZJOLT_RESULT_INVALID_ARGUMENT for any other
+/// kind.
+ZJOLT_API ZJoltResult zjoltShapeGetNumFaces(const ZJoltShape *shape,
+                                            uint32_t *out_num_faces);
+
+/// The number of vertices in convex hull face `face_index`.
+/// ZJOLT_RESULT_INVALID_ARGUMENT for any other kind, or for a `face_index` at
+/// or beyond zjoltShapeGetNumFaces — Jolt indexes its own face array with no
+/// bounds check at all, so out of range there is not an assert but a read
+/// past the end.
+ZJOLT_API ZJoltResult zjoltShapeGetNumVerticesInFace(
+    const ZJoltShape *shape, uint32_t face_index, uint32_t *out_num_vertices);
+
+/// A convex hull's own vertices, relative to `shape`'s centre of mass.
+/// ZJOLT_RESULT_INVALID_ARGUMENT for any other kind. Two-call protocol like
+/// zjoltShapeGetMaterialList: pass `out_points` = NULL to learn the count.
+ZJOLT_API ZJoltResult zjoltShapeGetPoints(const ZJoltShape *shape,
+                                          ZJoltVec3 *out_points,
+                                          uint32_t capacity,
+                                          uint32_t *out_count);
+
+/// A plane, as a unit normal and the signed distance from the origin along
+/// it: `dot(x, normal) + constant = 0` on the plane, matching what
+/// zjoltShapeCreatePlane took.
+typedef struct ZJoltPlane {
+  ZJoltVec3 normal;
+  float constant;
+} ZJoltPlane;
+
+/// A convex hull's own face planes, relative to `shape`'s centre of mass.
+/// ZJOLT_RESULT_INVALID_ARGUMENT for any other kind — in particular NOT a
+/// plane shape's plane, which is zjoltShapeGetPlane (singular). Two-call
+/// protocol like zjoltShapeGetMaterialList.
+ZJOLT_API ZJoltResult zjoltShapeGetPlanes(const ZJoltShape *shape,
+                                          ZJoltPlane *out_planes,
+                                          uint32_t capacity,
+                                          uint32_t *out_count);
+
+/// A plane shape's own plane equation and bounding half extent — both values
+/// zjoltShapeCreatePlane took. ZJOLT_RESULT_INVALID_ARGUMENT for any other
+/// kind. There is no separate vertex read-back: Jolt keeps the four corners
+/// of the bounded quad this describes as a PRIVATE helper with no accessor,
+/// so the caller reconstructs them from `plane` and `half_extent` directly —
+/// the same two values Jolt's own private helper starts from.
+ZJOLT_API ZJoltResult zjoltShapeGetPlane(const ZJoltShape *shape,
+                                         ZJoltPlane *out_plane,
+                                         float *out_half_extent);
+
 /// Serialises `shape` and everything under it into `buffer`.
 ///
 /// Two-call protocol: pass buffer = NULL to learn the size, then call again

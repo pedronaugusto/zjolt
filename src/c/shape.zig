@@ -73,6 +73,43 @@ pub extern fn zjoltShapeGetMassProperties(shape: *const Shape, out: *MassPropert
 
 pub extern fn zjoltShapeGetStats(shape: *const Shape, out: *ShapeStats) void;
 
+//===----------------------------------------------------------------------===//
+// Convex-primitive dimension introspection
+//===----------------------------------------------------------------------===//
+
+pub extern fn zjoltShapeGetInnerRadius(shape: *const Shape) f32;
+
+pub extern fn zjoltShapeGetRadius(shape: *const Shape, out_radius: *f32) Result;
+
+pub extern fn zjoltShapeGetHalfExtent(shape: *const Shape, out_half_extent: *Vec3) Result;
+
+pub extern fn zjoltShapeGetHalfHeight(shape: *const Shape, out_half_height: *f32) Result;
+
+pub extern fn zjoltShapeGetHalfHeightOfCylinder(shape: *const Shape, out_half_height_of_cylinder: *f32) Result;
+
+pub extern fn zjoltShapeGetTopRadius(shape: *const Shape, out_top_radius: *f32) Result;
+
+pub extern fn zjoltShapeGetBottomRadius(shape: *const Shape, out_bottom_radius: *f32) Result;
+
+pub extern fn zjoltShapeGetConvexRadius(shape: *const Shape, out_convex_radius: *f32) Result;
+
+pub extern fn zjoltShapeGetNumFaces(shape: *const Shape, out_num_faces: *u32) Result;
+
+pub extern fn zjoltShapeGetNumVerticesInFace(shape: *const Shape, face_index: u32, out_num_vertices: *u32) Result;
+
+pub extern fn zjoltShapeGetPoints(shape: *const Shape, out_points: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
+
+/// A plane, as a unit normal and the signed distance from the origin along
+/// it. Layout-identical to `ffi/zjolt_shape.h`'s `ZJoltPlane`.
+pub const Plane = extern struct {
+    normal: Vec3,
+    constant: f32,
+};
+
+pub extern fn zjoltShapeGetPlanes(shape: *const Shape, out_planes: ?[*]Plane, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltShapeGetPlane(shape: *const Shape, out_plane: *Plane, out_half_extent: *f32) Result;
+
 pub extern fn zjoltShapeSave(shape: *const Shape, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 
 pub extern fn zjoltShapeRestore(data: [*]const u8, size: usize, out: **Shape) Result;

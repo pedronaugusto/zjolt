@@ -449,3 +449,109 @@ test "bodies in the same group with different filter objects never collide" {
     );
     try std.testing.expect(separation > 1.0);
 }
+
+//=============================================================================
+// Shape introspection
+//
+// A caller holding an opaque `Shape` could not previously ask it what it was
+// built from. `subType` says which kind it is; these say with what.
+//=============================================================================
+
+test "every convex shape reports back the dimensions it was built with" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const sphere = try zjolt.Shape.initSphere(0.75, .{});
+    defer sphere.release();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), try sphere.sphereRadius(), 1e-5);
+
+    // Deliberately three different half extents, so a getter that returned the
+    // wrong axis — or the full extent instead of the half — shows up as a
+    // wrong number rather than coincidentally matching.
+    const box = try zjolt.Shape.initBox(zjolt.vec3(0.5, 1.0, 1.5), .{});
+    defer box.release();
+    const half = try box.halfExtent();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), half.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), half.y, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), half.z, 1e-5);
+
+    // A capsule's two numbers are the half height of its CYLINDER and its
+    // radius, not the half height of the whole shape — the pair most easily
+    // conflated, which is why both are asserted.
+    const capsule = try zjolt.Shape.initCapsule(0.4, 0.3, .{});
+    defer capsule.release();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.4), try capsule.halfHeightOfCylinder(), 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3), try capsule.sphereRadius(), 1e-5);
+
+    const cylinder = try zjolt.Shape.initCylinder(0.6, 0.2, .{});
+    defer cylinder.release();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), try cylinder.halfHeight(), 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), try cylinder.sphereRadius(), 1e-5);
+
+    // Tapered ends differ from each other, so a getter wired to the wrong end
+    // cannot pass.
+    const tapered = try zjolt.Shape.initTaperedCylinder(0.5, 0.9, 0.3, .{});
+    defer tapered.release();
+    try std.testing.expectApproxEqAbs(@as(f32, 0.9), try tapered.topRadius(), 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3), try tapered.bottomRadius(), 1e-5);
+}
+
+test "an introspection getter refuses a shape of the wrong kind" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(1, 1, 1), .{});
+    defer box.release();
+    const sphere = try zjolt.Shape.initSphere(1.0, .{});
+    defer sphere.release();
+
+    // The whole point of narrowing rather than casting: asking a box for a
+    // radius reads whatever sits at a SphereShape's radius offset if the cast
+    // is blind, which is a plausible float and therefore a silent wrong
+    // answer rather than a crash.
+    try std.testing.expectError(error.InvalidArgument, box.sphereRadius());
+    try std.testing.expectError(error.InvalidArgument, sphere.halfExtent());
+    try std.testing.expectError(error.InvalidArgument, sphere.topRadius());
+    try std.testing.expectError(error.InvalidArgument, box.halfHeightOfCylinder());
+}
+
+test "a convex hull reports its points back" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const corners = [_]zjolt.Vec3{
+        zjolt.vec3(0, 0, 0),
+        zjolt.vec3(1, 0, 0),
+        zjolt.vec3(0, 1, 0),
+        zjolt.vec3(0, 0, 1),
+    };
+    const hull = try zjolt.Shape.initConvexHull(&corners, .{});
+    defer hull.release();
+
+    // A tetrahedron: every input point is a vertex of the hull, so the count
+    // round-trips exactly. A hull that dropped or duplicated one would differ.
+    const count = try hull.numPoints();
+    try std.testing.expectEqual(@as(u32, 4), count);
+
+    var buffer: [8]zjolt.Vec3 = undefined;
+    const got = try hull.hullPoints(&buffer);
+    try std.testing.expectEqual(@as(usize, 4), got.len);
+
+    // The points come back RELATIVE TO THE CENTRE OF MASS, not in the space
+    // they were handed in — for this tetrahedron that is a shift of exactly
+    // its centroid, (0.25, 0.25, 0.25). A caller who plots them raw draws the
+    // hull in the wrong place. Adding the centre of mass back is what makes
+    // this an assertion about the documented behaviour rather than a
+    // tolerance loosened until it passed. Order is Jolt's business.
+    const com = hull.centerOfMass();
+    for (got) |p| {
+        var matched = false;
+        for (corners) |q| {
+            if (@abs(p.x + com.x - q.x) < 1e-3 and @abs(p.y + com.y - q.y) < 1e-3 and
+                @abs(p.z + com.z - q.z) < 1e-3) matched = true;
+        }
+        try std.testing.expect(matched);
+    }
+
+    try std.testing.expect(try hull.numFaces() >= 4);
+}

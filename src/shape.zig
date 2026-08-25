@@ -49,6 +49,14 @@ pub const sub_shape_id_empty: c.SubShapeId = c.sub_shape_id_empty;
 /// `compoundChild`.
 pub const CompoundChild = c.CompoundChild;
 
+/// A plane, as a unit normal and the signed distance from the origin along
+/// it: `dot(x, normal) + constant = 0` on the plane.
+///
+/// Layout-identical to the C struct. Returned by `Shape.plane` (a plane
+/// shape's own equation) and `Shape.planes` (a convex hull's face planes) —
+/// distinct queries, `Shape.subType` says which applies.
+pub const Plane = c.Plane;
+
 /// A compound child, positioned and oriented in its parent.
 ///
 /// `shape` is borrowed for the duration of the construction call; the compound
@@ -562,6 +570,178 @@ pub const Shape = struct {
         var out: math.ShapeStats = undefined;
         c.zjoltShapeGetStats(self.handle, &out);
         return out;
+    }
+
+    //=========================================================================
+    // Convex-primitive dimension introspection
+    //
+    // `subType` says WHICH kind of shape a handle names; these are the other
+    // half — the dimensions it was built with. Every one of them except
+    // `innerRadius` (a plain virtual every shape kind implements) checks the
+    // subtype itself and returns `error.InvalidArgument` for a shape it does
+    // not apply to, because Jolt names each with a plain, non-virtual method
+    // on the concrete subtype rather than something dispatchable generically.
+    //
+    // A shape Jolt SIMPLIFIED at construction — `initTaperedCapsule` and its
+    // neighbours document when — answers these in terms of what it actually
+    // is now, which may not be the constructor that built it.
+    //=========================================================================
+
+    /// The radius of the largest sphere that fits inside this shape, Jolt's
+    /// own convex-collision margin. 0 for a shape with no meaningful
+    /// interior, such as a plane or an empty shape — defined for every kind,
+    /// so unlike the rest of this section it cannot fail.
+    pub fn innerRadius(self: Shape) f32 {
+        return c.zjoltShapeGetInnerRadius(self.handle);
+    }
+
+    /// Sphere, capsule or cylinder radius. `error.InvalidArgument` for any
+    /// other kind, including a box or a tapered capsule/cylinder — those
+    /// round a different dimension, @see `convexRadius` and
+    /// `topRadius`/`bottomRadius`.
+    pub fn sphereRadius(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetRadius(self.handle, &out));
+        return out;
+    }
+
+    /// A box's half extent, the same value `initBox` took.
+    /// `error.InvalidArgument` for any other kind.
+    pub fn halfExtent(self: Shape) err.Error!math.Vec3 {
+        var out: math.Vec3 = undefined;
+        try err.check(c.zjoltShapeGetHalfExtent(self.handle, &out));
+        return out;
+    }
+
+    /// Cylinder, tapered capsule or tapered cylinder half height.
+    /// `error.InvalidArgument` for any other kind — a plain capsule's is
+    /// `halfHeightOfCylinder` instead, because Jolt gives that one a distinct
+    /// name (it still excludes the hemispherical caps `initCapsule`'s
+    /// `radius` adds).
+    pub fn halfHeight(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetHalfHeight(self.handle, &out));
+        return out;
+    }
+
+    /// A capsule's half height of cylinder, the same value `initCapsule`
+    /// took. `error.InvalidArgument` for any other kind.
+    pub fn halfHeightOfCylinder(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetHalfHeightOfCylinder(self.handle, &out));
+        return out;
+    }
+
+    /// A tapered capsule or tapered cylinder's radius at its `+half_height`
+    /// end. `error.InvalidArgument` for any other kind — including a shape
+    /// that was SIMPLIFIED into a sphere or a plain cylinder, which no longer
+    /// has one.
+    pub fn topRadius(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetTopRadius(self.handle, &out));
+        return out;
+    }
+
+    /// The radius at the `-half_height` end. @see `topRadius`.
+    pub fn bottomRadius(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetBottomRadius(self.handle, &out));
+        return out;
+    }
+
+    /// The convex radius a box, cylinder, convex hull or tapered cylinder
+    /// rounds its edges by. `error.InvalidArgument` for any other kind — a
+    /// sphere or capsule has no separate convex radius, because its own
+    /// radius already plays that role, and a tapered capsule has none at
+    /// all.
+    pub fn convexRadius(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetConvexRadius(self.handle, &out));
+        return out;
+    }
+
+    /// A convex hull's face count. `error.InvalidArgument` for any other
+    /// kind.
+    pub fn numFaces(self: Shape) err.Error!u32 {
+        var out: u32 = undefined;
+        try err.check(c.zjoltShapeGetNumFaces(self.handle, &out));
+        return out;
+    }
+
+    /// The number of vertices in convex hull face `face_index`.
+    /// `error.InvalidArgument` for any other kind, or for a `face_index` at
+    /// or beyond `numFaces` — Jolt indexes its own face array with no bounds
+    /// check at all, so out of range there is not an assert but a read past
+    /// the end.
+    pub fn numVerticesInFace(self: Shape, face_index: u32) err.Error!u32 {
+        var out: u32 = undefined;
+        try err.check(
+            c.zjoltShapeGetNumVerticesInFace(self.handle, face_index, &out),
+        );
+        return out;
+    }
+
+    /// How many points `points` will need for this shape, or
+    /// `error.InvalidArgument` if it is not a convex hull.
+    pub fn numPoints(self: Shape) err.Error!u32 {
+        var out: u32 = undefined;
+        try err.check(c.zjoltShapeGetPoints(self.handle, null, 0, &out));
+        return out;
+    }
+
+    /// A convex hull's own vertices, relative to its centre of mass, written
+    /// into `buffer`. `error.BufferTooSmall` if it does not fit — size with
+    /// `numPoints` first; `error.InvalidArgument` if this is not a convex
+    /// hull.
+    pub fn hullPoints(self: Shape, buffer: []math.Vec3) err.Error![]math.Vec3 {
+        var out_count: u32 = undefined;
+        try err.check(c.zjoltShapeGetPoints(
+            self.handle,
+            buffer.ptr,
+            @intCast(buffer.len),
+            &out_count,
+        ));
+        return buffer[0..out_count];
+    }
+
+    /// How many planes `planes` will need for this shape, or
+    /// `error.InvalidArgument` if it is not a convex hull.
+    pub fn numPlanes(self: Shape) err.Error!u32 {
+        var out: u32 = undefined;
+        try err.check(c.zjoltShapeGetPlanes(self.handle, null, 0, &out));
+        return out;
+    }
+
+    /// A convex hull's own face planes, relative to its centre of mass,
+    /// written into `buffer`. `error.BufferTooSmall` if it does not fit —
+    /// size with `numPlanes` first; `error.InvalidArgument` if this is not a
+    /// convex hull — in particular NOT a plane shape's plane, which is
+    /// `plane` (singular).
+    pub fn planes(self: Shape, buffer: []Plane) err.Error![]Plane {
+        var out_count: u32 = undefined;
+        try err.check(c.zjoltShapeGetPlanes(
+            self.handle,
+            buffer.ptr,
+            @intCast(buffer.len),
+            &out_count,
+        ));
+        return buffer[0..out_count];
+    }
+
+    /// A plane shape's own plane equation and bounding half extent — both
+    /// values `initPlane` took. `error.InvalidArgument` for any other kind.
+    ///
+    /// There is no separate vertex read-back: Jolt keeps the four corners of
+    /// the bounded quad this describes as a PRIVATE helper with no accessor,
+    /// so reconstruct them from the returned plane and half extent directly —
+    /// the same two values Jolt's own private helper starts from.
+    pub fn plane(self: Shape) err.Error!struct { plane: Plane, half_extent: f32 } {
+        var out_plane: Plane = undefined;
+        var out_half_extent: f32 = undefined;
+        try err.check(
+            c.zjoltShapeGetPlane(self.handle, &out_plane, &out_half_extent),
+        );
+        return .{ .plane = out_plane, .half_extent = out_half_extent };
     }
 
     //=========================================================================

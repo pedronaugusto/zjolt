@@ -243,6 +243,22 @@ const JPH::HeightFieldShape *AsHeightField(const ZJoltShape *shape) {
   return static_cast<const JPH::HeightFieldShape *>(jolt);
 }
 
+/// The handle, cast to `T` if `shape` is exactly `sub_type` — null otherwise.
+///
+/// Every convex-primitive dimension getter below opens with this. Jolt's
+/// per-subtype dimension accessors (SphereShape::GetRadius and its siblings)
+/// are plain, non-virtual methods, so nothing but GetSubType() can confirm a
+/// static_cast is safe — and -fno-rtti rules out asking dynamic_cast instead.
+/// @see AsCompound/AsMesh/AsHeightField above, the same idea for the shapes
+/// that needed it first.
+template <typename T>
+const T *NarrowShape(const ZJoltShape *shape, JPH::EShapeSubType sub_type) {
+  if (shape == nullptr) return nullptr;
+  const JPH::Shape *jolt = zjolt::ToJolt(shape);
+  if (jolt->GetSubType() != sub_type) return nullptr;
+  return static_cast<const T *>(jolt);
+}
+
 /// The center-of-mass transform Shape-level introspection takes as a
 /// position/rotation pair, folded into the Mat44 Jolt's own API wants.
 /// `position`/`rotation` NULL means the origin/identity — the transform a
@@ -819,6 +835,254 @@ void zjoltShapeGetStats(const ZJoltShape *shape, ZJoltShapeStats *out) {
       zjolt::ToJolt(shape)->GetStatsRecursive(visited);
   out->size_bytes = static_cast<uint64_t>(stats.mSizeBytes);
   out->num_triangles = static_cast<uint32_t>(stats.mNumTriangles);
+}
+
+//===----------------------------------------------------------------------===//
+// Convex-primitive dimension introspection
+//===----------------------------------------------------------------------===//
+
+float zjoltShapeGetInnerRadius(const ZJoltShape *shape) {
+  if (shape == nullptr) return 0.0f;
+  return zjolt::ToJolt(shape)->GetInnerRadius();
+}
+
+ZJoltResult zjoltShapeGetRadius(const ZJoltShape *shape, float *out_radius) {
+  ZJOLT_ENTER(out_radius);
+  if (!zjolt::Present(shape, out_radius)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (const auto *sphere =
+          NarrowShape<JPH::SphereShape>(shape, JPH::EShapeSubType::Sphere)) {
+    *out_radius = sphere->GetRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *capsule = NarrowShape<JPH::CapsuleShape>(
+          shape, JPH::EShapeSubType::Capsule)) {
+    *out_radius = capsule->GetRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *cylinder = NarrowShape<JPH::CylinderShape>(
+          shape, JPH::EShapeSubType::Cylinder)) {
+    *out_radius = cylinder->GetRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                         "shape is not a sphere, capsule, or cylinder");
+}
+
+ZJoltResult zjoltShapeGetHalfExtent(const ZJoltShape *shape,
+                                    ZJoltVec3 *out_half_extent) {
+  ZJOLT_ENTER(out_half_extent);
+  if (!zjolt::Present(shape, out_half_extent))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::BoxShape *box =
+      NarrowShape<JPH::BoxShape>(shape, JPH::EShapeSubType::Box);
+  if (box == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "shape is not a box");
+  }
+  *out_half_extent = zjolt::ToC(box->GetHalfExtent());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetHalfHeight(const ZJoltShape *shape,
+                                    float *out_half_height) {
+  ZJOLT_ENTER(out_half_height);
+  if (!zjolt::Present(shape, out_half_height))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (const auto *cylinder = NarrowShape<JPH::CylinderShape>(
+          shape, JPH::EShapeSubType::Cylinder)) {
+    *out_half_height = cylinder->GetHalfHeight();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *tapered_capsule = NarrowShape<JPH::TaperedCapsuleShape>(
+          shape, JPH::EShapeSubType::TaperedCapsule)) {
+    *out_half_height = tapered_capsule->GetHalfHeight();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *tapered_cylinder = NarrowShape<JPH::TaperedCylinderShape>(
+          shape, JPH::EShapeSubType::TaperedCylinder)) {
+    *out_half_height = tapered_cylinder->GetHalfHeight();
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(
+      ZJOLT_RESULT_INVALID_ARGUMENT,
+      "shape is not a cylinder, tapered capsule, or tapered cylinder");
+}
+
+ZJoltResult zjoltShapeGetHalfHeightOfCylinder(
+    const ZJoltShape *shape, float *out_half_height_of_cylinder) {
+  ZJOLT_ENTER(out_half_height_of_cylinder);
+  if (!zjolt::Present(shape, out_half_height_of_cylinder))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::CapsuleShape *capsule =
+      NarrowShape<JPH::CapsuleShape>(shape, JPH::EShapeSubType::Capsule);
+  if (capsule == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a capsule");
+  }
+  *out_half_height_of_cylinder = capsule->GetHalfHeightOfCylinder();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetTopRadius(const ZJoltShape *shape,
+                                   float *out_top_radius) {
+  ZJOLT_ENTER(out_top_radius);
+  if (!zjolt::Present(shape, out_top_radius))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (const auto *tapered_capsule = NarrowShape<JPH::TaperedCapsuleShape>(
+          shape, JPH::EShapeSubType::TaperedCapsule)) {
+    *out_top_radius = tapered_capsule->GetTopRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *tapered_cylinder = NarrowShape<JPH::TaperedCylinderShape>(
+          shape, JPH::EShapeSubType::TaperedCylinder)) {
+    *out_top_radius = tapered_cylinder->GetTopRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                         "shape is not a tapered capsule or tapered cylinder");
+}
+
+ZJoltResult zjoltShapeGetBottomRadius(const ZJoltShape *shape,
+                                      float *out_bottom_radius) {
+  ZJOLT_ENTER(out_bottom_radius);
+  if (!zjolt::Present(shape, out_bottom_radius))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (const auto *tapered_capsule = NarrowShape<JPH::TaperedCapsuleShape>(
+          shape, JPH::EShapeSubType::TaperedCapsule)) {
+    *out_bottom_radius = tapered_capsule->GetBottomRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *tapered_cylinder = NarrowShape<JPH::TaperedCylinderShape>(
+          shape, JPH::EShapeSubType::TaperedCylinder)) {
+    *out_bottom_radius = tapered_cylinder->GetBottomRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                         "shape is not a tapered capsule or tapered cylinder");
+}
+
+ZJoltResult zjoltShapeGetConvexRadius(const ZJoltShape *shape,
+                                      float *out_convex_radius) {
+  ZJOLT_ENTER(out_convex_radius);
+  if (!zjolt::Present(shape, out_convex_radius))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (const auto *box =
+          NarrowShape<JPH::BoxShape>(shape, JPH::EShapeSubType::Box)) {
+    *out_convex_radius = box->GetConvexRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *cylinder = NarrowShape<JPH::CylinderShape>(
+          shape, JPH::EShapeSubType::Cylinder)) {
+    *out_convex_radius = cylinder->GetConvexRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *hull = NarrowShape<JPH::ConvexHullShape>(
+          shape, JPH::EShapeSubType::ConvexHull)) {
+    *out_convex_radius = hull->GetConvexRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  if (const auto *tapered_cylinder = NarrowShape<JPH::TaperedCylinderShape>(
+          shape, JPH::EShapeSubType::TaperedCylinder)) {
+    *out_convex_radius = tapered_cylinder->GetConvexRadius();
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(
+      ZJOLT_RESULT_INVALID_ARGUMENT,
+      "shape is not a box, cylinder, convex hull, or tapered cylinder");
+}
+
+ZJoltResult zjoltShapeGetNumFaces(const ZJoltShape *shape,
+                                  uint32_t *out_num_faces) {
+  ZJOLT_ENTER(out_num_faces);
+  if (!zjolt::Present(shape, out_num_faces))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexHullShape *hull =
+      NarrowShape<JPH::ConvexHullShape>(shape, JPH::EShapeSubType::ConvexHull);
+  if (hull == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex hull");
+  }
+  *out_num_faces = hull->GetNumFaces();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetNumVerticesInFace(const ZJoltShape *shape,
+                                           uint32_t face_index,
+                                           uint32_t *out_num_vertices) {
+  ZJOLT_ENTER(out_num_vertices);
+  if (!zjolt::Present(shape, out_num_vertices))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexHullShape *hull =
+      NarrowShape<JPH::ConvexHullShape>(shape, JPH::EShapeSubType::ConvexHull);
+  if (hull == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex hull");
+  }
+  if (face_index >= hull->GetNumFaces()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "face_index is out of range for this convex hull; Jolt indexes its "
+        "own face array with no bounds check at all");
+  }
+  *out_num_vertices = hull->GetNumVerticesInFace(face_index);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetPoints(const ZJoltShape *shape, ZJoltVec3 *out_points,
+                                uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(shape, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexHullShape *hull =
+      NarrowShape<JPH::ConvexHullShape>(shape, JPH::EShapeSubType::ConvexHull);
+  if (hull == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex hull");
+  }
+  const uint32_t num_points = hull->GetNumPoints();
+  *out_count = num_points;
+  if (out_points == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < num_points) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  for (uint32_t i = 0; i < num_points; ++i)
+    out_points[i] = zjolt::ToC(hull->GetPoint(i));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetPlanes(const ZJoltShape *shape, ZJoltPlane *out_planes,
+                                uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(shape, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexHullShape *hull =
+      NarrowShape<JPH::ConvexHullShape>(shape, JPH::EShapeSubType::ConvexHull);
+  if (hull == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex hull");
+  }
+  const auto &planes = hull->GetPlanes();
+  const uint32_t num_planes = static_cast<uint32_t>(planes.size());
+  *out_count = num_planes;
+  if (out_planes == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < num_planes) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  for (uint32_t i = 0; i < num_planes; ++i) {
+    out_planes[i].normal = zjolt::ToC(planes[i].GetNormal());
+    out_planes[i].constant = planes[i].GetConstant();
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetPlane(const ZJoltShape *shape, ZJoltPlane *out_plane,
+                               float *out_half_extent) {
+  ZJOLT_ENTER(out_plane, out_half_extent);
+  if (!zjolt::Present(shape, out_plane, out_half_extent))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::PlaneShape *plane_shape =
+      NarrowShape<JPH::PlaneShape>(shape, JPH::EShapeSubType::Plane);
+  if (plane_shape == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a plane");
+  }
+  out_plane->normal = zjolt::ToC(plane_shape->GetPlane().GetNormal());
+  out_plane->constant = plane_shape->GetPlane().GetConstant();
+  *out_half_extent = plane_shape->GetHalfExtent();
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//
