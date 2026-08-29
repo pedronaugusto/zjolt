@@ -108,10 +108,10 @@ inline void FreeFor(void *block) {
     JPH::Free(block);
 }
 
-/// Allocation-checked replacement for a bare `new`. Jolt's own containers
-/// abort on allocation failure; the objects zjolt creates report
-/// ZJOLT_RESULT_OUT_OF_MEMORY instead, which is what makes that result reachable
-/// rather than decorative.
+/// Allocation-checked replacement for a bare `new`. Jolt's own containers abort
+/// on allocation failure; the objects zjolt creates report
+/// ZJOLT_RESULT_OUT_OF_MEMORY instead, which is what makes that result
+/// reachable rather than decorative.
 template <typename T, typename... Args>
 T *New(Args &&...args) {
   void *block = AllocateFor<T>();

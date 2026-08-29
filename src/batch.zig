@@ -1,16 +1,16 @@
 //! Many bodies at once.
 //!
 //! Adding ten thousand bodies one at a time produces a broad phase that is
-//! correct and badly shaped, and every query pays for that until a later
-//! step rebuilds the tree. `add` sorts the whole set by broad-phase layer
-//! and builds the subtree in one pass instead — Jolt's own guidance is
-//! that a batch added into roughly unoccupied space needs no
-//! `optimizeBroadPhase` at all.
+//! correct and badly shaped, and every query pays for that until a later step
+//! rebuilds the tree. `add` sorts the whole set by broad-phase layer and builds
+//! the subtree in one pass instead — Jolt's own guidance is that a batch added
+//! into roughly unoccupied space needs no `optimizeBroadPhase` at all.
 //!
-//! The slices these take are read once and released. Jolt's own batch
-//! calls shuffle the array they are given and, for the two-phase add, hold
-//! pointers into it until finalize; the C layer copies into storage it
-//! owns, so none of that reaches a caller here — a `[]const BodyId` may be a temporary. Reached from `PhysicsSystem.batch()`.
+//! The slices these take are read once and released. Jolt's own batch calls
+//! shuffle the array they are given and, for the two-phase add, hold pointers
+//! into it until finalize; the C layer copies into storage it owns, so none of
+//! that reaches a caller here — a `[]const BodyId` may be a temporary. Reached
+//! from `PhysicsSystem.batch()`.
 
 const std = @import("std");
 const c = @import("c/batch.zig");
@@ -19,12 +19,12 @@ const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const broadphase_mod = @import("broadphase.zig");
 
-/// A batch sorted and staged by `Batch.prepare`, waiting for `finalize` or
-/// `abort`.
+/// A batch sorted/staged by `Batch.prepare`, waiting for `finalize` or `abort`.
 ///
 /// Owned by the system it was prepared on: one still outstanding when the
-/// system is destroyed is aborted with it, so forgetting to consume it
-/// leaks nothing. Bodies are neither in the simulation nor findable by a query until consumed.
+/// system is destroyed is aborted with it, so forgetting to consume it leaks
+/// nothing. Bodies are neither in the simulation nor findable by a query until
+/// consumed.
 pub const AddBatch = struct {
     handle: *c.BodyAddBatch,
 };

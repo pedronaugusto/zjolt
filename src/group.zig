@@ -56,12 +56,12 @@ pub const CollisionGroup = struct {
     }
 };
 
-/// A table of one bit per unordered pair of sub-groups, all set until
-/// cleared; reference counted like a `Shape` (create, set on each body,
-/// release). Rules, in order: `group_id == invalid` always collides;
-/// DIFFERENT group ids always collide (within-group only suppression);
-/// DIFFERENT filter objects in the same group never collide (trap: two
-/// ragdolls with separate filters, same group id, pass through each other); same sub-group id never collides; else the table decides.
+/// One bit per unordered sub-group pair, all set until cleared; reference
+/// counted like a `Shape` (create, set on each body, release). Order: `group_id
+/// == invalid` always collides; DIFFERENT group ids always collide (suppresses
+/// only within-group); DIFFERENT same-group filter objects never collide (two
+/// same-group ragdolls with separate filters pass through each other); same
+/// sub-group id never collides; else the table decides.
 pub const GroupFilter = struct {
     handle: *c.GroupFilter,
 

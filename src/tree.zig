@@ -230,11 +230,11 @@ pub const AABBTreeBuffer = struct {
 pub const BodyId = system_c.BodyId;
 
 /// Groups linked bodies, constraints and contacts for the solver — what
-/// `PhysicsSystem` keeps privately, with no accessor. A standalone instance
-/// a host builds, drives and destroys itself. One call sequence per step:
+/// `PhysicsSystem` keeps privately, with no accessor. A standalone instance a
+/// host builds, drives and destroys itself. One call sequence per step:
 /// `reserve` once; then, per step, any of `prepareContactConstraints`/
-/// `prepareNonContactConstraints`, the `link*` calls, `finalize`, the
-/// read-back calls, `resetIslands` — then repeat from `prepareContactConstraints`.
+/// `prepareNonContactConstraints`, the `link*` calls, `finalize`, the read-back
+/// calls, `resetIslands` — then repeat from `prepareContactConstraints`.
 pub const IslandStats = system_c.IslandStats;
 
 pub const IslandBuilder = struct {

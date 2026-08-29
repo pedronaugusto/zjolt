@@ -103,12 +103,12 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeGetSupportingFace(
 // other way in: hand Jolt a box, walk the tree, and report each LEAF overlapping it as its own placed handle.
 //===----------------------------------------------------------------------===//
 
-/// Every leaf of `ts` whose world-space bounds overlap `box`, each as a
-/// fresh, owned handle — release every one with zjoltTransformedShapeDestroy.
-/// A childless shape reports itself, once. `filter` may be NULL to
-/// accept every leaf; the body id it sees is always ZJOLT_BODY_ID_INVALID.
-///
-/// Destroy returned handles before retrying a short buffer bigger; ZJOLT_RESULT_OUT_OF_MEMORY leaves NOTHING behind.
+/// Every leaf of `ts` whose world-space bounds overlap `box`, each as a fresh,
+/// owned handle — release every one with zjoltTransformedShapeDestroy. A
+/// childless shape reports itself, once. `filter` may be NULL to accept every
+/// leaf; the body id it sees is always ZJOLT_BODY_ID_INVALID. Destroy returned
+/// handles before retrying a short buffer bigger; ZJOLT_RESULT_OUT_OF_MEMORY
+/// leaves NOTHING behind.
 ZJOLT_API ZJoltResult zjoltTransformedShapeCollectTransformedShapes(
     const ZJoltTransformedShape *ts, const ZJoltAABox *box,
     const ZJoltShapeFilter *filter, ZJoltTransformedShape **out_shapes,

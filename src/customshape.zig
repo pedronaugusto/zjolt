@@ -39,11 +39,11 @@ pub const Stream = core.Stream;
 pub const max_batch: u32 = c.custom_shape_max_batch;
 
 /// A custom convex shape — the common case. `callbacks.support`,
-/// `inner_radius`, `local_bounds`, `mass_properties` and `volume` are
-/// required; leaving one null is `error.InvalidArgument`. `material` null
-/// means Jolt's shared default, same as every other `Shape.init*`.
-///
-/// Non-uniform (and mirrored) scale works with no extra effort: the shim scales the direction `support` sees and the point it returns by the same diagonal factor, the support-function identity for a linear scale.
+/// `inner_radius`, `local_bounds`, `mass_properties` and `volume` are required;
+/// a null one is `error.InvalidArgument`. `material` null means Jolt's shared
+/// default, as with `Shape.init*`. Non-uniform (mirrored) scale needs no extra
+/// effort: the shim scales `support`'s input direction and output point by the
+/// same diagonal factor — the linear-scale support-function identity.
 pub fn initCustomConvex(
     callbacks: ConvexShapeCallbacks,
     user: ?*anyopaque,
@@ -59,12 +59,12 @@ pub fn initCustomConvex(
     return .{ .handle = handle };
 }
 
-/// A general custom shape, for a shape that is not convex: no support
-/// function, so no GJK/EPA, so every entry point in the "required" half
-/// of `ShapeCallbacks` is required rather than derived. Leaving one null
-/// is `error.InvalidArgument`.
-///
-/// A shape built by either of these two constructors does not survive `zjoltShapeSave`/`Shape.save` round-tripping (callbacks are host code, not data): saving succeeds, but restoring comes back as an inert placeholder (zero volume, zero bounds), never crashing.
+/// A general custom shape, for non-convex geometry: no support function, so no
+/// GJK/EPA, so every entry in `ShapeCallbacks`'s "required" half is mandatory,
+/// not derived. Leaving one null is `error.InvalidArgument`. Either
+/// constructor's shape does not survive `zjoltShapeSave`/`Shape.save`
+/// round-tripping (callbacks are host code, not data): save succeeds, restore
+/// returns an inert placeholder (zero volume, zero bounds), never crashing.
 pub fn initCustom(callbacks: ShapeCallbacks, user: ?*anyopaque) err.Error!Shape {
     var handle: *c.Shape = undefined;
     try err.check(c.zjoltShapeCreateCustom(&callbacks, user, &handle));

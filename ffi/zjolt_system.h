@@ -189,12 +189,12 @@ typedef enum ZJoltTempAllocatorKind {
   ZJOLT_TEMP_ALLOCATOR_KIND_HOST = 2,
 } ZJoltTempAllocatorKind;
 
-/// A host-supplied scratch allocator, shaped like ZJoltAllocator but
-/// scoped to one physics system's step.
+/// A host-supplied scratch allocator, shaped like ZJoltAllocator but scoped to
+/// one physics system's step.
 ///
 /// `allocate`/`free` are what Jolt calls during a step; `can_allocate`,
-/// `get_size`/`get_usage` back the introspection Jolt's own concrete
-/// allocators offer inconsistently — @see zjoltPhysicsSystemGetTempAllocatorStats.
+/// `get_size`/`get_usage` back the introspection Jolt's own concrete allocators
+/// offer inconsistently — @see zjoltPhysicsSystemGetTempAllocatorStats.
 typedef struct ZJoltTempAllocator {
   /// Returns at least `size` bytes. `size` is never 0. Jolt's stack discipline
   /// means the matching `free` sees the same size and frees in reverse order —
@@ -457,8 +457,8 @@ ZJOLT_API void zjoltSimCollideDefault(
 /// Advances the simulation by `delta_time`, split into `collision_steps`
 /// sub-steps (1 is normal; raise for fast bodies, not by shortening the frame).
 ///
-/// `out_error` receives a ZJoltUpdateError mask (may be NULL); non-zero
-/// means a limit in ZJoltPhysicsSystemDesc is too low, not that the step failed.
+/// `out_error` receives a ZJoltUpdateError mask (may be NULL); non-zero means a
+/// limit in ZJoltPhysicsSystemDesc is too low, not that the step failed.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
                                              float delta_time,
                                              int32_t collision_steps,
@@ -704,9 +704,10 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemSetCombineFriction(
 ZJOLT_API ZJoltResult zjoltPhysicsSystemSetCombineRestitution(
     ZJoltPhysicsSystem *system, ZJoltCombineFn combine, void *user);
 
-/// Reads back the callback and user pointer zjoltPhysicsSystemSetCombineRestitution
-/// installed. `*out_combine` and `*out_user` are both NULL if none is
-/// installed (Jolt's default, max(r1, r2), is active) or if `system` is NULL.
+/// Reads back the callback and user pointer
+/// zjoltPhysicsSystemSetCombineRestitution installed. `*out_combine` and
+/// `*out_user` are both NULL if none is installed (Jolt's default, max(r1, r2),
+/// is active) or if `system` is NULL.
 ZJOLT_API void zjoltPhysicsSystemGetCombineRestitution(
     const ZJoltPhysicsSystem *system, ZJoltCombineFn *out_combine,
     void **out_user);
@@ -778,11 +779,11 @@ ZJOLT_API ZJoltResult zjoltIslandBuilderLinkBodies(ZJoltIslandBuilder *builder,
                                                    uint32_t first,
                                                    uint32_t second);
 
-/// Allocates the contact-link table. Required before zjoltIslandBuilderLinkContact,
-/// once per Init/ResetIslands cycle. `temp_allocator`'s `user` context must
-/// stay valid until the builder is destroyed or a later Prepare*/Finalize
-/// call supersedes it: Destroy frees through the most recent one if the
-/// host never calls ResetIslands.
+/// Allocates the contact-link table. Required before
+/// zjoltIslandBuilderLinkContact, once per Init/ResetIslands cycle.
+/// `temp_allocator`'s `user` context must stay valid until the builder is
+/// destroyed or a later Prepare*/Finalize call supersedes it: Destroy frees
+/// through the most recent one if the host never calls ResetIslands.
 ZJOLT_API ZJoltResult zjoltIslandBuilderPrepareContactConstraints(
     ZJoltIslandBuilder *builder, uint32_t max_contacts,
     const ZJoltTempAllocator *temp_allocator);

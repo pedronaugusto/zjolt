@@ -379,7 +379,8 @@ const TwoTriangles = struct {
         var i: u32 = 0;
         while (i < count) : (i += 1) {
             if (i < self.soft_inv_mass.len) self.soft_inv_mass[i] = inv_mass[i];
-            // A pinned vertex cannot move, so there is nothing to report for it.
+            // A pinned vertex cannot move, so there is nothing to report for
+            // it.
             if (inv_mass[i] <= 0) {
                 out_penetration[i] = -std.math.floatMax(f32);
                 out_normal[i] = zjolt.vec3(0, 1, 0);

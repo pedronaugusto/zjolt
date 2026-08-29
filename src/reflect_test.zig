@@ -26,8 +26,8 @@ test "walking a settings type's attributes and base classes matches what the C++
 
     const rtti = try reflect.Rtti.find("EmptyShapeSettings");
 
-    // One direct base: JPH_ADD_BASE_CLASS(EmptyShapeSettings, ShapeSettings)
-    // in Shape.cpp/EmptyShape.cpp. ShapeSettings's own base, SerializableObject,
+    // One direct base: JPH_ADD_BASE_CLASS(EmptyShapeSettings, ShapeSettings) in
+    // Shape.cpp/EmptyShape.cpp. ShapeSettings's own base, SerializableObject,
     // is not flattened into this list — only EmptyShapeSettings's ATTRIBUTES
     // are.
     try std.testing.expectEqual(@as(u32, 1), rtti.baseClassCount());
@@ -305,7 +305,8 @@ test "isType is true only for the exact same registered type, unlike isKindOf" {
 
     try std.testing.expect(derived.isType(same_derived));
     try std.testing.expect(!derived.isType(base));
-    // The base relationship IS a kind-of, which is exactly what isType excludes.
+    // The base relationship IS a kind-of, which is exactly what isType
+    // excludes.
     try std.testing.expect(derived.isKindOf(base));
 }
 

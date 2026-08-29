@@ -180,11 +180,11 @@ pub const CollisionGroup = group_mod.CollisionGroup;
 pub const collision_group_invalid = group_mod.invalid;
 pub const max_sub_groups = group_mod.max_sub_groups;
 
-/// A host-supplied byte stream, for saving and restoring through a caller's
-/// own pack file, socket or compressor instead of the two-call buffer form
-/// `State`, `Shape` and `Scene` also offer. @see `hostStream` to build one
-/// from a Zig type, and `Scene.saveObjectStream` / `RagdollSettings.saveObjectStream`
-/// for the one format that is not this library's own.
+/// A host-supplied byte stream, for saving and restoring through a caller's own
+/// pack file, socket or compressor instead of the two-call buffer form `State`,
+/// `Shape` and `Scene` also offer. @see `hostStream` to build one from a Zig
+/// type, and `Scene.saveObjectStream` / `RagdollSettings.saveObjectStream` for
+/// the one format that is not this library's own.
 pub const Stream = stream_mod.Stream;
 pub const hostStream = stream_mod.hostStream;
 pub const ObjectStreamFormat = stream_mod.ObjectStreamFormat;

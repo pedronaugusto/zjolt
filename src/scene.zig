@@ -156,12 +156,12 @@ pub const Scene = struct {
         return index;
     }
 
-    /// Appends the joint `joint` describes, between bodies `body1`/
-    /// `body2` — indices into this scene, or `world_body_index`. Read,
-    /// not kept: release `constraint` and its bodies right after; the
-    /// live constraint changing later does not change the scene's copy.
-    /// `error.Unsupported` for a joint not between two bodies (a
-    /// vehicle constraint). `error.InvalidArgument` for equal ends or a body index this scene lacks (add bodies first — no forward references).
+    /// Appends the joint `joint` describes, between bodies `body1`/`body2`
+    /// (indices into this scene, or `world_body_index`). Read, not kept:
+    /// release `constraint` and its bodies right after — later changes to it do
+    /// not reach this scene's copy. `error.Unsupported` for a joint not between
+    /// two bodies (a vehicle constraint); `error.InvalidArgument` for equal
+    /// ends, or a body index this scene lacks (bodies must be added first).
     pub fn addConstraint(
         self: Scene,
         joint: constraint_mod.Constraint,
@@ -177,11 +177,11 @@ pub const Scene = struct {
     }
 
     /// Appends everything in `system` — every body, and every two-body
-    /// constraint between them — to what this scene already holds: the
-    /// other direction, a world built call by call, captured to be
-    /// saved. Jolt marks this a debugging aid; reads without stepping.
-    ///
-    /// `error.BodyNotFound` for a constraint attached to a body the system no longer holds; checked whole before appending, so a refusal leaves the scene as it was.
+    /// constraint between them — to what this scene already holds: the other
+    /// direction, a world built call by call, captured to be saved. Jolt marks
+    /// this a debugging aid; reads without stepping. `error.BodyNotFound` for a
+    /// constraint attached to a body the system no longer holds; checked whole
+    /// before appending, so a refusal leaves the scene as it was.
     pub fn captureFrom(self: Scene, system: system_mod.PhysicsSystem) err.Error!void {
         try err.check(c.zjoltSceneFromPhysicsSystem(self.handle, system.handle));
     }
@@ -205,11 +205,12 @@ pub const Scene = struct {
         return c.zjoltSceneGetNumConstraints(self.handle);
     }
 
-    /// The body at `index`. `error.InvalidArgument` past `bodyCount`.
-    /// `shape` is BORROWED from the scene — no reference taken; `addRef`
-    /// it yourself to outlive the scene entry. LOSSY for a scene loaded
-    /// from a file carrying Jolt's third mass mode (an outright inertia
-    /// tensor, `OverrideMassProperties` cannot spell): reports `.calculate_inertia` with the given mass — round-tripping through this call and `addBody` loses the real tensor.
+    /// The body at `index`. `error.InvalidArgument` past `bodyCount`. `shape`
+    /// is BORROWED from the scene, no reference taken — `addRef` it to outlive
+    /// this entry. LOSSY for a scene loaded from a file with Jolt's third mass
+    /// mode (an inertia tensor `OverrideMassProperties` cannot spell): reports
+    /// `.calculate_inertia` with the given mass, so round-tripping via this
+    /// call and `addBody` loses the real tensor.
     pub fn body(self: Scene, index: u32) err.Error!body_mod.BodyDesc {
         var raw: c.BodyDesc = undefined;
         try err.check(c.zjoltSceneGetBody(self.handle, index, &raw));
@@ -246,12 +247,12 @@ pub const Scene = struct {
         try err.check(c.zjoltSceneCreateBodies(self.handle, system.handle));
     }
 
-    /// Rescales any shape in the scene that cannot legally be used at
-    /// unit scale, replacing it in place — CHANGES the scene, so a
-    /// shape borrowed from an earlier `body` call may no longer be the
-    /// scene's. For a scaled shape baked into an asset (a scaled convex
-    /// hull, say) that Jolt refuses to build a body from — common in a
-    /// level loaded from a file. `error.ShapeInvalid` if some could not be fixed; the rest still were.
+    /// Rescales any shape in the scene that cannot legally be used at unit
+    /// scale, replacing it in place — CHANGES the scene, so a shape borrowed
+    /// from an earlier `body` call may no longer be the scene's. For a scaled
+    /// shape baked into an asset (a scaled convex hull, say) that Jolt refuses
+    /// to build a body from — common in a level loaded from a file.
+    /// `error.ShapeInvalid` if some could not be fixed; the rest still were.
     pub fn fixInvalidScales(self: Scene) err.Error!void {
         try err.check(c.zjoltSceneFixInvalidScales(self.handle));
     }
@@ -287,11 +288,11 @@ pub const Scene = struct {
     }
 
     /// Rebuilds a scene from `save` output; `release` it when done.
-    ///
-    /// `error.BadFormat` for anything the container refuses (wrong
-    /// buffer, different build/Jolt, truncated, bad checksum) or a
-    /// payload Jolt itself rejects (message in `lastError`). Shapes come
-    /// back newly built, NOT shared with what was saved — two scenes from one buffer hold two sets of shapes.
+    /// `error.BadFormat` for anything the container refuses (wrong buffer,
+    /// different build/Jolt, truncated, bad checksum) or a payload Jolt itself
+    /// rejects (message in `lastError`). Shapes come back newly built, NOT
+    /// shared with what was saved — two scenes from one buffer hold two sets of
+    /// shapes.
     pub fn restore(data: []const u8) err.Error!Scene {
         var handle: *c.Scene = undefined;
         try err.check(c.zjoltSceneRestore(data.ptr, data.len, &handle));
@@ -338,11 +339,12 @@ pub const Scene = struct {
         try err.check(c.zjoltSceneSaveObjectStream(self.handle, format, &stream));
     }
 
-    /// Reads a scene written by `saveObjectStream`, or by a C++ host of
-    /// vanilla Jolt — either form, sniffed the way Jolt's own reader does.
+    /// Reads a scene written by `saveObjectStream`, or by a C++ host of vanilla
+    /// Jolt — either form, sniffed the way Jolt's own reader does.
     ///
-    /// `error.BadFormat` when Jolt's own reader refuses the stream;
-    /// unlike `restore`, `lastError` carries no detail — the object stream reports only success or failure, not why.
+    /// `error.BadFormat` when Jolt's own reader refuses the stream; unlike
+    /// `restore`, `lastError` carries no detail — the object stream reports
+    /// only success or failure, not why.
     pub fn restoreObjectStream(stream: stream_mod.Stream) err.Error!Scene {
         var handle: *c.Scene = undefined;
         try err.check(c.zjoltSceneRestoreObjectStream(&stream, &handle));

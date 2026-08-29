@@ -351,11 +351,11 @@ ZJoltShapeColor ToCShapeColor(JPH::BodyManager::EShapeColor color) {
 }
 
 // These three take the raw integer, not the enum: every value they convert
-// arrives from a host, as a draw-entry parameter or a field read out of a
-// ZJoltDebugDrawBodiesSettings, and reading it as its enum type is a load of
+// arrives from a host, as a draw-entry parameter or a
+// ZJoltDebugDrawBodiesSettings field, and reading it as its enum type loads
 // a value this ABI never validated (see zjolt::RawEnum, zjolt_internal.h).
 // The last two are named apart rather than overloaded on ToJolt: once both
-// parameters are int32_t there is nothing left for overload resolution to tell them by.
+// parameters are int32_t, overload resolution has nothing left to tell them by.
 JPH::BodyManager::EShapeColor ToJoltShapeColor(int32_t color) {
   return static_cast<JPH::BodyManager::EShapeColor>(color);
 }

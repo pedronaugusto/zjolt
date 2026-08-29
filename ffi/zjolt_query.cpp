@@ -162,12 +162,12 @@ struct FillBuffer {
   void OnBody(const JPH::Body &) const {}
 };
 
-/// Hands the hit to the host and does what it says. The host's callback
-/// is a plain C function pointer and cannot throw across this boundary;
-/// a language whose errors would unwind carries them out in `user`
-/// instead. @see the note in zjolt_query.h.
+/// Hands the hit to the host and does what it says. The callback is a plain C
+/// function pointer and cannot throw across this boundary; a language whose
+/// errors unwind carries them out via `user`. @see the note in zjolt_query.h.
 ///
-/// `on_body`/`on_body_user`: the *EachWithBody twin's addition, null in every plain *Each (so OnBody is simply never called there).
+/// `on_body`/`on_body_user`: the *EachWithBody twin's addition, null in every
+/// plain *Each (so OnBody is simply never called there).
 template <class CHit, class Fn>
 struct ForwardToHost {
   Fn on_hit;
@@ -811,11 +811,11 @@ zjolt::ShapeFilterAdapter MakeShapeFilter(const ZJoltShapeFilter *filter) {
                                                      : ZJoltShapeFilter{});
 }
 
-/// The transform CollisionDispatch wants: single precision, centre of
-/// mass, relative to the caller's base offset. Two load-bearing
-/// conversions: the shape's own centre of mass is folded in (Jolt
-/// collides there, not in the given transform's space), and the base
-/// offset is subtracted before dropping to single precision, keeping the loss near the query, not the origin.
+/// The transform CollisionDispatch wants: single precision, centre of mass,
+/// relative to the caller's base offset. Two load-bearing conversions: the
+/// shape's own centre of mass is folded in (Jolt collides there, not in the
+/// given transform's space), and the base offset is subtracted before dropping
+/// to single precision, keeping the loss near the query, not the origin.
 JPH::Mat44 ToDispatchSpace(const JPH::Shape *shape, JPH::Vec3Arg shape_scale,
                            JPH::RMat44Arg world, JPH::RVec3Arg base_offset) {
   return world.PreTranslated(shape_scale * shape->GetCenterOfMass())
@@ -1595,9 +1595,9 @@ ZJoltResult zjoltCollideShapeVsShapeAll(
 /// Same argument handling as zjoltCollideShapeVsShapeAll, including the
 /// whole-shape dispatch check, but the traversal runs
 /// JPH::CollideShapeVsShapePerLeaf in place of sCollideShapeVsShape,
-/// instantiated with ClosestHitCollisionCollector<CollideShapeCollector>
-/// as the LeafCollector: the deepest hit per leaf pair, never an
-/// arbitrary one. @see zjolt_query.h for why this is the one Jolt offers exposed here.
+/// instantiated with ClosestHitCollisionCollector<CollideShapeCollector> as the
+/// LeafCollector: the deepest hit per leaf pair, never an arbitrary one. @see
+/// zjolt_query.h for why this is the one Jolt offers exposed here.
 ZJoltResult zjoltCollideShapeVsShapePerLeafAll(
     const ZJoltShape *shape1, const ZJoltVec3 *scale1,
     const ZJoltRVec3 *position1, const ZJoltQuat *rotation1,

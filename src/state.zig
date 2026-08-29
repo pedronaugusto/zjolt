@@ -24,11 +24,11 @@ const stream_mod = @import("stream.zig");
 /// the restore is then merely close to the one that was saved.
 pub const RecorderState = c.StateRecorderState;
 
-/// Selects which bodies, constraints and contacts a save writes, or
-/// which contacts a restore restores. `zjolt.StateFilter` directly, for
-/// building one by hand; @see `stateFilter` to build one from a Zig type.
-///
-/// A save with `should_save_body`/`should_save_constraint`/`should_save_contact` non-null is PARTIAL, carrying no body-set safety check on restore — @see `restore`.
+/// Selects which bodies, constraints and contacts a save writes, or which
+/// contacts a restore restores. `zjolt.StateFilter` directly, for building one
+/// by hand; @see `stateFilter` to build one from a Zig type. A save with
+/// `should_save_body`/`should_save_constraint`/`should_save_contact` non-null
+/// is PARTIAL, carrying no body-set safety check on restore — @see `restore`.
 pub const StateFilter = c.StateFilter;
 
 fn requireAnyDecl(comptime T: type, comptime names: []const []const u8) void {
@@ -48,12 +48,12 @@ fn requireAnyDecl(comptime T: type, comptime names: []const []const u8) void {
     }
 }
 
-/// Builds a `StateFilter` from `context` and whichever of
-/// `shouldSaveBody`, `shouldSaveConstraint`, `shouldSaveContact`,
-/// `shouldRestoreContact` `T` declares — an omitted one simply accepts
-/// everything for that question.
+/// Builds a `StateFilter` from `context` and whichever of `shouldSaveBody`,
+/// `shouldSaveConstraint`, `shouldSaveContact`, `shouldRestoreContact` `T`
+/// declares — an omitted one simply accepts everything for that question.
 ///
-/// `context` must outlive the save/restore call; must not call back into the physics system, and nothing may propagate out.
+/// `context` must outlive the save/restore call; must not call back into the
+/// physics system, and nothing may propagate out.
 pub fn stateFilter(comptime T: type, context: *T) StateFilter {
     requireAnyDecl(T, &.{
         "shouldSaveBody", "shouldSaveConstraint", "shouldSaveContact", "shouldRestoreContact",
@@ -94,11 +94,12 @@ pub const Divergence = struct {
     offset: usize,
 };
 
-/// What Jolt's `StateRecorder::SetValidating` buys a C++ host — "say
-/// exactly where a restore disagrees with what was saved" — reshaped
-/// for an ABI whose save/restore each build a fresh stream rather than
-/// keeping one recorder alive across both, which SetValidating itself
-/// needs. Save state twice (reference, then after replaying whatever should be deterministic) and compare the two buffers with this.
+/// What Jolt's `StateRecorder::SetValidating` buys a C++ host — "say exactly
+/// where a restore disagrees with what was saved" — reshaped for an ABI whose
+/// save/restore each build a fresh stream rather than keeping one recorder
+/// alive across both, which SetValidating itself needs. Save state twice
+/// (reference, then after replaying whatever should be deterministic) and
+/// compare the two buffers with this.
 pub fn compareState(state_a: []const u8, state_b: []const u8) err.Error!Divergence {
     var diverged: bool = false;
     var offset: usize = 0;
@@ -191,12 +192,12 @@ pub const State = struct {
         return try self.save(buffer, options);
     }
 
-    /// `save`, through `stream` instead of a resident buffer — for
-    /// streaming to a pack file, socket, or compressor rather than
-    /// sizing and holding the whole payload first. @see `zjolt.hostStream`.
-    ///
-    /// No payload length or checksum ahead of Jolt's payload (both need
-    /// the whole thing addressable) — but the magic tag, build identity, and body-set digest `restoreStream` checks still are. `error.IoError` if `stream` fails.
+    /// `save`, through `stream` instead of a resident buffer — for streaming to
+    /// a pack file, socket, or compressor rather than sizing and holding the
+    /// whole payload first. @see `zjolt.hostStream`. No payload length or
+    /// checksum ahead of Jolt's payload (both need the whole thing addressable)
+    /// — but the magic tag, build identity, and body-set digest `restoreStream`
+    /// checks still are. `error.IoError` if `stream` fails.
     pub fn saveStream(self: State, stream: stream_mod.Stream, options: SaveOptions) err.Error!void {
         try err.check(c.zjoltPhysicsSystemSaveStateStream(
             self.handle,
@@ -206,12 +207,12 @@ pub const State = struct {
         ));
     }
 
-    /// Puts a saved state back.
-    ///
-    /// `error.BadFormat` for five kinds of bad input: wrong buffer,
-    /// different build, truncated/trailing bytes, damaged in storage, or
-    /// a payload naming bodies the world no longer holds. The first four
-    /// leave the system untouched; the last does not (Jolt had already started reading) — skipped entirely for a save-side `StateFilter` (`SaveOptions.filter`).
+    /// Puts a saved state back. `error.BadFormat` for five kinds of bad input:
+    /// wrong buffer, different build, truncated/trailing bytes, damaged in
+    /// storage, or a payload naming bodies the world no longer holds. The first
+    /// four leave the system untouched; the last does not (Jolt had already
+    /// started reading) — skipped entirely for a save-side `StateFilter`
+    /// (`SaveOptions.filter`).
     pub fn restore(self: State, data: []const u8, options: RestoreOptions) err.Error!void {
         try err.check(c.zjoltPhysicsSystemRestoreState(
             self.handle,
@@ -222,11 +223,11 @@ pub const State = struct {
         ));
     }
 
-    /// Reads state written by `saveStream` back through `stream`
-    /// instead of a resident buffer. Same `options` and body-set safety
-    /// check as `restore`, but no length/checksum to validate first (a
-    /// stream cannot rewind to have written them) — a truncated or
-    /// corrupted stream is caught only as far as `error.IoError`/`error.BadFormat` reach.
+    /// Reads state written by `saveStream` back through `stream` instead of a
+    /// resident buffer. Same `options` and body-set safety check as `restore`,
+    /// but no length/checksum to validate first (a stream cannot rewind to have
+    /// written them) — a truncated or corrupted stream is caught only as far as
+    /// `error.IoError`/`error.BadFormat` reach.
     pub fn restoreStream(self: State, stream: stream_mod.Stream, options: RestoreOptions) err.Error!void {
         try err.check(c.zjoltPhysicsSystemRestoreStateStream(
             self.handle,
@@ -297,12 +298,12 @@ pub const State = struct {
         ));
     }
 
-    /// Puts one body's saved state back. `body` needs a write lock,
-    /// since restoring can move it between the active and sleeping lists.
+    /// Puts one body's saved state back. `body` needs a write lock, since
+    /// restoring can move it between the active and sleeping lists.
     ///
-    /// `error.BadFormat` also covers a state saved from a body of a
-    /// different motion type (a different byte count with motion
-    /// properties vs. without) — checked before Jolt reads any of it, not left to misread the rest.
+    /// `error.BadFormat` also covers a state saved from a body of a different
+    /// motion type (a different byte count with motion properties vs. without)
+    /// — checked before Jolt reads any of it, not left to misread the rest.
     pub fn restoreBodyState(self: State, body: body_mod.Body, data: []const u8) err.Error!void {
         try err.check(c.zjoltPhysicsSystemRestoreBodyStateLocked(
             self.handle,

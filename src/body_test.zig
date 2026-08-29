@@ -608,7 +608,8 @@ test "a NULL shape fails through ConvertShapeSettings, not a hand-rolled null ch
     // BuildCreationSettings resolves the C desc's shape by calling
     // BodyCreationSettings::ConvertShapeSettings rather than checking
     // `desc.shape == NULL` itself, and a NULL shape takes ConvertShapeSettings'
-    // own "no shape present" branch, same as a ShapeSettings that fails to build.
+    // own "no shape present" branch, same as a ShapeSettings that fails to
+    // build.
     var desc: c.body.BodyDesc = undefined;
     c.body.zjoltBodyDescInit(&desc);
     desc.object_layer = Layers.moving;

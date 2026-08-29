@@ -35,12 +35,12 @@ fn requireAnyDecl(comptime T: type, comptime names: []const []const u8) void {
     }
 }
 
-/// Builds a `Stream` from `context` and whichever of `read`, `write`,
-/// `isEof`, `isFailed` `T` declares — any it omits is simply never called.
+/// Builds a `Stream` from `context` and whichever of `read`, `write`, `isEof`,
+/// `isFailed` `T` declares — any it omits is simply never called.
 ///
-/// `context` must outlive the call it is used in. Nothing may propagate
-/// out of these — no `try`, no `error.Foo` — the same no-unwinding rule
-/// every callback here carries: stash a failure in `context` and read it back after the call returns.
+/// `context` must outlive the call. Nothing may propagate out of these — no
+/// `try`, no `error.Foo` — the no-unwinding rule every callback here carries:
+/// stash a failure in `context`, read it back after the call returns.
 pub fn hostStream(comptime T: type, context: *T) Stream {
     requireAnyDecl(T, &.{ "read", "write", "isEof", "isFailed" });
 

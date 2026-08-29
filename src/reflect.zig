@@ -1,17 +1,17 @@
-//! RTTI over Jolt's own registered types, ObjectStream for any of them, and
-//! the profiler.
+//! RTTI over Jolt's own registered types, ObjectStream for any of them, and the
+//! profiler.
 //!
-//! `Rtti.find`/`findByHash` look a registered type up the way
-//! `zjolt.factoryFind` does, but hand back a handle `baseClass`/`attribute`
-//! can walk rather than a snapshot. `createObject` builds an instance
-//! through Jolt's own factory function; a member crosses through a typed
-//! accessor — `readVec3`/`writeFloat` and the rest below — keyed by
-//! `ReflectAttribute.primitive_type`, never as a raw pointer.
-//! `saveObjectStream`/`restoreObjectStream` read/write the whole object,
-//! text or binary, over the same `Stream` seam `Scene.saveObjectStream` uses.
+//! `Rtti.find`/`findByHash` look up a type like `zjolt.factoryFind`, returning
+//! a walkable `baseClass`/`attribute` handle, not a snapshot. `createObject`
+//! builds an instance via Jolt's factory; a member crosses a typed accessor
+//! (`readVec3`/`writeFloat`, etc.), keyed by `ReflectAttribute.primitive_type`,
+//! never a raw pointer. `saveObjectStream`/`restoreObjectStream` read/write the
+//! whole object, text or binary, via `Scene.saveObjectStream`'s `Stream` seam.
 //!
-//! Every function needing `-Dobject_stream=true` or `-Dprofile=true` fails
-//! with `error.Unsupported` when not built with it; `zjolt.options.object_stream`/`zjolt.options.profile` say which, without failing a call first.
+//! Every function needing `-Dobject_stream=true` or `-Dprofile=true` fails with
+//! `error.Unsupported` when not built with it;
+//! `zjolt.options.object_stream`/`zjolt.options.profile` say which, without
+//! failing a call first.
 
 const std = @import("std");
 const c = @import("c/reflect.zig");
@@ -109,10 +109,10 @@ pub const Rtti = struct {
 
     /// Builds an instance through Jolt's own factory function.
     /// `error.InvalidArgument` if this type is abstract, or is not a
-    /// `JPH::SerializableObject` descendant. Release with `destroyObject`;
-    /// read or write a member through an `ReflectAttribute` from `attribute` and
-    /// `readVec3`/`writeFloat`/etc below; save or restore the whole object
-    /// with `saveObjectStream`/`restoreObjectStream`.
+    /// `JPH::SerializableObject` descendant. Release with `destroyObject`; read
+    /// or write a member through an `ReflectAttribute` from `attribute` and
+    /// `readVec3`/`writeFloat`/etc below; save or restore the whole object with
+    /// `saveObjectStream`/`restoreObjectStream`.
     pub fn createObject(self: Rtti) err.Error!*anyopaque {
         var out: *anyopaque = undefined;
         try err.check(c.zjoltReflectCreateObject(self.handle, &out));

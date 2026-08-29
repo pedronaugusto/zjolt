@@ -1,15 +1,17 @@
 //! A shape, placed in the world, queried on its own.
 //!
-//! `Queries` answers "what does this system's geometry look like from
-//! here", against a `PhysicsSystem`. This is the other half: a shape
-//! the caller already holds, a world transform for it, the same query
-//! kinds run against that alone — no broad phase to walk, since there
-//! is nothing to find but the one shape already named. Produced from a
-//! broad-phase hit carried past its body lock, or
-//! `Shape.subShapeTransformedShape` drilling into a compound's child.
+//! `Queries` answers "what does this system's geometry look like from here",
+//! against a `PhysicsSystem`. This is the other half: a shape the caller
+//! already holds, a world transform for it, the same query kinds run against
+//! that alone — no broad phase to walk, since nothing to find but the one shape
+//! already named. Produced from a broad-phase hit carried past its body lock,
+//! or `Shape.subShapeTransformedShape` drilling into a compound's child.
 //!
-//! `...Closest`/`count.../...All` only, no streaming `...Each`:
-//! deliberate — one shape's result set is leaf-bounded, not broad-phase-bounded, so streaming buys much less. Unlike a `Shape`, a plain owning handle, not reference-counted — `deinit` it; it counts towards `liveHandleCount` until you do.
+//! `...Closest`/`count.../...All` only, no streaming `...Each`: deliberate —
+//! one shape's result set is leaf-bounded, not broad-phase-bounded, so
+//! streaming buys much less. Unlike a `Shape`, a plain owning handle, not
+//! reference-counted — `deinit` it; it counts towards `liveHandleCount` until
+//! you do.
 
 const std = @import("std");
 const c = @import("c/transformed.zig");
@@ -138,11 +140,10 @@ pub const TransformedShape = struct {
     }
 
     /// The FACE normal at world-space `position` on the leaf named by
-    /// `sub_shape_id`. @see `Shape.surfaceNormal` for what this is — and
-    /// is not — a substitute for (a hit's contact normal is
-    /// `-penetration_axis` from the hit itself).
-    ///
-    /// `sub_shape_id` follows `material`'s rule: `sub_shape_id_empty` for a shape with no leaves.
+    /// `sub_shape_id`. @see `Shape.surfaceNormal` for what this is — and is not
+    /// — a substitute for (a hit's contact normal is `-penetration_axis` from
+    /// the hit itself). `sub_shape_id` follows `material`'s rule:
+    /// `sub_shape_id_empty` for a shape with no leaves.
     pub fn worldSpaceSurfaceNormal(
         self: TransformedShape,
         sub_shape_id: c.SubShapeId,
@@ -176,12 +177,12 @@ pub const TransformedShape = struct {
         return c.zjoltTransformedShapeGetSubShapeUserData(self.handle, sub_shape_id);
     }
 
-    /// The face of the leaf named by `sub_shape_id` that faces
-    /// `direction` most. `out_vertices` must hold
-    /// `max_supporting_face_vertices` entries; the returned slice views
-    /// it. Only convex shapes/triangles have one — others report an empty slice, Jolt's own answer, not a failure.
-    ///
-    /// `direction` is WORLD space here, unlike `Shape.supportingFace`. `base_offset` is subtracted from each vertex — zero for world-space, or a nearby point (this shape's position usually works) for precision far from the origin.
+    /// Leaf `sub_shape_id`'s face most facing `direction`. `out_vertices` must
+    /// hold `max_supporting_face_vertices` entries; the return slice views it.
+    /// Convex shapes/triangles alone have one; others get an empty slice, no
+    /// failure. `direction` is WORLD space, unlike `Shape.supportingFace`.
+    /// `base_offset` is subtracted per vertex: zero for world-space, or a
+    /// nearby point (often the shape's position) for precision far from origin.
     pub fn supportingFace(
         self: TransformedShape,
         sub_shape_id: c.SubShapeId,
@@ -208,12 +209,12 @@ pub const TransformedShape = struct {
     // `SubShapeId` always "comes from a hit", with no way to synthesize one for an arbitrary compound child. This is the other way in: hand Jolt a box, walk the tree to any depth, and report each LEAF overlapping it.
     //=========================================================================
 
-    /// Every leaf of this shape whose world-space bounds overlap `box`,
-    /// each a fresh, owned handle — `deinit` every one, free the slice
-    /// with `allocator`. A childless shape reports one handle, itself.
-    /// Each carries its own root path, baked in at collection time, so
-    /// a query against one of THEM resolves sub-shape ids/materials/
-    /// normals without reconstructing that path by hand. `filter` may be null; the body id it sees is always `invalid_body_id`.
+    /// Every leaf of this shape whose world-space bounds overlap `box`, each a
+    /// fresh, owned handle — `deinit` every one, free the slice with
+    /// `allocator`. A childless shape reports one handle: itself. Each carries
+    /// its own root path, baked in at collection, so querying one resolves
+    /// sub-shape ids/materials/normals without rebuilding it. `filter` may be
+    /// null; its body id is always `invalid_body_id`.
     pub fn collectTransformedShapes(
         self: TransformedShape,
         allocator: std.mem.Allocator,
@@ -577,21 +578,22 @@ pub const TransformedShape = struct {
     }
 };
 
-/// One `TransformedShape.triangleWalk` in progress. `shape` must
-/// outlive it, and it must not be moved or reused for a second walk once started.
+/// One `TransformedShape.triangleWalk` in progress. `shape` must outlive it,
+/// and it must not be moved or reused for a second walk once started.
 ///
-/// A separate type from `shape.zig`'s `TriangleWalk`, same protocol
-/// but a different scratch buffer — the two query surfaces are independent on the C side, sharing no assumed layout.
+/// A separate type from `shape.zig`'s `TriangleWalk`, same protocol but a
+/// different scratch buffer — the two query surfaces are independent on the C
+/// side, sharing no assumed layout.
 pub const TriangleWalk = struct {
     shape: TransformedShape,
     context: c.TransformedShapeTrianglesContext,
 
-    /// Continues the walk into `out_vertices` (three consecutive
-    /// vertices per triangle) and, if not null, `out_materials` (one
-    /// per triangle, borrowed from the wrapped shape). The request
-    /// comes from `out_vertices.len / 3`, which must be at least
-    /// `min_triangles_requested` (Jolt asserts on a smaller one). An
-    /// empty result means the walk is over, not "call again with a bigger buffer".
+    /// Continues the walk into `out_vertices` (three consecutive vertices per
+    /// triangle) and, if not null, `out_materials` (one per triangle, borrowed
+    /// from the wrapped shape). The request comes from `out_vertices.len / 3`,
+    /// which must be at least `min_triangles_requested` (Jolt asserts on a
+    /// smaller one). An empty result means the walk is over, not "call again
+    /// with a bigger buffer".
     pub fn next(
         self: *TriangleWalk,
         out_vertices: []math.Vec3,

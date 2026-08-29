@@ -629,11 +629,10 @@ ZJOLT_API ZJoltResult zjoltConstraintGetBodies(const ZJoltConstraint *constraint
                                                ZJoltBodyId *out_body2);
 
 /// The constraint's own frame: transform from constraint space into the
-/// body's CENTRE-OF-MASS space, not its origin. Compose with the body's
-/// centre-of-mass transform to reach world space.
-///
-/// A kind that does not constrain rotation returns an arbitrary rotation
-/// part; a gear or rack-and-pinion returns a zero translation column. Refused for a vehicle constraint.
+/// body's CENTRE-OF-MASS space, not its origin; compose with the body's
+/// centre-of-mass transform to reach world space. A rotation-unconstrained
+/// kind returns an arbitrary rotation part; a gear or rack-and-pinion
+/// returns a zero translation column. Refused for a vehicle constraint.
 ZJOLT_API ZJoltResult zjoltConstraintGetConstraintToBody1Matrix(
     const ZJoltConstraint *constraint, ZJoltMat44 *out);
 ZJOLT_API ZJoltResult zjoltConstraintGetConstraintToBody2Matrix(

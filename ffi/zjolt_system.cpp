@@ -61,10 +61,12 @@ static_assert(sizeof(JPH::BodyID) == sizeof(ZJoltBodyId) &&
                   alignof(JPH::BodyID) == alignof(ZJoltBodyId),
               "JPH::BodyID no longer matches ZJoltBodyId's layout");
 
-/// Copies as many of `in`'s SIMD Vec3s into caller-visible 12-byte
-/// vectors as fit in `out_capacity`, returning how many that was.
-///
-/// Unavoidable: Jolt's arrays here (ContactPoints, CollideShapeResult::Face) hold 16-byte Vec3s with a padding lane, ABI's ZJoltVec3 is three floats. On the stack, keeping a contact callback allocation-free — it runs on Jolt's job threads inside the step.
+/// Copies as many of `in`'s SIMD Vec3s into caller-visible 12-byte vectors
+/// as fit in `out_capacity`, returning how many that was. Unavoidable:
+/// Jolt's arrays (ContactPoints, CollideShapeResult::Face) hold 16-byte
+/// Vec3s with a padding lane, ABI's ZJoltVec3 is three floats. Done on the
+/// stack to keep contact callbacks allocation-free — they run on Jolt's job
+/// threads inside the step.
 template <typename Points>
 uint32_t CopyPoints(const Points &in, ZJoltVec3 *out, uint32_t out_capacity) {
   const uint32_t count = static_cast<uint32_t>(in.size()) < out_capacity
@@ -290,10 +292,10 @@ CombineSlot g_combine_slots[ZJOLT_COMBINE_SLOT_COUNT];
 
 /// Guards which slots are taken, and nothing else.
 ///
-/// Callback fields are read on Jolt's job threads during a step and
-/// written only by an install, which the ABI already forbids running
-/// concurrently with a step on the same system. This protects the
-/// process-wide table itself: two threads creating two unrelated systems could otherwise claim the same slot.
+/// Callback fields are read on Jolt's job threads during a step and written
+/// only by an install, which the ABI already forbids running concurrently with
+/// a step on the same system. This protects the process-wide table itself: two
+/// threads creating two unrelated systems could otherwise claim the same slot.
 JPH::Mutex g_combine_mutex;
 
 void FillCombineInfo(ZJoltCombineInfo *info, const JPH::Body &body1,
@@ -462,10 +464,10 @@ void ToJoltSettings(const ZJoltPhysicsSettings &in, JPH::PhysicsSettings &out) {
 
 /// The settings Jolt would divide by, loop on, or index with.
 ///
-/// None of these is asserted upstream, and each fails somewhere else: a
-/// zero batch size spins the step-listener job loop forever
-/// (`fetch_add(0)` never advances), a zero batches-per-job is an
-/// integer division, and a non-positive in-flight pair count is a buffer length passed to the temp allocator.
+/// None of these is asserted upstream, and each fails somewhere else: a zero
+/// batch size spins the step-listener job loop forever (`fetch_add(0)` never
+/// advances), a zero batches-per-job is an integer division, and a non-positive
+/// in-flight pair count is a buffer length passed to the temp allocator.
 const char *WhySettingsRefused(const ZJoltPhysicsSettings &settings) {
   if (settings.max_in_flight_body_pairs < 1)
     return "max_in_flight_body_pairs must be at least 1";
@@ -847,11 +849,12 @@ void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
   system->system.SetSimCollideBodyVsBody(&JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody);
   ClearSimCollideEntry(system);
 
-  // The temp allocator outlives the system's own teardown by a line —
-  // the other order would be a use-after-free the day PhysicsSystem's
-  // destructor starts wanting scratch space. Destroyed through the
-  // thunk recorded at create, since `temp_allocator` is only ever held
-  // as the JPH::TempAllocator base pointer here — zjolt::Delete needs the exact allocated type to free correctly (@see ZJoltJobSystem::destroy).
+  // The temp allocator outlives the system's own teardown by a line — the other
+  // order would be a use-after-free the day PhysicsSystem's destructor starts
+  // wanting scratch space. Destroyed through the thunk recorded at create,
+  // since `temp_allocator` is only ever held as the JPH::TempAllocator base
+  // pointer here — zjolt::Delete needs the exact allocated type to free
+  // correctly (@see ZJoltJobSystem::destroy).
   JPH::TempAllocator *temp = system->temp_allocator;
   void (*destroy_temp)(JPH::TempAllocator *) = system->destroy_temp_allocator;
   zjolt::Delete(system);

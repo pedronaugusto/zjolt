@@ -45,12 +45,12 @@ constexpr size_t kHeaderSize = kContainer.HeaderSize();
 constexpr size_t kStateMaskOffset = 0;
 constexpr size_t kBodyCountOffset = 4;
 constexpr size_t kBodyDigestOffset = 8;
-/// Whether this save was PARTIAL (a ZJoltStateFilter's save-side
-/// questions were consulted) — one byte of the eight reserved. A
-/// restore skips the body-set digest entirely when this is set, since
-/// the digest would otherwise compare the save's deliberately
-/// incomplete body set against the system's whole one and refuse a
-/// good partial restore. A save predating this field reads it as 0 (not partial), which is exactly what it was.
+/// Whether this save was PARTIAL (a ZJoltStateFilter's save-side questions were
+/// consulted) — one byte of the eight reserved. A restore skips the body-set
+/// digest entirely when this is set, since the digest would otherwise compare
+/// the save's deliberately incomplete body set against the system's whole one
+/// and refuse a good partial restore. A save predating this field reads it as 0
+/// (not partial), which is exactly what it was.
 constexpr size_t kIsPartialOffset = 12;
 
 /// Identifies WHICH bodies the world holds, not how many.
@@ -238,12 +238,12 @@ ZJoltResult zjoltPhysicsSystemRestoreState(ZJoltPhysicsSystem *system,
       zjolt::ReadContainer(kContainer, data, size, &contents);
   if (framed != ZJOLT_RESULT_OK) return framed;
 
-  // The check Jolt does not make: its restore looks up every saved body
-  // id and asserts when one is gone, aborting before the returned
-  // `false` can be read. Comparing the body set first turns that into a
-  // refusal, with the world still untouched (once Jolt starts reading,
-  // it is not). Skipped entirely for a PARTIAL save: its body count and
-  // digest describe a deliberately incomplete set (see ZJoltStateFilter), so comparing against the whole system would refuse a good chunked-restore part — getting disjoint parts wrong is the host's job here, as in Jolt's own SetIsLastPart.
+  // The check Jolt skips: its restore looks up every saved body id and
+  // asserts when one is missing, aborting before returning `false`.
+  // Comparing first turns that crash into a refusal, world untouched.
+  // Skipped for a PARTIAL save, whose body count/digest deliberately
+  // describe an incomplete set (ZJoltStateFilter) that would wrongly fail
+  // this check; disjoint parts are the host's job, as with SetIsLastPart.
   const uint32_t state = zjolt::ReadLE32(contents.extra + kStateMaskOffset);
   const bool is_partial = contents.extra[kIsPartialOffset] != 0;
   if (!is_partial && (state & ZJOLT_STATE_RECORDER_STATE_BODIES) != 0) {

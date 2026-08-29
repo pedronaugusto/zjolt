@@ -55,12 +55,12 @@ fn isExcluded(comptime name: []const u8) bool {
 // Building an argument nothing should accept
 //=============================================================================
 
-/// The most hostile value of type `T` that a C caller could actually
-/// pass: null for any pointer, including `*T` where Zig promises
-/// non-null — a C caller has no such promise, and this stands in for
-/// one. Runtime safety is off, since a checked non-optional-pointer
-/// cast would fire here on purpose; the zero is laundered through a
-/// mutable variable, since a comptime-known one is a compile error Zig won't allow, only a runtime one — exactly where a C caller lives.
+/// The most hostile value of type `T` a C caller could pass: null for any
+/// pointer, including `*T` where Zig promises non-null — a C caller makes no
+/// such promise, and this stands in for one. Runtime safety is off since a
+/// checked non-optional-pointer cast would fire here on purpose; the zero is
+/// laundered through a mutable variable, since a comptime-known one is a
+/// compile error, not a runtime one — exactly where a C caller lives.
 fn hostile(comptime T: type) T {
     @setRuntimeSafety(false);
     var zero: usize = 0;
@@ -144,10 +144,10 @@ fn sweepBeforeInit() !usize {
     return refused;
 }
 
-/// Every entry point that takes a pointer must survive being given
-/// null. Result-returning ones must additionally *say* so, not report
-/// success. Void-returning ones can only be observed not to crash — a
-/// hand-written `if (x == nullptr) return;`, and this is what notices when one is missing.
+/// Every entry point that takes a pointer must survive being given null.
+/// Result-returning ones must additionally *say* so, not report success.
+/// Void-returning ones can only be observed not to crash — a hand-written `if
+/// (x == nullptr) return;`, and this is what notices when one is missing.
 fn sweepNulls() !usize {
     @setEvalBranchQuota(1_000_000);
     var survived: usize = 0;
@@ -222,11 +222,11 @@ fn hasEnumField(comptime T: type) bool {
     return false;
 }
 
-/// The struct type backing storage must be built for, if `P` is a
-/// single-object pointer (or optional) to one with an enum field. Null
-/// otherwise: a struct with no enum (`hostile()`'s plain null already
-/// covers it), or a many-pointer like `[*]const T` (its length stays
-/// `hostile()`'s zero, so the array is never indexed regardless of what backs it).
+/// The struct type backing storage must be built for, if `P` is a single-object
+/// pointer (or optional) to one with an enum field. Null otherwise: a struct
+/// with no enum (`hostile()`'s plain null already covers it), or a many-pointer
+/// like `[*]const T` (its length stays `hostile()`'s zero, so the array is
+/// never indexed regardless of what backs it).
 fn structNeedingStorage(comptime P: type) ?type {
     return switch (@typeInfo(P)) {
         .pointer => |ptr| if (ptr.size == .one and hasEnumField(ptr.child)) ptr.child else null,
@@ -265,12 +265,12 @@ fn takesEnum(comptime Fn: type) bool {
     return false;
 }
 
-/// A live handle this sweep can hand an entry point instead of null,
-/// keyed by pointee TYPE, not by function — a new `*PhysicsSystem`
-/// parameter is covered automatically. Deliberately just the one
-/// handle: a live Character/Ragdoll/Constraint/VehicleConstraint needs
-/// a fixture this sweep does not build, so an entry point gated on one
-/// is not reached past that gate (same limit `sweepNulls` has). A system alone still reaches most of the surface.
+/// A live handle this sweep can hand an entry point instead of null, keyed by
+/// pointee TYPE, not by function — a new `*PhysicsSystem` parameter is covered
+/// automatically. Just the one handle, deliberately: a live
+/// Character/Ragdoll/Constraint/VehicleConstraint needs a fixture this sweep
+/// lacks, so an entry point gated on one goes unreached past that gate (same
+/// limit `sweepNulls` has). A system alone still reaches most of the surface.
 fn liveHandleFor(comptime P: type, system: *core.PhysicsSystem) ?P {
     if (@typeInfo(P) != .pointer) return null;
     const ptr = @typeInfo(P).pointer;
@@ -306,11 +306,11 @@ fn poisonedStorage(comptime Fn: type) StorageFor(Fn) {
 }
 
 /// `hostileArgs`, except: an enum parameter gets `outOfRange` instead of
-/// `hostile()`'s always-valid zero; a struct-with-enum pointer points at
-/// the matching `storage` field (a `poisoned()` instance) instead of
-/// null, so the callee's own null check does not block this; and
-/// `*PhysicsSystem` gets `system` instead of null. `storage` is a
-/// pointer since what `args` points into must outlive this call — see `StorageFor`.
+/// `hostile()`'s always-valid zero; a struct-with-enum pointer points at the
+/// matching `storage` field (a `poisoned()` instance) instead of null, so the
+/// callee's own null check does not block this; and `*PhysicsSystem` gets
+/// `system` instead of null. `storage` is a pointer since what `args` points
+/// into must outlive this call — see `StorageFor`.
 fn enumHostileArgs(
     comptime Fn: type,
     storage: *StorageFor(Fn),
@@ -331,12 +331,12 @@ fn enumHostileArgs(
     return args;
 }
 
-/// Every entry point that takes an enum by value, or a pointer to a
-/// struct with an enum field, must survive that enum being out of
-/// range. Unlike `sweepNulls`, does NOT require the result differ from
-/// `.ok`: a live system can legitimately succeed regardless of the
-/// enum's value (e.g. `zjoltBodyAddBatch` on an empty batch, correctly,
-/// since there is nothing for the garbage activation to apply to). A crash is the only failure this sweep can tell apart from correct behaviour.
+/// Every entry point taking an enum by value, or a pointer to a struct with an
+/// enum field, must survive that enum being out of range. Unlike `sweepNulls`,
+/// doesn't require the result differ from `.ok`: a live system can legitimately
+/// succeed regardless of the enum's value (e.g. `zjoltBodyAddBatch` on an empty
+/// batch, correctly — nothing there for the garbage activation to apply to). A
+/// crash is the only failure this sweep can tell apart from correct behaviour.
 fn sweepEnumOutOfRange(system: *core.PhysicsSystem) !usize {
     @setEvalBranchQuota(1_000_000);
     var probed: usize = 0;
@@ -408,12 +408,12 @@ test "every entry point survives null pointers" {
 test "every entry point refuses an out-of-range enum" {
     @setEvalBranchQuota(1_000_000);
 
-    // A live system rather than the raw zjoltInitWithConfig + zjoltPhysicsSystemCreate
-    // this file otherwise sticks to: a real broad-phase/object-layer setup is
-    // several structs of host callbacks, and World already builds one
-    // correctly — reusing it here is less to get wrong than re-deriving it,
-    // and this test's only interest in the system is a live, non-null handle
-    // to hand to `liveHandleFor`.
+    // A live system rather than the raw zjoltInitWithConfig +
+    // zjoltPhysicsSystemCreate this file otherwise sticks to: a real
+    // broad-phase/object-layer setup is several structs of host callbacks, and
+    // World already builds one correctly — reusing it here is less to get wrong
+    // than re-deriving it, and this test's only interest in the system is a
+    // live, non-null handle to hand to `liveHandleFor`.
     const zjolt = @import("zjolt.zig");
     const World = @import("integration_test.zig").World;
 
@@ -426,10 +426,10 @@ test "every entry point refuses an out-of-range enum" {
     const probed = try sweepEnumOutOfRange(world.system.handle);
 
     // A floor, not the count, same as the two sweeps above: most enum
-    // parameters here are reached (a system handle covers body/batch/
-    // soft-body creation, and every settings struct this sweep can
-    // poison directly needs no handle) — but constraints, characters,
-    // ragdolls and vehicles are gated on handles this sweep does not
-    // build. It is over 100 today; 100 leaves room without being so low a regression could hide under it.
+    // parameters here are reached (a system handle covers body/batch/ soft-body
+    // creation, and every settings struct this sweep can poison directly needs
+    // no handle) — but constraints, characters, ragdolls and vehicles are gated
+    // on handles this sweep does not build. It is over 100 today; 100 leaves
+    // room without being so low a regression could hide under it.
     try std.testing.expect(probed >= 100);
 }

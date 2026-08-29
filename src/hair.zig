@@ -1,16 +1,16 @@
 //! Hair: strand simulation, and the compute backend it runs on.
 //!
 //! Jolt's hair solver is compute shaders driven through an abstract
-//! `ComputeSystem`. zjolt compiles none of Jolt's three GPU backends
-//! (a physics package that cannot build without a graphics SDK is a
-//! graphics package), so there are two ways to get one: `initCpu()`
-//! (no SDK, no device, on by default) or a host-owned device via
-//! `ComputeBackend`/`ComputeSystem.init` — everything past that point
-//! is identical. Per frame, after stepping: `followBody`, `update`,
-//! `readBackRenderPositions`.
+//! `ComputeSystem`. zjolt compiles none of Jolt's three GPU backends (a physics
+//! package that cannot build without a graphics SDK is a graphics package), so
+//! there are two ways to get one: `initCpu()` (no SDK, no device, on by
+//! default) or a host-owned device via `ComputeBackend`/`ComputeSystem.init` —
+//! everything past that point is identical. Per frame, after stepping:
+//! `followBody`, `update`, `readBackRenderPositions`.
 //!
-//! Upstream calls the hair system "still in development" — no level of
-//! detail, wind, or collision against anything but convex hulls. That is Jolt's own assessment and it applies here unchanged.
+//! Upstream calls the hair system "still in development" — no level of detail,
+//! wind, or collision against anything but convex hulls. That is Jolt's own
+//! assessment and it applies here unchanged.
 
 const std = @import("std");
 const c = @import("c/hair.zig");
@@ -58,12 +58,12 @@ pub fn defaultMaterial() Material {
     return material;
 }
 
-/// What the solver will read out of `gradient` at `strand_fraction` of
-/// the way along a strand — 0 at the root, 1 at the tip. Outside the
-/// gradient's own fraction range the value is clamped, not
-/// extrapolated; `strand_fraction` may be anything finite.
+/// What the solver reads from `gradient` at `strand_fraction` along a strand
+/// (0 at the root, 1 at the tip). Outside the gradient's own range the value
+/// clamps, not extrapolates; `strand_fraction` may be any finite value.
 ///
-/// `min_fraction == max_fraction` is `error.InvalidArgument`: Jolt divides by that difference with no guard, so such a gradient has no value anywhere — `Hair.init` refuses one too.
+/// `min_fraction == max_fraction` is `error.InvalidArgument` — Jolt divides by
+/// that difference unguarded; `Hair.init` refuses one too.
 pub fn sampleGradient(gradient: Gradient, strand_fraction: f32) err.Error!f32 {
     var value: f32 = 0;
     try err.check(c.zjoltHairGradientSample(&gradient, strand_fraction, &value));
@@ -112,9 +112,10 @@ const Failure = struct {
 
 /// Wraps a host compute device as something Jolt can drive.
 ///
-/// `T` declares 14 required create/destroy/map/queue methods (see the `interface()` fields below for exactly which), plus optionally `createReadbackBuffer`/`destroy`, each with a documented fallback.
-///
-/// `name`/`data` are borrowed for the call. The value must not move once `interface()` is handed to `ComputeSystem.init` — the C side holds a pointer to it.
+/// `T` needs 14 create/destroy/map/queue methods (`interface()` lists which),
+/// plus optional `createReadbackBuffer`/`destroy` with a fallback.
+/// `name`/`data` are borrowed for the call; the value must not move once
+/// `interface()` reaches `ComputeSystem.init` — the C side keeps a pointer.
 pub fn ComputeBackend(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -154,10 +155,11 @@ pub fn ComputeBackend(comptime T: type) type {
             };
         }
 
-        /// Re-raises the first error a callback signalled since the
-        /// last call, and clears it. A callback that failed did not
-        /// stop Jolt — it returned, and Jolt carried on with whatever
-        /// the failure left behind. Call after `Hair.init` and `Hair.update`, the two calls that reach the backend.
+        /// Re-raises the first error a callback signalled since the last call,
+        /// and clears it. A callback that failed did not stop Jolt — it
+        /// returned, and Jolt carried on with whatever the failure left behind.
+        /// Call after `Hair.init` and `Hair.update`, the two calls that reach
+        /// the backend.
         pub fn check(self: *Self) anyerror!void {
             if (self.failure.take()) |e| return e;
         }
@@ -616,12 +618,12 @@ pub const Hair = struct {
         return count;
     }
 
-    /// Copies the simulated vertex positions, in the hair's LOCAL
-    /// space, into `out`. Simulated strands only (the subset chosen by
-    /// `simulation_strands_fraction`), in Jolt's own assigned order,
-    /// not the order they went in. For rendering, use `readBackRenderPositions`.
-    ///
-    /// `error.BufferTooSmall` if `out` is shorter than `positionCount()` (prefix still written). SLOW: copies the whole simulation state back from the device — Jolt's own docs call this debugging-only; stalls on a GPU backend.
+    /// Copies simulated vertex positions (hair LOCAL space) into `out`: the
+    /// `simulation_strands_fraction` subset, in Jolt's assigned order, not
+    /// insertion order. Use `readBackRenderPositions` for rendering.
+    /// `error.BufferTooSmall` if `out` is shorter than `positionCount()`
+    /// (prefix still written). SLOW: copies the whole simulation state from the
+    /// device — Jolt calls this debugging-only; stalls on a GPU backend.
     pub fn readBackPositions(self: Hair, out: []math.Vec3) err.Error!u32 {
         var count: u32 = 0;
         try err.check(c.zjoltHairReadBackPositions(
@@ -671,12 +673,12 @@ pub const Hair = struct {
         return count;
     }
 
-    /// Position, orientation, velocity and angular velocity of every
-    /// simulated vertex, in ONE device stall. `out` wants
-    /// `positionCount()` entries.
-    ///
-    /// Reach for this rather than `readBackPositions` plus anything
-    /// else: each readback stalls on the whole simulation state. `rotation` is the vertex's Bishop frame, orienting a strand's cross-section — positions alone give a polyline with no ribbon-facing.
+    /// Position, orientation, velocity and angular velocity of every simulated
+    /// vertex, in ONE device stall. `out` wants `positionCount()` entries.
+    /// Reach for this rather than `readBackPositions` plus anything else: each
+    /// readback stalls on the whole simulation state. `rotation` is the
+    /// vertex's Bishop frame, orienting a strand's cross-section — positions
+    /// alone give a polyline with no ribbon-facing.
     pub fn readBackVertexState(self: Hair, out: []VertexState) err.Error!u32 {
         var count: u32 = 0;
         try err.check(c.zjoltHairReadBackVertexState(
@@ -696,11 +698,11 @@ pub const Hair = struct {
     }
 
     /// Where each simulated strand starts and ends in what
-    /// `readBackPositions`/`readBackVertexState` return, and which
-    /// material it uses — without this those are a flat vertex run with
-    /// no boundaries, since Jolt keeps only a fraction of authored
-    /// strands, grouped by material. `readBackRenderPositions` needs no
-    /// such call (already in the caller's own indexing). Cheap: reads the groom, not the device.
+    /// `readBackPositions`/`readBackVertexState` return, and which material it
+    /// uses — without this those are a flat vertex run with no boundaries,
+    /// since Jolt keeps only a fraction of authored strands, grouped by
+    /// material. `readBackRenderPositions` needs no such call (already in the
+    /// caller's own indexing). Cheap: reads the groom, not the device.
     pub fn simulatedStrands(self: Hair, out: []Strand) err.Error!u32 {
         var count: u32 = 0;
         try err.check(c.zjoltHairGetSimulatedStrands(
@@ -712,11 +714,11 @@ pub const Hair = struct {
         return count;
     }
 
-    /// What `init` made of the groom — the counts, the grid, and the
-    /// bounds Jolt derived, not the ones that went in.
-    ///
-    /// `max_root_distance_to_scalp` is the one to check first on an
-    /// authoring-tool groom: Jolt projects every root onto the nearest scalp triangle instead of complaining, so a mismatched head silently attaches anyway.
+    /// What `init` made of the groom — the counts, the grid, and the bounds
+    /// Jolt derived, not the ones that went in. `max_root_distance_to_scalp` is
+    /// the one to check first on an authoring-tool groom: Jolt projects every
+    /// root onto the nearest scalp triangle instead of complaining, so a
+    /// mismatched head silently attaches anyway.
     pub fn info(self: Hair) err.Error!Info {
         var out: Info = undefined;
         try err.check(c.zjoltHairGetInfo(self.handle, &out));
@@ -828,11 +830,12 @@ pub const Hair = struct {
         return try self.saveGroom(buffer);
     }
 
-    /// Rebuilds a hair from `saveGroom` output, skipping the strand
-    /// split, root matching, and density grid — everything `init`
-    /// spends its time on. Only the compute buffers are allocated.
+    /// Rebuilds a hair from `saveGroom` output, skipping the strand split, root
+    /// matching, and density grid — everything `init` spends its time on. Only
+    /// the compute buffers are allocated.
     ///
-    /// `error.BadFormat`, creating nothing, for a blob from a different zjolt build, Jolt, or precision setting, or one truncated/damaged in storage.
+    /// `error.BadFormat`, creating nothing, for a blob from a different zjolt
+    /// build, Jolt, or precision setting, or one truncated/damaged in storage.
     pub fn initFromGroom(
         compute: ComputeSystem,
         data: []const u8,

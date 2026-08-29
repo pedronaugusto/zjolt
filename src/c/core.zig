@@ -1,15 +1,17 @@
-//! ZJolt C declarations for the primitives every other module here is built from: the scalar widths this build chose, results, vectors and matrices, the opaque handles, and library setup.
+//! ZJolt C declarations for the primitives every other module here is built
+//! from: the scalar widths this build chose, results, vectors and matrices, the
+//! opaque handles, and library setup.
 //!
 //! Mirrors `ffi/zjolt_core.h` exactly: a declaration belongs to the module
-//! named after the header that declares it, so there is nothing to decide
-//! and nothing to drift. `src/c.zig` lists every one of these and is what
-//! the ABI cross-check and the misuse sweep walk.
+//! named after the header that declares it, so there is nothing to decide and
+//! nothing to drift. `src/c.zig` lists every one of these and is what the ABI
+//! cross-check and the misuse sweep walk.
 //!
 //! `Vec3`, `Quat`, `RVec3`, `Mat44`, `RMat44`, `AABox` and `MassProperties`
-//! carry their own math API as methods, declared directly on these structs
-//! so the ABI type and the ergonomic one are the same type. Every method
-//! backed by `ffi/zjolt_math.h` documents that there; this file restates only
-//! what is Zig-specific.
+//! carry their own math API as methods, declared directly on these structs so
+//! the ABI type and the ergonomic one are the same type. Every method backed by
+//! `ffi/zjolt_math.h` documents that there; this file restates only what is
+//! Zig-specific.
 
 const std = @import("std");
 const options = @import("zjolt_options");
@@ -795,8 +797,9 @@ pub const Mat44 = extern struct {
     }
 
     /// `v` transformed by the TRANSPOSE of `m`'s upper 3x3 —
-    /// `Mat44::Multiply3x3Transposed`, Jolt's own `Transposed3x3().Multiply3x3(v)`
-    /// written directly in terms of the pieces already here.
+    /// `Mat44::Multiply3x3Transposed`, Jolt's own
+    /// `Transposed3x3().Multiply3x3(v)` written directly in terms of the pieces
+    /// already here.
     pub fn multiply3x3Transposed(m: Mat44, v: Vec3) Vec3 {
         return m.transposed3x3().transformDirection(v);
     }
@@ -993,10 +996,10 @@ pub const RMat44 = extern struct {
         return out;
     }
 
-    /// As `Mat44.column3`, over `RMat44`. `col` MUST be < 3: `DMat44::GetColumn3`
-    /// itself only reaches the rotation columns this way — reading the
-    /// translation column at `Real` precision is what `RMat44.transformPoint`'s
-    /// matrix already carries, not this accessor.
+    /// As `Mat44.column3`, over `RMat44`. `col` MUST be < 3:
+    /// `DMat44::GetColumn3` itself only reaches the rotation columns this way —
+    /// reading the translation column at `Real` precision is what
+    /// `RMat44.transformPoint`'s matrix already carries, not this accessor.
     pub fn column3(m: RMat44, col: usize) Vec3 {
         std.debug.assert(col < 3);
         const base = 4 * col;

@@ -394,7 +394,8 @@ pub const trig = struct {
     pub fn tan(radians: f32) f32 {
         return c_math.zjoltTan(radians);
     }
-    /// Range `[-pi/2, pi/2]`. `x` outside `[-1, 1]` is clamped first, never NaN.
+    /// Range `[-pi/2, pi/2]`. `x` outside `[-1, 1]` is clamped first, never
+    /// NaN.
     pub fn asin(x: f32) f32 {
         return c_math.zjoltASin(x);
     }

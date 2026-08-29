@@ -178,8 +178,8 @@ pub const Simplex = struct {
 // functions over vectors and bits, so they cross no ABI of their own.
 //=============================================================================
 
-/// True if the origin and `d` lie on opposite sides of the plane through
-/// (`a`, `b`, `vc`); `d` marks the plane's front side -- `OriginOutsideOfPlane`.
+/// True if the origin and `d` lie on opposite sides of the plane through (`a`,
+/// `b`, `vc`); `d` marks the plane's front side -- `OriginOutsideOfPlane`.
 pub fn originOutsideOfPlane(a: math.Vec3, b: math.Vec3, vc: math.Vec3, d: math.Vec3) bool {
     const n = vCross(vSub(b, a), vSub(vc, a));
     const signp = vDot(a, n);
@@ -628,7 +628,8 @@ pub const EPATriangle = struct {
 pub const EPAConvexHullBuilder = struct {
     handle: *c.EPAConvexHullBuilder,
 
-    /// `positions` is copied in; at most `c.epa_convex_hull_builder_max_points`.
+    /// `positions` is copied in; at most
+    /// `c.epa_convex_hull_builder_max_points`.
     pub fn init(positions: []const math.Vec3) err.Error!EPAConvexHullBuilder {
         var handle: *c.EPAConvexHullBuilder = undefined;
         try err.check(c.zjoltEPAConvexHullBuilderCreate(positions.ptr, @intCast(positions.len), &handle));
@@ -836,10 +837,10 @@ pub const ConvexHullBuilder2D = struct {
 
     /// Builds the hull edge loop starting from `idx1`/`idx2`/`idx3` (in any
     /// order, indices into the positions this builder was created with).
-    /// `max_vertices` of 0 means no limit. `buffer` receives the loop,
-    /// counter clockwise, as indices into the same positions --
-    /// `error.BufferTooSmall` if it does not fit (a loop never has more
-    /// edges than this builder has positions). `result` is `.success` or `.max_vertices_reached`.
+    /// `max_vertices` of 0 means no limit. `buffer` receives the loop, counter
+    /// clockwise, as indices into the same positions -- `error.BufferTooSmall`
+    /// if it does not fit (a loop never has more edges than this builder has
+    /// positions). `result` is `.success` or `.max_vertices_reached`.
     pub fn initialize(
         self: ConvexHullBuilder2D,
         idx1: u32,

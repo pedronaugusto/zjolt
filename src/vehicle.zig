@@ -394,7 +394,8 @@ pub const VehicleConstraint = struct {
     // Engine and transmission — runtime operations
     //=========================================================================
 
-    /// Applies `torque` (N m) to the engine's own rotation speed over `delta_time`.
+    /// Applies `torque` (N m) to the engine's own rotation speed over
+    /// `delta_time`.
     pub fn engineApplyTorque(self: VehicleConstraint, torque: f32, delta_time: f32) err.Error!void {
         try err.check(c.zjoltVehicleConstraintEngineApplyTorque(self.handle, torque, delta_time));
     }
@@ -432,7 +433,8 @@ pub const VehicleConstraint = struct {
         return out;
     }
 
-    /// Draws an RPM meter at `position`. `error.Unsupported` without `-Ddebug_renderer=true`.
+    /// Draws an RPM meter at `position`. `error.Unsupported` without
+    /// `-Ddebug_renderer=true`.
     pub fn engineDrawRPM(
         self: VehicleConstraint,
         renderer: debug_mod.Renderer,
@@ -446,7 +448,8 @@ pub const VehicleConstraint = struct {
         try err.check(c.zjoltVehicleConstraintEngineDrawRPM(self.handle, renderer.handle, &position, &forward, &up, size, shift_down_rpm, shift_up_rpm));
     }
 
-    /// Everything about the engine except the current RPM (already `engineRpm`).
+    /// Everything about the engine except the current RPM (already
+    /// `engineRpm`).
     pub fn getEngineDesc(self: VehicleConstraint) err.Error!EngineDesc {
         var out: EngineDesc = undefined;
         try err.check(c.zjoltVehicleConstraintGetEngineDesc(self.handle, &out));
@@ -520,10 +523,10 @@ pub const VehicleConstraint = struct {
     // Also valid against `.motorcycle` — see the module doc comment.
     //=========================================================================
 
-    /// @param forward [-1, 1] auto, [0, 1] manual: desired direction and throttle.
-    /// @param right [-1, 1]: desired steering angle, 1 = right.
-    /// @param brake [0, 1].
-    /// @param hand_brake [0, 1]; usually only the rear wheels honour it.
+    /// @param forward [-1, 1] auto, [0, 1] manual: desired direction and
+    /// throttle. @param right [-1, 1]: desired steering angle, 1 = right.
+    /// @param brake [0, 1]. @param hand_brake [0, 1]; usually only the rear
+    /// wheels honour it.
     pub fn setWheeledDriverInput(
         self: VehicleConstraint,
         forward: f32,
@@ -698,11 +701,12 @@ pub const VehicleConstraint = struct {
         return c.zjoltVehicleConstraintGetWheelLateralLambda(self.handle, wheel_index);
     }
 
-    /// The impulse (N s) this wheel's brakes are set up to push into the
-    /// floor this step — computed from brake/hand-brake input before the
-    /// velocity solve, not accumulated by it like the lambdas above.
-    /// Non-zero only once brake torque is enough to fully lock the
-    /// wheel; the solver may still cap it lower by tire grip. Wheeled/motorcycle only; 0 against a tracked constraint (its tracks brake instead).
+    /// The impulse (N s) this wheel's brakes are set up to push into the floor
+    /// this step — computed from brake/hand-brake input before the velocity
+    /// solve, not accumulated by it like the lambdas above. Non-zero only once
+    /// brake torque is enough to fully lock the wheel; the solver may still cap
+    /// it lower by tire grip. Wheeled/motorcycle only; 0 against a tracked
+    /// constraint (its tracks brake instead).
     pub fn wheelBrakeImpulse(self: VehicleConstraint, wheel_index: u32) f32 {
         return c.zjoltVehicleConstraintGetWheelBrakeImpulse(self.handle, wheel_index);
     }
@@ -888,12 +892,12 @@ pub const VehicleConstraint = struct {
         return out;
     }
 
-    /// Replaces the differential whole — read it with `differential`
-    /// first and change the field you mean. Takes effect next step; the
-    /// same ranges `init` enforces apply, or nothing is applied. NOT
-    /// checked: `engine_torque_ratio` must sum to 1 ACROSS every
-    /// differential — momentarily out of balance across two calls is
-    /// fine if not stepped in between; Jolt asserts the sum (or silently scales engine output oddly without asserts).
+    /// Replaces the differential whole — read via `differential` first, change
+    /// the field you mean. Takes effect next step; `init`'s ranges apply, or
+    /// nothing is applied. NOT checked: `engine_torque_ratio` must sum to 1
+    /// ACROSS every differential — briefly out of balance across two calls is
+    /// fine if unstepped between; Jolt asserts the sum (or silently scales
+    /// engine output oddly without asserts).
     pub fn setDifferential(
         self: VehicleConstraint,
         index: u32,
@@ -1032,12 +1036,12 @@ pub const VehicleConstraint = struct {
     // Wheel-ground collision filtering
     //=========================================================================
 
-    /// Narrows what the wheel casts are allowed to hit. Null clears
-    /// every filter; a null `should_collide` member leaves the tester's
-    /// own `object_layer` in charge at that level. UNLIKE Jolt: the
-    /// vehicle's own body is always rejected first, so a filter can
-    /// only narrow, never replace that built-in exclusion. Struct is
-    /// copied, `user` pointers are not (outlive the vehicle, or clear first) — called on a job thread inside `step`, every lock held (see `setPreStepCallback`).
+    /// Narrows what the wheel casts are allowed to hit. Null clears every
+    /// filter; a null `should_collide` leaves the tester's own `object_layer`
+    /// in charge there. UNLIKE Jolt: the vehicle's own body is always rejected
+    /// first; a filter narrows that, never replaces it. Struct is copied,
+    /// `user` pointers are not (outlive the vehicle, or clear first) — runs on
+    /// a `step` job thread, every lock held (see `setPreStepCallback`).
     pub fn setWheelFilters(self: VehicleConstraint, filters: ?WheelFilters) err.Error!void {
         if (filters) |f| {
             try err.check(c.zjoltVehicleConstraintSetWheelFilters(self.handle, &f));
@@ -1065,12 +1069,12 @@ pub const VehicleConstraint = struct {
         try err.check(c.zjoltVehicleConstraintSetCollisionTester(self.handle, &desc));
     }
 
-    /// A wheel-ground collision tester written against your own data (a
-    /// heightfield, a spline, a world snapshot) instead of the three
-    /// built-in shapes. Both callback fields run once per wheel inside
-    /// `step`, on a job thread, every lock held (see
-    /// `setPreStepCallback`); neither is handed a system — report a
-    /// body id and this side resolves it. Installing clears the built-in tester and vice versa; both fields of `callback` are required.
+    /// A wheel-ground collision tester written against your own data —
+    /// heightfield, spline, or world snapshot — not the three built-in shapes.
+    /// Both callback fields run once per wheel inside `step`, on a job thread,
+    /// every lock held (see `setPreStepCallback`); neither is handed a system:
+    /// report a body id and it resolves that. Installing clears the built-in
+    /// tester (and vice versa); both `callback` fields are required.
     pub fn setCollisionTesterCallback(
         self: VehicleConstraint,
         callback: CollisionTesterCallback,
@@ -1176,11 +1180,12 @@ pub const VehicleConstraint = struct {
         return out;
     }
 
-    /// Caps how much grip each tire may use this step. Jolt's default
-    /// (restored by null) is `friction * suspension_impulse` per
-    /// direction — an uncoupled friction circle letting a tire brake
-    /// and corner at full strength at once; replace it for a proper
-    /// elliptical circle, ABS, or traction control. A ceiling, not a demand: the applied impulse may be lower. Wheeled/motorcycle only.
+    /// Caps how much grip each tire may use this step. Jolt's default (restored
+    /// by null) is `friction * suspension_impulse` per direction — an uncoupled
+    /// friction circle letting a tire brake and corner at full strength at
+    /// once; replace it for a proper elliptical circle, ABS, or traction
+    /// control. A ceiling, not a demand: the applied impulse may be lower.
+    /// Wheeled/motorcycle only.
     pub fn setTireMaxImpulseCallback(
         self: VehicleConstraint,
         callback: ?TireMaxImpulseCallback,

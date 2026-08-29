@@ -67,10 +67,10 @@ ZJOLT_API bool zjoltReflectIsKindOf(const ZJoltRtti *rtti, const ZJoltRtti *base
 /// zjoltReflectObjectGetRtti can safely call a virtual through).
 ZJOLT_API ZJoltResult zjoltReflectCreateObject(const ZJoltRtti *rtti, void **out);
 
-/// Destroys an object zjoltReflectCreateObject or zjoltReflectObjectRestoreStream
-/// returned. Owned like any other *Destroy in this ABI, not reference
-/// counted, even when the underlying type also happens to be. Tolerates
-/// NULL either argument.
+/// Destroys an object zjoltReflectCreateObject or
+/// zjoltReflectObjectRestoreStream returned. Owned like any other *Destroy in
+/// this ABI, not reference counted, even when the underlying type also happens
+/// to be. Tolerates NULL either argument.
 ZJOLT_API void zjoltReflectDestroyObject(const ZJoltRtti *rtti, void *object);
 
 /// `object`'s own dynamic RTTI. `object` must be a JPH::SerializableObject
@@ -122,8 +122,9 @@ typedef enum ZJoltPrimitiveType {
   ZJOLT_PRIMITIVE_TYPE_OBJECT = 19,
 } ZJoltPrimitiveType;
 
-/// One serialized member: GetMemberPointer's offset plus GetMemberPrimitiveType's
-/// kind, so a typed accessor below can validate before it touches memory.
+/// One serialized member: GetMemberPointer's offset plus
+/// GetMemberPrimitiveType's kind, so a typed accessor below can validate before
+/// it touches memory.
 typedef struct ZJoltReflectAttribute {
   /// Borrowed; alive for the process.
   const char *name;
@@ -292,11 +293,11 @@ ZJOLT_API ZJoltResult zjoltProfilerNextFrame(void);
 /// of zjoltInit/zjoltDeinit either way.
 ZJOLT_API void zjoltProfilerShutdown(void);
 
-/// Writes the calling thread's recorded samples through `stream`: `tag`,
-/// then a count, then each sample's name, color and start/end tick. See the
-/// section comment for why this replaces Dump and DumpChart together.
-/// ZJOLT_RESULT_INVALID_ARGUMENT if the calling thread has no zjoltProfileThreadBegin
-/// in effect. `tag` may be NULL.
+/// Writes the calling thread's recorded samples through `stream`: `tag`, then a
+/// count, then each sample's name, color and start/end tick. See the section
+/// comment for why this replaces Dump and DumpChart together.
+/// ZJOLT_RESULT_INVALID_ARGUMENT if the calling thread has no
+/// zjoltProfileThreadBegin in effect. `tag` may be NULL.
 ZJOLT_API ZJoltResult zjoltProfilerDumpStream(const char *tag,
                                               const ZJoltStream *stream);
 

@@ -146,12 +146,12 @@ test "restoring into a world whose body set changed is refused, not half-applied
 // Why CONSTRAINTS is its own bit
 //=============================================================================
 
-/// A single-wheel vehicle constraint's own engine RPM is exactly the kind
-/// of state `ZJOLT_STATE_RECORDER_STATE_CONSTRAINTS` is for and `BODIES`
-/// is not: it belongs to the constraint, not to any body, so nothing about
-/// the wheel spinning up shows up in a body's position or velocity — a
-/// save that leaves CONSTRAINTS out has no way to carry it, and a restore
-/// from that save cannot put it back. The chassis uses `allow_sleeping = false` per `vehicle_test.zig`'s standing rule for any vehicle body, though not load-bearing here.
+/// A single-wheel vehicle's engine RPM is exactly the kind of state
+/// `ZJOLT_STATE_RECORDER_STATE_CONSTRAINTS` is for and `BODIES` is not: it
+/// belongs to the constraint, not any body, so wheel spin-up never shows in a
+/// body's position or velocity — a save omitting CONSTRAINTS can't carry it,
+/// nor can a restore put it back. The chassis uses `allow_sleeping = false` per
+/// `vehicle_test.zig`'s standing rule, though not load-bearing here.
 const VehicleConstraintRun = struct {
     const Result = struct {
         rpm_at_save: f32,

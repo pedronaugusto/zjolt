@@ -79,12 +79,12 @@ ZJOLT_API ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                             ZJoltActivation activation,
                                             ZJoltBodyId *out);
 
-/// As zjoltBodyCreate, but the body takes the id the caller names instead
-/// of the next one Jolt would assign — for deterministic lockstep
-/// networking. `id` must not be ZJOLT_BODY_ID_INVALID, must not already
-/// name a live body, and must not set bit 31 (reserved for the broad
-/// phase). An id round-tripped from zjoltBodyGetId or zjoltBodyCreate's
-/// own `out` always satisfies this; a violation is ZJOLT_RESULT_INVALID_ARGUMENT.
+/// As zjoltBodyCreate, but the body takes the id the caller names instead of
+/// the next one Jolt would assign — for deterministic lockstep networking. `id`
+/// must not be ZJOLT_BODY_ID_INVALID, must not already name a live body, and
+/// must not set bit 31 (reserved for the broad phase). An id round-tripped from
+/// zjoltBodyGetId or zjoltBodyCreate's own `out` always satisfies this; a
+/// violation is ZJOLT_RESULT_INVALID_ARGUMENT.
 ZJOLT_API ZJoltResult zjoltBodyCreateWithId(ZJoltPhysicsSystem *system,
                                             const ZJoltBodyDesc *desc,
                                             ZJoltBodyId id, ZJoltBodyId *out);
@@ -319,8 +319,9 @@ ZJOLT_API ZJoltResult zjoltBodyMultiplyWorldSpaceInverseInertiaByVector(
     ZJoltVec3 *out);
 
 /// As zjoltBodyGetLocalSpaceInverseInertia, but answers for a KINEMATIC body
-/// too instead of refusing — MotionProperties::GetLocalSpaceInverseInertiaUnchecked.
-/// Only a STATIC body (no motion properties) is ZJOLT_RESULT_INVALID_ARGUMENT.
+/// too instead of refusing —
+/// MotionProperties::GetLocalSpaceInverseInertiaUnchecked. Only a STATIC body
+/// (no motion properties) is ZJOLT_RESULT_INVALID_ARGUMENT.
 ZJOLT_API ZJoltResult zjoltBodyGetLocalSpaceInverseInertiaUnchecked(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out);
 

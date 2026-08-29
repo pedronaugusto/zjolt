@@ -1093,9 +1093,10 @@ const PointJoint = struct {
 
     fn solvePosition(user: ?*anyopaque, bodies: *constraint_mod.SolverBodyPair, delta_time: f32, baumgarte: f32) callconv(.c) bool {
         _ = delta_time;
-        // Recalculated every call, exactly as `PointConstraint::SolvePositionConstraint`
-        // does: bodies may have moved since `setupVelocity` ran, or since the
-        // previous position iteration this same step.
+        // Recalculated every call, exactly as
+        // `PointConstraint::SolvePositionConstraint` does: bodies may have
+        // moved since `setupVelocity` ran, or since the previous position
+        // iteration this same step.
         const self = selfOf(user);
         self.part.calculateConstraintProperties(&bodies.body1, self.point1_local, &bodies.body2, self.point2_local);
         return self.part.solvePositionConstraint(bodies, baumgarte);

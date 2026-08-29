@@ -37,7 +37,8 @@ test "Vec3.normalizedPerpendicular is unit length and perpendicular to its input
     try expectV3(vec3(0, 0, -1), a, 1e-6);
 
     const b = vec3(0, 5, 0).normalizedPerpendicular();
-    // xx (0) is not > yy (25), so the y-branch fires: (0, z, -y) = (0,0,-5), normalized.
+    // xx (0) is not > yy (25), so the y-branch fires: (0, z, -y) = (0,0,-5),
+    // normalized.
     try expectV3(vec3(0, 0, -1), b, 1e-6);
 
     const c = vec3(3, 4, 0).normalizedPerpendicular();
@@ -168,7 +169,8 @@ test "Mat44.multiply3x3 composes two 90-degree Z rotations into 180 degrees" {
     try expectV3(vec3(-1, 0, 0), composed.axisX(), 1e-6);
     try expectV3(vec3(0, -1, 0), composed.axisY(), 1e-6);
     try expectV3(vec3(0, 0, 1), composed.axisZ(), 1e-6);
-    // Translation columns are ignored by multiply3x3, and the result's is forced to identity.
+    // Translation columns are ignored by multiply3x3, and the result's is
+    // forced to identity.
     try expectV3(vec3(0, 0, 0), composed.column3(3), 1e-6);
 }
 
@@ -765,7 +767,8 @@ test "Matrix2.column/withColumn/inversed/solve succeed on well-posed input and f
     try std.testing.expectError(err.Error.InvalidArgument, Matrix2.zero().withColumn(2, .{ .x = 0, .y = 0 }));
 
     // diag(2,4)^-1 = diag(0.5,0.25) — a diagonal matrix, but 2x2 still runs
-    // through Matrix<2,2>'s own closed-form SetInversed, not GaussianElimination.
+    // through Matrix<2,2>'s own closed-form SetInversed, not
+    // GaussianElimination.
     const inv = try Matrix2.diagonal(.{ .x = 2, .y = 4 }).inversed();
     try expectM2(.{ 0.5, 0, 0, 0.25 }, inv, 1e-5);
 

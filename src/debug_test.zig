@@ -1,17 +1,17 @@
 //! Behavioural tests for debug-draw geometry: a body's shape produces real
-//! triangles bounded around where the body actually is, `clear` empties
-//! the buffers, a constraint draws its own geometry independent of any
-//! body's shape, and the honest refusal without `-Ddebug_renderer=true`.
+//! triangles bounded around where the body actually is, `clear` empties the
+//! buffers, a constraint draws its own geometry independent of any body's
+//! shape, and the honest refusal without `-Ddebug_renderer=true`.
 //!
 //! Every entry point is declared unconditionally but returns
 //! `error.Unsupported` without the flag, so the first test runs
 //! unconditionally; the rest skip (`SkipZigTest`) when it is off, like
 //! `hair.zig`'s CPU-compute test.
 //!
-//! Deliberately does NOT reuse `integration_test.zig`'s `World` fixture
-//! for the shape-bounds test: its 50x50 m floor would swallow the bounds
-//! under test. Later tests cover host-issued primitives round-tripping,
-//! BodyDrawFilter exclusion, a shrunk convex hull, and a recording played back bit-for-bit.
+//! Deliberately does NOT reuse `integration_test.zig`'s `World` fixture for the
+//! shape-bounds test: its 50x50 m floor would swallow the bounds under test.
+//! Later tests cover host-issued primitives round-tripping, BodyDrawFilter
+//! exclusion, a shrunk convex hull, and a recording played back bit-for-bit.
 
 const std = @import("std");
 const zjolt = @import("zjolt.zig");

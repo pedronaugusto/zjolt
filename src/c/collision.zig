@@ -1,9 +1,10 @@
-//! ZJolt C declarations for triangle collision, active-edge normals, and internal-edge removal.
+//! ZJolt C declarations for triangle collision, active-edge normals, and
+//! internal-edge removal.
 //!
-//! Mirrors `ffi/zjolt_collision.h` exactly: a declaration belongs to the
-//! module named after the header that declares it, so there is nothing to
-//! decide and nothing to drift. `src/c.zig` lists every one of these and is
-//! what the ABI cross-check and the misuse sweep walk.
+//! Mirrors `ffi/zjolt_collision.h` exactly: a declaration belongs to the module
+//! named after the header that declares it, so there is nothing to decide and
+//! nothing to drift. `src/c.zig` lists every one of these and is what the ABI
+//! cross-check and the misuse sweep walk.
 
 const core = @import("core.zig");
 const query = @import("query.zig");

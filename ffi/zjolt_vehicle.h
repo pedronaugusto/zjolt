@@ -115,8 +115,8 @@ typedef struct ZJoltVehicleWheelDesc {
   float suspension_min_length;
   float suspension_max_length;
   float suspension_preload_length;
-  /// Hz. Jolt's spring is built in FrequencyAndDamping mode; StiffnessAndDamping
-  /// is not reachable through this ABI.
+  /// Hz. Jolt's spring is built in FrequencyAndDamping mode;
+  /// StiffnessAndDamping is not reachable through this ABI.
   float suspension_spring_frequency;
   float suspension_spring_damping;
   float radius;
@@ -295,7 +295,8 @@ typedef struct ZJoltVehicleConstraintDesc {
   float track_max_brake_torque;
   float track_differential_ratio;
 
-  /// Motorcycle only (controller_kind == ZJOLT_VEHICLE_CONTROLLER_KIND_MOTORCYCLE).
+  /// Motorcycle only (controller_kind ==
+  /// ZJOLT_VEHICLE_CONTROLLER_KIND_MOTORCYCLE).
   ZJoltVehicleMotorcycleDesc motorcycle;
 
   ZJoltVehicleCollisionTesterDesc collision_tester;
@@ -464,8 +465,9 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineApplyDamping(
     ZJoltVehicleConstraint *constraint, float delta_time);
 /// Clamps the engine's current RPM between its min and max —
 /// VehicleEngine::ClampRPM. Every other engine entry point that changes RPM
-/// already does this; exposed for a host that pokes zjoltVehicleConstraintGetEngineDesc's
-/// min_rpm/max_rpm at runtime and wants the current RPM to respect the change immediately.
+/// already does this; exposed for a host that pokes
+/// zjoltVehicleConstraintGetEngineDesc's min_rpm/max_rpm at runtime and wants
+/// the current RPM to respect the change immediately.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineClampRPM(
     ZJoltVehicleConstraint *constraint);
 /// True when the engine is idle enough to allow the vehicle to sleep —
@@ -495,7 +497,8 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineDrawRPM(
 
 /// Everything about the engine EXCEPT the current RPM (already
 /// zjoltVehicleConstraintGetEngineRpm), read from the live VehicleEngine — a
-/// full round-trip of what zjoltVehicleConstraintCreate's ZJoltVehicleEngineDesc set.
+/// full round-trip of what zjoltVehicleConstraintCreate's
+/// ZJoltVehicleEngineDesc set.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintGetEngineDesc(
     const ZJoltVehicleConstraint *constraint, ZJoltVehicleEngineDesc *out);
 
@@ -662,11 +665,11 @@ ZJOLT_API float zjoltVehicleConstraintGetWheelLateralLambda(
     const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
 
 /// The impulse (N s) this wheel's brakes are set up to push into the floor
-/// this step (WheelWV::mBrakeImpulse) — computed from brake/hand-brake input
-/// in PostCollide, before the velocity solve, unlike the three lambdas above.
-/// Non-zero only once brake+hand-brake torque fully locks the wheel; what the
-/// solver actually applies may be lower (tire grip caps it — see
-/// ZJoltVehicleTireMaxImpulseCallback). 0 for tracked/NULL or an out-of-range wheel.
+/// this step (WheelWV::mBrakeImpulse) — computed from brake/hand-brake
+/// input in PostCollide, before the velocity solve, unlike the three
+/// lambdas above. Non-zero only once brake+hand-brake torque fully locks
+/// the wheel; the solver may apply less (tire grip caps it — see
+/// ZJoltVehicleTireMaxImpulseCallback). 0 for tracked/NULL or out-of-range.
 ZJOLT_API float zjoltVehicleConstraintGetWheelBrakeImpulse(
     const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
 
@@ -1056,10 +1059,10 @@ typedef struct ZJoltVehicleCollisionTesterCallback {
 
 /// Both fields are required — Jolt calls PredictContactProperties on any step
 /// it skips a full test (zjoltVehicleConstraintSetNumStepsBetweenCollision-
-/// TestActive/Inactive), so a NULL there leaves a wheel's contact stale
-/// rather than updating it. Filters set through
-/// zjoltVehicleConstraintSetWheelFilters are irrelevant here — they narrow
-/// the built-in testers' own query, which this one has none of — and are left as they were, not cleared.
+/// TestActive/Inactive), so a NULL there leaves a wheel's contact stale rather
+/// than updating it. Filters set through zjoltVehicleConstraintSetWheelFilters
+/// are irrelevant here — they narrow the built-in testers' own query, which
+/// this one has none of — and are left as they were, not cleared.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintSetCollisionTesterCallback(
     ZJoltVehicleConstraint *constraint,
     const ZJoltVehicleCollisionTesterCallback *callback);

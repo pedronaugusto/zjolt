@@ -545,14 +545,14 @@ ZJOLT_API ZJoltResult zjoltSoftBodyDrawVertices(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform);
 
-/// Draws a velocity line per vertex. `com_transform` may be NULL for the body’s own
-/// centre-of-mass transform.
+/// Draws a velocity line per vertex. `com_transform` may be NULL for the body’s
+/// own centre-of-mass transform.
 ZJOLT_API ZJoltResult zjoltSoftBodyDrawVertexVelocities(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform);
 
-/// Draws the bounds the solver predicted for this step. `com_transform` may be NULL for the body’s own
-/// centre-of-mass transform.
+/// Draws the bounds the solver predicted for this step. `com_transform` may be
+/// NULL for the body’s own centre-of-mass transform.
 ZJOLT_API ZJoltResult zjoltSoftBodyDrawPredictedBounds(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform);
@@ -571,22 +571,22 @@ ZJOLT_API ZJoltResult zjoltSoftBodyDrawRods(
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform,
     ZJoltSoftBodyConstraintColor color);
 
-/// Draws each rod’s orientation frame. `com_transform` may be NULL for the body’s own
-/// centre-of-mass transform.
+/// Draws each rod’s orientation frame. `com_transform` may be NULL for the
+/// body’s own centre-of-mass transform.
 ZJOLT_API ZJoltResult zjoltSoftBodyDrawRodStates(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform,
     ZJoltSoftBodyConstraintColor color);
 
-/// Draws the rod bend-twist constraints. `com_transform` may be NULL for the body’s own
-/// centre-of-mass transform.
+/// Draws the rod bend-twist constraints. `com_transform` may be NULL for the
+/// body’s own centre-of-mass transform.
 ZJOLT_API ZJoltResult zjoltSoftBodyDrawRodBendTwistConstraints(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform,
     ZJoltSoftBodyConstraintColor color);
 
-/// Draws the dihedral bend constraints. `com_transform` may be NULL for the body’s own
-/// centre-of-mass transform.
+/// Draws the dihedral bend constraints. `com_transform` may be NULL for the
+/// body’s own centre-of-mass transform.
 ZJOLT_API ZJoltResult zjoltSoftBodyDrawBendConstraints(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform,
@@ -606,8 +606,8 @@ ZJOLT_API ZJoltResult zjoltSoftBodyDrawSkinConstraints(
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform,
     ZJoltSoftBodyConstraintColor color);
 
-/// Draws the long-range-attachment constraints. `com_transform` may be NULL for the body’s own
-/// centre-of-mass transform.
+/// Draws the long-range-attachment constraints. `com_transform` may be NULL for
+/// the body’s own centre-of-mass transform.
 ZJOLT_API ZJoltResult zjoltSoftBodyDrawLRAConstraints(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltDebugRenderer *renderer, const ZJoltRMat44 *com_transform,

@@ -107,12 +107,12 @@ pub const JobSystem = struct {
         }
     };
 
-    /// Wraps a host's own task graph in a job system Jolt's step can run
-    /// on, instead of spawning threads of its own. `T` declares
-    /// `getMaxConcurrency`, `queueJob`, `queueJobs`. Every job handed to
-    /// either callback is alive for the DURATION of the call only —
-    /// `job.addRef()` before returning if it runs later or elsewhere,
-    /// `job.run()` there, `job.release()` once done. `context` must outlive the job system; no-unwinding applies as for a contact listener.
+    /// Wraps a host's task graph as a job system for Jolt's step, instead of
+    /// spawning its own threads. `T` declares `getMaxConcurrency`, `queueJob`,
+    /// `queueJobs`. Every job handed to either callback is alive for the
+    /// DURATION of the call only: `job.addRef()` before returning to defer it,
+    /// `job.run()` wherever, `job.release()` after. `context` must outlive the
+    /// job system; no-unwinding applies as for a contact listener.
     pub fn initHost(comptime T: type, context: *T, max_barriers: u32) err.Error!JobSystem {
         const Thunks = struct {
             fn selfOf(user: ?*anyopaque) *T {
@@ -286,12 +286,12 @@ pub fn contactValidateFace2(info: *const ContactValidateInfo) []const math.Vec3 
     return ptr[0..info.num_shape2_face_vertices];
 }
 
-/// The live body Jolt handed this callback in place of `body1`. Read
-/// real state (velocity, shape, motion type, layer) with `body.zig`'s
-/// `Body` accessors — the zjoltBody*Locked family underneath. No lock of
-/// your own is needed or allowed: taking one here would deadlock the
-/// job thread that already excludes it from that concern. Valid only
-/// for the callback's duration; takes `*const ContactValidateInfo` or `*const ContactInfo`.
+/// The live body Jolt handed this callback in place of `body1`. Read real state
+/// (velocity, shape, motion type, layer) with `body.zig`'s `Body` accessors —
+/// the zjoltBody*Locked family underneath. No lock of your own is needed or
+/// allowed: taking one here would deadlock the job thread that already excludes
+/// it from that concern. Valid only for the callback's duration; takes `*const
+/// ContactValidateInfo` or `*const ContactInfo`.
 pub fn contactBody1(info: anytype) body_mod.Body {
     return .{ .handle = @constCast(info.live_body1.?) };
 }
@@ -337,8 +337,8 @@ pub fn contactListener(comptime T: type, context: *T) c.ContactListener {
 }
 
 /// Builds an activation listener from `context` and whichever of
-/// `onBodyActivated(self, BodyId, u64)` / `onBodyDeactivated(self, BodyId, u64)`
-/// `T` declares.
+/// `onBodyActivated(self, BodyId, u64)` / `onBodyDeactivated(self, BodyId,
+/// u64)` `T` declares.
 pub fn bodyActivationListener(comptime T: type, context: *T) c.BodyActivationListener {
     requireAnyDecl(T, &.{ "onBodyActivated", "onBodyDeactivated" });
 
@@ -397,12 +397,12 @@ fn returnsError(comptime Fn: type) bool {
 pub const StepListenerContext = c.StepListenerContext;
 pub const CombineInfo = c.CombineInfo;
 
-/// A host callback run once per collision step, before that step's
-/// collision detection — for forces applied inside the sub-step loop
-/// (buoyancy, thrusters, wind), so each of several sub-steps gets one.
-/// `T` declares `onStep(*T, *const StepListenerContext)` (or `!void`).
-/// Every body/constraint mutex is held: READ/WRITE bodies, but no
-/// add/remove or calling back in. Not called with no active bodies or a zero dt. MUST NOT MOVE once attached.
+/// A host callback run once per collision step, before that step's collision
+/// detection — for forces applied inside the sub-step loop (buoyancy,
+/// thrusters, wind), so each of several sub-steps gets one. `T` declares
+/// `onStep(*T, *const StepListenerContext)` (or `!void`). Every body/constraint
+/// mutex is held: READ/WRITE bodies, but no add/remove or calling back in. Not
+/// called with no active bodies or a zero dt. MUST NOT MOVE once attached.
 pub fn StepListener(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -454,12 +454,12 @@ pub fn StepListener(comptime T: type) type {
     };
 }
 
-/// A host answer to "what friction, or restitution, does this contact
-/// gets". Jolt's defaults are `sqrt(f1 * f2)` and `max(r1, r2)`; a host
-/// with a material table usually wants its own. `T` declares
-/// `combine(*T, *const CombineInfo) f32` (or `!f32`), run on Jolt's job
-/// threads DURING a step: re-entrant, no calls back into the system. An
-/// error yields 0 for that contact and surfaces from `check`. MUST NOT MOVE once attached.
+/// A host answer to "what friction, or restitution, does this contact gets".
+/// Jolt's defaults are `sqrt(f1 * f2)` and `max(r1, r2)`; a host with a
+/// material table usually wants its own. `T` declares `combine(*T, *const
+/// CombineInfo) f32` (or `!f32`), run on Jolt's job threads DURING a step:
+/// re-entrant, no calls back into the system. An error yields 0 for that
+/// contact and surfaces from `check`. MUST NOT MOVE once attached.
 pub fn CombineCallback(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -514,11 +514,10 @@ pub const TempAllocator = c.TempAllocator;
 pub const TempAllocatorStats = c.TempAllocatorStats;
 
 /// Builds a `TempAllocator` table from `context` and `T`, which declares
-/// `allocate`/`free`, and optionally `canAllocate`, `getSize`, `getUsage`
-/// — each omitted one answers as documented on `ZJoltTempAllocator` in
-/// `ffi/zjolt_system.h`.
-///
-/// Runs on Jolt's job threads during a step; nothing may propagate out of `allocate`/`free`.
+/// `allocate`/`free`, and optionally `canAllocate`, `getSize`, `getUsage` —
+/// each omitted one answers as documented on `ZJoltTempAllocator` in
+/// `ffi/zjolt_system.h`. Runs on Jolt's job threads during a step; nothing may
+/// propagate out of `allocate`/`free`.
 pub fn hostTempAllocator(comptime T: type, context: *T) TempAllocator {
     const Thunks = struct {
         fn selfOf(user: ?*anyopaque) *T {
@@ -560,12 +559,12 @@ pub fn hostTempAllocator(comptime T: type, context: *T) TempAllocator {
 
 pub const SimShapeFilter = c.SimShapeFilter;
 
-/// Builds a `SimShapeFilter` from `context` and `T`, which declares:
-/// `pub fn shouldCollide(self: *T, body1: BodyId, shape1: ?*const c.Shape, sub1: SubShapeId, body2: BodyId, shape2: ?*const c.Shape, sub2: SubShapeId) bool`.
-///
-/// `sub1`/`sub2` lead from the whole body's own shape down to `shape1`/
-/// `shape2`; each is `zjolt.sub_shape_id_empty` for a body whose shape is not
-/// compound. Must not call back into the system; nothing may propagate out.
+/// Builds a `SimShapeFilter` from `context` and `T`, which declares: `pub fn
+/// shouldCollide(self: *T, body1: BodyId, shape1: ?*const c.Shape, sub1:
+/// SubShapeId, body2: BodyId, shape2: ?*const c.Shape, sub2: SubShapeId) bool`.
+/// `sub1`/`sub2` lead from the whole body's shape to `shape1`/`shape2`; each is
+/// `zjolt.sub_shape_id_empty` when that shape isn't compound. Must not call
+/// back into the system; nothing may propagate out.
 pub fn simShapeFilter(comptime T: type, context: *T) SimShapeFilter {
     const Thunks = struct {
         fn shouldCollide(
@@ -902,10 +901,10 @@ pub const PhysicsSystem = struct {
 
     /// Applies every field at once, from the next step onwards.
     ///
-    /// `error.InvalidArgument` for a non-positive batch size, batches per
-    /// job or in-flight pair count, or a zero velocity iteration count —
-    /// Jolt only asserts these, and a zero stride/divisor otherwise fails
-    /// several frames later, as a step that never finishes or a division by zero.
+    /// `error.InvalidArgument` for a non-positive batch size, batches per job
+    /// or in-flight pair count, or a zero velocity iteration count — Jolt only
+    /// asserts these, and a zero stride/divisor otherwise fails several frames
+    /// later, as a step that never finishes or a division by zero.
     pub fn setSettings(self: PhysicsSystem, settings: PhysicsSettings) err.Error!void {
         try err.check(c.zjoltPhysicsSystemSetSettings(self.handle, &settings));
     }
@@ -1032,11 +1031,10 @@ pub const PhysicsSystem = struct {
     }
 
     /// A live, zero-copy view of the same set `getActiveBodies` copies —
-    /// PhysicsSystem::GetActiveBodiesUnsafe, for a caller unwilling to
-    /// pay that copy every frame.
-    ///
-    /// Not thread safe, and invalidated by the next call that adds,
-    /// removes, activates or deactivates a body — read what you need before doing anything else.
+    /// PhysicsSystem::GetActiveBodiesUnsafe, for a caller unwilling to pay that
+    /// copy every frame. Not thread safe, and invalidated by the next call that
+    /// adds, removes, activates or deactivates a body — read what you need
+    /// before doing anything else.
     pub fn getActiveBodiesUnsafe(self: PhysicsSystem) []const body_mod.BodyId {
         var ids: ?[*]const body_mod.BodyId = null;
         var count: u32 = 0;
@@ -1050,11 +1048,11 @@ pub const PhysicsSystem = struct {
     //-------------------------------------------------------------------------
 
     /// Advances the simulation, returning the `UpdateError` mask.
-    /// `collision_steps` splits the interval into sub-steps; 1 is normal
-    /// — raise it for fast bodies rather than shortening the frame.
-    ///
-    /// A non-empty mask means contacts were dropped, not that the step
-    /// failed. With asserts enabled, Jolt breaks into the debugger before returning a non-empty one — see UPSTREAM.md.
+    /// `collision_steps` splits the interval into sub-steps; 1 is normal —
+    /// raise it for fast bodies rather than shortening the frame. A non-empty
+    /// mask means contacts were dropped, not that the step failed. With asserts
+    /// enabled, Jolt breaks into the debugger before returning a non-empty one
+    /// — see UPSTREAM.md.
     pub fn step(
         self: PhysicsSystem,
         delta_time: f32,

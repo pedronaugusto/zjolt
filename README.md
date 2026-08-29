@@ -664,6 +664,17 @@ Issues and pull requests are welcome. Two things to know before opening one:
   it in [UPSTREAM.md](UPSTREAM.md).
 - **Run `ci/run.sh` before pushing** — or `ci/install-hooks.sh` once, and it
   runs itself. Run `ci/run.sh --full` for anything structural.
+- **Comments state a contract, not a narrative.** `ci/check-comments.sh`
+  enforces two things and will fail a pull request over either. A block above
+  one declaration is at most six lines; a file header, or a block under a
+  `//===---===//` banner, at most fourteen. And the register is documentation,
+  not conversation — no "we", "our", "note that", "which is why", "turns out",
+  "you might expect".
+
+  The cap never justifies dropping a fact. Units, ownership, lifetime,
+  nullability, error conditions and ordering constraints come first; if a block
+  cannot hold them in six lines, shorten the prose around them, and do not
+  lengthen a line past 80 columns to buy room.
 
 New source files are added to the explicit lists in `build.zig` deliberately;
 there are no globs, so nothing starts compiling by accident.

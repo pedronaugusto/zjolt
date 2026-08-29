@@ -619,11 +619,12 @@ pub const Queries = struct {
         points_on_2: []const math.Vec3,
     };
 
-    /// Predicts the impulses and post-collision velocities of a contact
-    /// WITHOUT running a step — sizes an impact response (sound, debris)
-    /// from inside a contact callback. `body1`/`body2` must already be
-    /// safely readable without a lock — true inside a `ContactListener`
-    /// callback; unsafe elsewhere is on the caller. `error.InvalidArgument`/`error.BodyNotFound` for bad slices/a dead id.
+    /// Predicts the impulses and post-collision velocities of a contact WITHOUT
+    /// running a step — sizes an impact response (sound, debris) from inside a
+    /// contact callback. `body1`/`body2` must already be safely readable
+    /// without a lock — true inside a `ContactListener` callback; unsafe
+    /// elsewhere is on the caller. `error.InvalidArgument`/`error.BodyNotFound`
+    /// for bad slices/a dead id.
     pub fn estimateCollisionResponse(
         self: Queries,
         body1: body_mod.BodyId,
@@ -1330,10 +1331,10 @@ pub const ShapeCastPair = struct {
 
 /// The deepest overlap between the two shapes, or null.
 ///
-/// `error.Unsupported` when Jolt has no collision function for the pair
-/// (two surfaces — mesh, height field, plane, soft body — have no inside
-/// to separate; `lastError` names both sub-types). Looks THROUGH a
-/// compound or decorated shape, same as Jolt: one side must be convex all the way down.
+/// `error.Unsupported` when Jolt has no collision function for the pair (two
+/// surfaces — mesh, height field, plane, soft body — have no inside to
+/// separate; `lastError` names both sub-types). Looks THROUGH a compound or
+/// decorated shape, same as Jolt: one side must be convex all the way down.
 pub fn collideShapeVsShapeClosest(
     pair: ShapePair,
     settings: ?CollideShapeSettings,
@@ -1540,11 +1541,11 @@ pub fn castShapeVsShapeAll(
 //=============================================================================
 
 /// Reduces two matched contact-point arrays (up to `contact_points_capacity`
-/// points) down to 4 or fewer, in place, choosing the four that best
-/// preserve the manifold's torque. `points_on_1`/`points_on_2` must be
-/// the same length; the returned slices alias the same (caller-owned)
-/// memory, narrowed to what survived. `error.InvalidArgument` for
-/// 4-or-fewer or more-than-capacity arrays, or a non-unit-vector-able `penetration_axis`.
+/// points) down to 4 or fewer, in place, choosing the four that best preserve
+/// the manifold's torque. `points_on_1`/`points_on_2` must be the same length;
+/// the returned slices alias the same (caller-owned) memory, narrowed to what
+/// survived. `error.InvalidArgument` for 4-or-fewer or more-than-capacity
+/// arrays, or a non-unit-vector-able `penetration_axis`.
 pub fn pruneContactPoints(
     penetration_axis: math.Vec3,
     points_on_1: []math.Vec3,

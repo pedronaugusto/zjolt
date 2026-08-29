@@ -1,17 +1,17 @@
-//! Comptime cross-check: the hand-written externs in `c.zig` against the
-//! real C header — `@cImport`-ed in a test only (the shipped module stays
-//! translate-c-free), compared declaration by declaration by reflection.
-//! No hand-written list of what to check: an unclassified declaration is
-//! a compile error, not a silent pass.
+//! Comptime cross-check: c.zig's hand-written externs against the C header,
+//! `@cImport`'d only in a test (the shipped module stays translate-c-free),
+//! compared per-declaration via reflection. No checklist: an unclassified
+//! declaration errors at compile time, not silently.
 //!
 //! Naming conventions are load-bearing: type `Foo` pairs with `ZJoltFoo`,
-//! function `zjoltFoo` with itself, constant `foo_bar` with
-//! `ZJOLT_FOO_BAR`, enum `Foo`'s field `bar` with `ZJOLT_FOO_BAR`.
+//! function `zjoltFoo` with itself, constant `foo_bar` with `ZJOLT_FOO_BAR`,
+//! enum `Foo`'s field `bar` with `ZJOLT_FOO_BAR`.
 //!
-//! Does NOT catch: pointee type mismatches (translate-c renders every C
-//! pointer as `[*c]T`, so pointees compare by size/alignment only — see
-//! `tests/c_smoke.c`), or drift from a header built with different
-//! macros (both get `applyBuildMacros`; `zjoltInit` also checks `ZJOLT_CONFIG_ID` at runtime).
+//! Does NOT catch: pointee type mismatches (translate-c renders every C pointer
+//! as `[*c]T`, so pointees compare by size/alignment only — see
+//! `tests/c_smoke.c`), or drift from a header built with different macros (both
+//! get `applyBuildMacros`; `zjoltInit` also checks `ZJOLT_CONFIG_ID` at
+//! runtime).
 
 const std = @import("std");
 const c = @import("c.zig");
@@ -115,11 +115,12 @@ fn scalarIdentity(comptime T: type) type {
     };
 }
 
-/// Size and alignment, plus the part of a scalar's identity they do
-/// not carry: a `uint32_t` declared `i32`, or a `float` declared `u32`,
-/// passes size/alignment and then silently reinterprets every value —
-/// comparing signedness and int-vs-float closes that. Applied wherever
-/// a type crosses (struct fields, parameters, returns), not just top-level typedefs, since that is not where the mistake gets made.
+/// Size and alignment, plus the part of a scalar's identity they do not carry:
+/// a `uint32_t` declared `i32`, or a `float` declared `u32`, passes
+/// size/alignment and then silently reinterprets every value — comparing
+/// signedness and int-vs-float closes that. Applied wherever a type crosses
+/// (struct fields, parameters, returns), not just top-level typedefs, since
+/// that is not where the mistake gets made.
 fn sameScalar(
     comptime what: []const u8,
     comptime Ours: type,
@@ -185,9 +186,10 @@ fn checkFnType(
 }
 
 /// Struct layout, compared field by NAME rather than by position — the
-/// distinction that makes the check worth having. Two same-sized
-/// adjacent fields swapping places leaves the *sequence* of offsets
-/// identical, so a positional comparison passes a swap that silently reinterprets both fields; pairing each name with its own offset catches it.
+/// distinction that makes the check worth having. Two same-sized adjacent
+/// fields swapping places leaves the *sequence* of offsets identical, so a
+/// positional comparison passes a swap that silently reinterprets both fields;
+/// pairing each name with its own offset catches it.
 fn checkStructLayout(
     comptime what: []const u8,
     comptime Ours: type,
@@ -309,11 +311,12 @@ fn sweepOurs() Counts {
     comptime {
         var n = Counts{};
 
-        // One pass per module in `c.zig`'s list. A name in more than one
-        // module is a re-export (every module re-exports the shared
-        // primitives it takes, so callers see one namespace) and is
-        // checked once, against the declaring module. The identity
-        // assertion keeps that safe: a re-export that stops being the same declaration refuses the build rather than trusting the copy.
+        // One pass per module in `c.zig`'s list. A name in more than one module
+        // is a re-export (every module re-exports the shared primitives it
+        // takes, so callers see one namespace) and is checked once, against the
+        // declaring module. The identity assertion keeps that safe: a re-export
+        // that stops being the same declaration refuses the build rather than
+        // trusting the copy.
         for (c.modules, 0..) |m, mi| for (@typeInfo(m).@"struct".decls) |d| {
             // A name that an EARLIER module already declared is a re-export:
             // every module re-exports the shared primitives it takes so that
@@ -502,12 +505,12 @@ fn sweepTheirs() usize {
                     "this check nor the misuse sweep covers.");
             }
             const Home = home.?;
-            // Existence is not enough: the name must resolve to something
-            // that actually links — a Zig helper or a type on the name
-            // satisfies `@hasDecl` while the extern is gone. The forward
-            // sweep rejects those first, so this is the backstop, on
-            // purpose: it depends only on the header, so a future change
-            // to the forward sweep's name filter cannot reopen the hole silently.
+            // Existence is not enough: the name must resolve to something that
+            // actually links — a Zig helper or a type on the name satisfies
+            // `@hasDecl` while the extern is gone. The forward sweep rejects
+            // those first, so this is the backstop, on purpose: it depends only
+            // on the header, so a future change to the forward sweep's name
+            // filter cannot reopen the hole silently.
             const Ours = @TypeOf(@field(Home, d.name));
             if (@typeInfo(Ours) != .@"fn") {
                 fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++

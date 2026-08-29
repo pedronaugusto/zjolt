@@ -832,12 +832,12 @@ test "aborting a staged batch leaves the system exactly as it was" {
 }
 
 test "collideShapeWithInternalEdgeRemoval runs Jolt's real ghost-collision suppression, not a stand-in" {
-    // A flat square split into two coplanar triangles along its diagonal is
-    // the textbook case internal edge removal exists for: a box resting on
-    // either triangle must feel one continuous surface, not the seam. For a
-    // box lying flat, Jolt's box-vs-triangle EPA already finds the true
-    // face normal on both triangles regardless of diagonal position, so
-    // this proves the new entry points run Jolt's actual InternalEdgeRemovingCollector end to end, forcing active_edge_mode/collect_faces_mode regardless of `settings`, agreeing with the plain query where Jolt guarantees they must.
+    // Two coplanar triangles from a flat square split along a diagonal are the
+    // textbook edge-removal case: a box on either must feel one continuous
+    // surface, no seam. Box-vs-triangle EPA alone finds the true normal on a
+    // flat box regardless of the diagonal, so the real proof is
+    // InternalEdgeRemovingCollector forcing active_edge_mode/collect_faces_mode
+    // regardless of `settings`, as the plain query guarantees.
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 

@@ -1,17 +1,17 @@
 //! Debug-draw geometry, collected into arrays.
 //!
-//! Jolt's `DebugRenderer` is an abstract C++ class; nothing here mirrors
-//! its vtable. `Renderer` is a sink the library fills in once, and this
-//! wrapper reads back what accumulated — lines, triangles, text — as a
-//! count then a fill into a caller-owned buffer. Every function on
-//! `Renderer`, and `defaultDrawBodiesSettings`, returns
+//! Jolt's `DebugRenderer` is an abstract C++ class; nothing here mirrors its
+//! vtable. `Renderer` is a sink the library fills once, then this wrapper reads
+//! it back — lines, triangles, text — as a count then a fill into a caller
+//! buffer. Every `Renderer` function and `defaultDrawBodiesSettings` returns
 //! `error.Unsupported` unless built with `-Ddebug_renderer=true`
 //! (`zjolt.options.debug_renderer` says which, without failing first).
 //!
 //! `renderer.target()` is also where a host's own geometry goes —
 //! drawLine/drawBox/drawSphere and "Host-issued primitives"
 //! (`ffi/zjolt_debug.h`) land in the same buffers `drawBodies` fills.
-//! `Recorder` is the other `DrawTarget`, serialising calls to a stream `Playback` can replay instead of buffering one frame.
+//! `Recorder` is the other `DrawTarget`, serialising calls to a stream
+//! `Playback` can replay instead of buffering one frame.
 
 const std = @import("std");
 const c = @import("c/debug.zig");
@@ -220,11 +220,11 @@ pub const Renderer = struct {
 //=============================================================================
 
 /// Where debug geometry actually goes — a `Renderer`'s buffers via
-/// `Renderer.target()`, or a `Recorder`'s stream via `Recorder.target()`.
-/// A host's own lines, boxes, spheres and labels land in the same place
-/// `drawBodies` does.
-///
-/// Kept distinct from `Renderer`: a `Recorder`'s view has no `clear` or read-back, and must never be `deinit`'d (`ffi/zjolt_debug.h`, `zjoltDebugRecorderAsRenderer`) — only `Renderer` itself owns geometry.
+/// `Renderer.target()`, or a `Recorder`'s stream via `Recorder.target()`. A
+/// host's own lines, boxes, spheres and labels land in the same place
+/// `drawBodies` does. Kept distinct from `Renderer`: a `Recorder`'s view has no
+/// `clear` or read-back, and must never be `deinit`'d (`ffi/zjolt_debug.h`,
+/// `zjoltDebugRecorderAsRenderer`) — only `Renderer` itself owns geometry.
 pub const DrawTarget = struct {
     handle: *c.DebugRenderer,
 
@@ -573,12 +573,12 @@ pub const DrawTarget = struct {
 // Record and playback
 //=============================================================================
 
-/// A second kind of draw destination: instead of buffering the current
-/// frame for read-back like `Renderer`, it serialises every call into a
-/// stream, so a session can be replayed and inspected after the fact.
+/// A second draw destination: instead of buffering the frame like `Renderer`,
+/// it streams every call so a session can be replayed and inspected afterward.
 ///
 /// Shares `Renderer`'s process-wide singleton slot: `init` fails with
-/// `error.AlreadyInitialized` while a `Renderer` or another `Recorder` is still alive.
+/// `error.AlreadyInitialized` while a `Renderer` or another `Recorder` is still
+/// alive.
 pub const Recorder = struct {
     handle: *c.DebugRecorder,
 

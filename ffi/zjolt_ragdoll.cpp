@@ -177,11 +177,11 @@ JPH::EMotionType ToJoltMotionType(int32_t type) {
 }
 
 /// Fills the BodyCreationSettings half of a ragdoll part from a flat
-/// ZJoltBodyDesc — mirrors zjolt_body.cpp's BuildCreationSettings field
-/// for field; RagdollSettings::Part is BodyCreationSettings plus
-/// mToParent, filled in separately by the caller.
-///
-/// Called only after ValidatePart accepts `desc`, so its repeated checks always pass here (always returns ZJOLT_RESULT_OK) — still reported rather than asserted, so this stays correct called on its own.
+/// ZJoltBodyDesc, mirroring zjolt_body.cpp's BuildCreationSettings field for
+/// field; RagdollSettings::Part is BodyCreationSettings plus mToParent,
+/// filled in separately by the caller. Called only after ValidatePart
+/// accepts `desc`, so its checks always pass here (always returns
+/// ZJOLT_RESULT_OK) — reported, not asserted, to stay correct on its own.
 ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
                           JPH::BodyCreationSettings *out) {
   if (desc.shape == nullptr) {
@@ -194,9 +194,10 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
   out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
   out->SetShape(zjolt::ToJolt(desc.shape));
-  // Overwritten for every part by zjoltRagdollSettingsDisableParentChildCollisions
-  // if that is called, and by zjoltRagdollSettingsCreateRagdoll's group id in
-  // any case — a per-part group here is what those two build on top of.
+  // Overwritten for every part by
+  // zjoltRagdollSettingsDisableParentChildCollisions if that is called, and by
+  // zjoltRagdollSettingsCreateRagdoll's group id in any case — a per-part group
+  // here is what those two build on top of.
   out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
@@ -244,11 +245,11 @@ JPH::ESwingType ToJoltSwingType(int32_t type) {
                                           : JPH::ESwingType::Cone;
 }
 
-/// Builds a swing-twist constraint settings object on the heap — must
-/// outlive this call, unlike the parts' BodyCreationSettings above,
-/// since RagdollSettings::Part::mToParent keeps a reference to it.
-/// Never crosses the ABI: assigned straight into mToParent, which
-/// takes its own reference on assignment. Returns NULL only on allocation failure.
+/// Builds a swing-twist constraint settings object on the heap — must outlive
+/// this call, unlike the parts' BodyCreationSettings above, since
+/// RagdollSettings::Part::mToParent keeps a reference to it. Never crosses the
+/// ABI: assigned straight into mToParent, which takes its own reference on
+/// assignment. Returns NULL only on allocation failure.
 JPH::SwingTwistConstraintSettings *BuildConstraint(
     const ZJoltRagdollConstraintDesc &desc) {
   JPH::SwingTwistConstraintSettings *settings =
@@ -271,12 +272,12 @@ JPH::SwingTwistConstraintSettings *BuildConstraint(
   return settings;
 }
 
-/// Everything zjoltRagdollSettingsBuild must reject BEFORE it starts
-/// mutating `settings`, so a rejected call leaves it exactly as it was.
-///
-/// The to_parent check is the one CreateRagdoll itself does not make:
-/// it indexes `bodies[...mParentJointIndex]` for every part with a
-/// non-null mToParent, so a root part (parent index -1) carrying one reads `bodies[-1]` — out of bounds, found by reading Ragdoll.cpp's CreateRagdoll, not any JPH_ASSERT.
+/// Everything zjoltRagdollSettingsBuild must reject BEFORE mutating
+/// `settings`, so a rejected call leaves it unchanged. The to_parent check
+/// is the one CreateRagdoll skips: it indexes
+/// `bodies[...mParentJointIndex]` for every part with a non-null mToParent,
+/// so a root part (index -1) carrying one reads `bodies[-1]` — out of
+/// bounds, per Ragdoll.cpp's CreateRagdoll, not any JPH_ASSERT.
 ZJoltResult ValidatePart(const JPH::Skeleton &skeleton,
                          const ZJoltRagdollPartDesc &part,
                          uint32_t joint_index) {
@@ -304,12 +305,12 @@ ZJoltResult ValidatePart(const JPH::Skeleton &skeleton,
   return ZJOLT_RESULT_OK;
 }
 
-/// How many joints a pose of skeleton 1 and a pose of skeleton 2 must
-/// have for the mapper to stay inside both of them.
-///
-/// SkeletonMapper keeps nothing but joint indices after Initialize, and
-/// not the skeletons it was built from — this stands in for "is this
-/// the right pose". Every index it can reach: a mapping's pair, a chain's two index runs, an unmapped joint, or a locked joint and its parent.
+/// How many joints a pose of skeleton 1 and skeleton 2 must have for the
+/// mapper to stay inside both of them. SkeletonMapper keeps only joint
+/// indices after Initialize, not the skeletons it was built from — this
+/// stands in for "is this the right pose". Every index it can reach: a
+/// mapping's pair, a chain's two index runs, an unmapped joint, or a locked
+/// joint and its parent.
 void MapperExtent(const JPH::SkeletonMapper &mapper, uint32_t *out_needed1,
                   uint32_t *out_needed2) {
   int needed1 = 0;
@@ -967,12 +968,11 @@ ZJoltResult zjoltSkeletonMapperInitialize(
         "have more joints than neutral2");
   }
 
-  // A null callback is the default rather than an error, so a caller
-  // who does not need one never has to write a shim that compares names.
-  //
-  // Nothing may unwind out of this one: it runs inside Jolt's own loop,
-  // compiled without exceptions. The C signature carries no way to
-  // report a failure for that reason — a predicate that cannot answer has nothing to say beyond "these two joints are not the same joint".
+  // A null callback is the default, not an error, so a caller who does not
+  // need one never writes a shim comparing names. Nothing may unwind out of
+  // this one: it runs inside Jolt's own loop, compiled without exceptions.
+  // The C signature has no way to report a failure, so a predicate that
+  // cannot answer just says "these two joints are not the same joint".
   JPH::SkeletonMapper::CanMapJoint can_map =
       &JPH::SkeletonMapper::sDefaultCanMapJoint;
   if (can_map_joint != nullptr) {
@@ -1552,12 +1552,12 @@ void zjoltRagdollRelease(const ZJoltRagdoll *ragdoll) {
   ZJoltRagdoll *handle = const_cast<ZJoltRagdoll *>(ragdoll);
   JPH::Ragdoll *impl = handle->impl.GetPtr();
 
-  // Dropping `impl` below runs ~Ragdoll, which destroys the bodies
-  // where they stand — so anything the broad phase still holds has to
-  // come out first. Asked rather than assumed: RemoveFromPhysicsSystem
-  // is not safe on a ragdoll never added (it removes constraints before
-  // bodies, and ConstraintManager::Remove asserts each was added).
-  // AddToPhysicsSystem/RemoveFromPhysicsSystem move every part as one batch with no way to split them, so the first body answers for all; no parts means nothing to ask or remove.
+  // Dropping `impl` runs ~Ragdoll, destroying the bodies in place, so the broad
+  // phase must clear them first. Checked, not assumed: RemoveFromPhysicsSystem
+  // is unsafe on a ragdoll never added (it removes constraints before bodies,
+  // and ConstraintManager::Remove asserts each was added).
+  // AddToPhysicsSystem/RemoveFromPhysicsSystem move every part as one batch, so
+  // the first body answers for all; empty parts need no check.
   const JPH::Array<JPH::BodyID> &ids = impl->GetBodyIDs();
   if (!ids.empty() &&
       handle->owner->system.GetBodyInterface().IsAdded(ids.front())) {

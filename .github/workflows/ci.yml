@@ -122,6 +122,29 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - run: ci/check-abi-drift.sh
 
+  # The three guards that back this package's claims about itself: every public
+  # Jolt name in the claimed areas has a verdict and every exclusion is
+  # recomputed from Jolt's own headers; every header the umbrella includes is
+  # installed, or a C consumer gets one that does not resolve; and comment
+  # blocks stay short and stay out of the narrative register. All three are
+  # cheap and none needs a build, so they share one job and run before the
+  # matrix has finished.
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Installed headers cover every include
+        run: |
+          comm -23 \
+            <(grep -hoE '#include "zjolt_[a-z_]+\.h"' ffi/*.h | sed 's/#include "//; s/"//' | sort -u) \
+            <(grep -oE 'ffi/zjolt_[a-z_]+\.h' build.zig | sed 's|ffi/||' | sort -u) |
+          grep . && { echo "not in build.zig's installHeader list"; exit 1; }; exit 0
+      - name: Comment standard
+        run: ci/check-comments.sh
+      - name: Coverage — every public name has a verdict
+        run: ci/check-coverage.sh
+
   # Compile-only coverage of the targets the suite cannot execute on. These
   # prove the sources and build graph are portable; the `test` job above is
   # what proves behaviour.

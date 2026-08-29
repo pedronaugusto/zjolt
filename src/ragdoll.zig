@@ -357,12 +357,12 @@ pub const SkeletalAnimation = struct {
 // SkeletonMapper
 //=============================================================================
 
-/// One skeleton drives another: the low-detail skeleton a ragdoll
-/// simulates, onto the high-detail skeleton a mesh is skinned to, and back.
+/// One skeleton drives another: the low-detail skeleton a ragdoll simulates,
+/// onto the high-detail skeleton a mesh is skinned to, and back.
 ///
 /// Order matters — wrong order maps to nonsense, not an error: pose both
 /// skeletons NEUTRAL and `calculateJointMatrices`, THEN `initialize`
-/// (low-detail first). Reference counted; holds no reference to either skeleton.
+/// (low-detail first). Reference counted, with no reference to either skeleton.
 pub const SkeletonMapper = struct {
     handle: *c.SkeletonMapper,
 
@@ -542,12 +542,12 @@ pub const SkeletonMapper = struct {
 /// subsystem.
 pub const SwingType = c.SwingType;
 
-/// The swing-twist constraint attaching one part to its parent, in WORLD
-/// space — the same space as the parts' `body.position`/`body.rotation`.
-/// Jolt's own constraint for humanoid ragdolls, and the only non-hinge
-/// type `Ragdoll.driveToPoseUsingMotors` can drive.
+/// The swing-twist constraint linking a part to its parent, in WORLD space —
+/// matching `body.position`/`body.rotation`. Jolt's constraint for humanoid
+/// ragdolls, the only non-hinge type `Ragdoll.driveToPoseUsingMotors` drives.
 ///
-/// Motor tuning is not exposed: driving uses Jolt's default `MotorSettings` (critically-damped spring, unlimited torque).
+/// Motor tuning is not exposed: driving uses Jolt's default `MotorSettings`
+/// (critically-damped spring, unlimited torque).
 pub const RagdollConstraintDesc = struct {
     position1: math.RVec3 = math.rvec3_zero,
     twist_axis1: math.Vec3 = .{ .x = 1, .y = 0, .z = 0 },
@@ -896,12 +896,12 @@ pub const Ragdoll = struct {
         return count;
     }
 
-    /// Writes the ragdoll's body ids into `out`, indexed by joint — so
-    /// `out[i]` is the body built from skeleton joint `i`. `out` must
-    /// have at least `bodyCount()` entries; a shorter one reports
-    /// `error.BufferTooSmall` and writes nothing.
+    /// Writes the ragdoll's body ids into `out`, indexed by joint: `out[i]` is
+    /// the body from skeleton joint `i`. `out` needs at least `bodyCount()`
+    /// entries; a shorter one reports `error.BufferTooSmall`, writing nothing.
     ///
-    /// Ids stay valid until the ragdoll's last reference drops — do not destroy one through `BodyInterface`.
+    /// Ids stay valid until the ragdoll's last reference drops — do not destroy
+    /// one through `BodyInterface`.
     pub fn getBodyIds(self: Ragdoll, out: []body_mod.BodyId) err.Error![]body_mod.BodyId {
         var count: u32 = undefined;
         try err.check(c.zjoltRagdollGetBodyIds(

@@ -480,10 +480,11 @@ test "SubShapeIdCreator addresses a grandchild in a nested compound, one level a
     const leaf = outer.leafShape(composed) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(zjolt.ShapeSubType.box, leaf.shape.subType());
 
-    // A creator started fresh and pushed through zjoltShapeGetSubShapeIDFromIndex
-    // (the pre-existing, direct-child-only entry point) for just the first
-    // level should equal the id subShapeIDFromIndex(outer, 0) reports --
-    // confirms the chained path and the plain path agree at the root.
+    // A creator started fresh and pushed through
+    // zjoltShapeGetSubShapeIDFromIndex (the pre-existing, direct-child-only
+    // entry point) for just the first level should equal the id
+    // subShapeIDFromIndex(outer, 0) reports -- confirms the chained path and
+    // the plain path agree at the root.
     const direct_child_id = try outer.subShapeIDFromIndex(0);
     const creator2 = try shape_mod.SubShapeIdCreator.init();
     defer creator2.deinit();
@@ -920,12 +921,12 @@ test "setMaterial swaps a shape's material live, and every body sharing that sha
 // Collision groups
 //=============================================================================
 
-/// Fires two equal spheres at each other from opposite sides with no
-/// gravity, and returns the FINAL x of the left one minus the x of the
-/// right one. Checked on position, not whether a contact was reported.
-///
-/// If they collide, they rest at contact (restitution 0), still in their
-/// original order, so the result stays negative near -0.8 (their combined radii). If they do not, they swap places and the result is strongly positive.
+/// Fires two equal spheres at each other from opposite sides with no gravity,
+/// and returns the FINAL x of the left one minus the x of the right one.
+/// Checked on position, not whether a contact was reported. If they collide,
+/// they rest at contact (restitution 0), still in their original order, so the
+/// result stays negative near -0.8 (their combined radii). If they do not, they
+/// swap places and the result is strongly positive.
 fn finalXSeparation(group_a: zjolt.CollisionGroup, group_b: zjolt.CollisionGroup) !f64 {
     var world = try World.init();
     defer world.deinit();

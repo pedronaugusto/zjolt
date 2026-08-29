@@ -278,12 +278,12 @@ ZJOLT_API ZJoltResult zjoltShapeGetSubShapeIndexFromID(
     const ZJoltShape *shape, ZJoltSubShapeId sub_shape_id,
     uint32_t *out_index, ZJoltSubShapeId *out_remainder);
 
-/// Which of `shape`'s direct children have a bounding box overlapping
-/// `box`, both in `shape`'s own local space.
+/// Which of `shape`'s direct children have a bounding box overlapping `box`,
+/// both in `shape`'s own local space.
 ///
-/// `out_indices` must hold at least zjoltShapeCompoundGetNumChildren(shape)
-/// entries; NULL reports that count in `*out_count` without writing.
-/// ZJOLT_RESULT_INVALID_ARGUMENT for a non-compound, ZJOLT_RESULT_BUFFER_TOO_SMALL if short.
+/// `out_indices` needs zjoltShapeCompoundGetNumChildren(shape) entries; NULL
+/// only reports the count in `*out_count`. ZJOLT_RESULT_INVALID_ARGUMENT for a
+/// non-compound, ZJOLT_RESULT_BUFFER_TOO_SMALL if short.
 ZJOLT_API ZJoltResult zjoltShapeGetIntersectingSubShapes(
     const ZJoltShape *shape, const ZJoltAABox *box, uint32_t *out_indices,
     uint32_t capacity, uint32_t *out_count);

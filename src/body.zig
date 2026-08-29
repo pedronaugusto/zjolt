@@ -402,12 +402,12 @@ pub const BodyInterface = struct {
         try err.check(c.zjoltBodySetInverseInertia(self.handle, body, &diagonal, &rotation));
     }
 
-    /// Rescales an already-live body's mass and inertia together, keeping
-    /// their ratio. `mass` must be positive.
+    /// Rescales an already-live body's mass and inertia together, keeping their
+    /// ratio. `mass` must be positive.
     ///
-    /// A no-op on a static body, or one whose current inverse mass is
-    /// zero (every translation DOF locked, or a kinematic body never
-    /// given a finite mass). Read `getInverseMassUnchecked` to confirm it changed anything.
+    /// A no-op on a static body, or one whose current inverse mass is zero
+    /// (every translation DOF locked, or a kinematic body never given a finite
+    /// mass). Read `getInverseMassUnchecked` to confirm it changed anything.
     pub fn scaleToMass(self: BodyInterface, body: BodyId, mass: f32) err.Error!void {
         try err.check(c.zjoltBodyScaleToMass(self.handle, body, mass));
     }
@@ -415,9 +415,9 @@ pub const BodyInterface = struct {
     /// Gives a body a fully custom mass and inertia tensor, and sets its
     /// allowed degrees of freedom at the same time — Jolt couples the two
     /// since the inverse inertia is masked to the allowed rotation axes.
-    /// Pass `getAllowedDOFs` back to leave the existing ones alone.
-    ///
-    /// A no-op on a static body. `allowed_dofs` with nothing set, or a non-positive mass with any translation allowed, is `error.InvalidArgument`.
+    /// Pass `getAllowedDOFs` back to leave the existing ones alone. A no-op
+    /// on a static body. `allowed_dofs` with nothing set, or a non-positive
+    /// mass with any translation allowed, is `error.InvalidArgument`.
     pub fn setMassProperties(
         self: BodyInterface,
         body: BodyId,
@@ -427,8 +427,8 @@ pub const BodyInterface = struct {
         try err.check(c.zjoltBodySetMassProperties(self.handle, body, allowed_dofs, &mass_properties));
     }
 
-    /// `v` with the translation axes `getAllowedDOFs` excludes zeroed out.
-    /// `v` unchanged on a static body, matching `getAllowedDOFs`'s `.all` default.
+    /// `v` with the translation axes `getAllowedDOFs` excludes zeroed out. `v`
+    /// unchanged on a static body, matching `getAllowedDOFs`'s `.all` default.
     pub fn maskTranslationDOFs(self: BodyInterface, body: BodyId, v: math.Vec3) math.Vec3 {
         var out: math.Vec3 = math.vec3_zero;
         c.zjoltBodyMaskTranslationDOFs(self.handle, body, &v, &out);
@@ -449,7 +449,8 @@ pub const BodyInterface = struct {
         try err.check(c.zjoltBodyClampLinearVelocity(self.handle, body));
     }
 
-    /// As `clampLinearVelocity`, for angular velocity and `getMaxAngularVelocity`.
+    /// As `clampLinearVelocity`, for angular velocity and
+    /// `getMaxAngularVelocity`.
     pub fn clampAngularVelocity(self: BodyInterface, body: BodyId) err.Error!void {
         try err.check(c.zjoltBodyClampAngularVelocity(self.handle, body));
     }
@@ -626,11 +627,12 @@ pub const BodyInterface = struct {
         c.zjoltBodyAddForceAndTorque(self.handle, body, &force, &torque);
     }
 
-    /// What `addForce`/`addForceAtPoint`/`addTorque`/`addForceAndTorque`
-    /// have accumulated since the last step consumed it. Zero for a body
-    /// that is not dynamic or whose lock fails.
+    /// What `addForce`/`addForceAtPoint`/`addTorque`/`addForceAndTorque` have
+    /// accumulated since the last step consumed it. Zero for a body that is not
+    /// dynamic or whose lock fails.
     ///
-    /// A step clears both automatically; `resetForce`/`resetTorque` cancel one early.
+    /// A step clears both automatically; `resetForce`/`resetTorque` cancel one
+    /// early.
     pub fn getAccumulatedForce(self: BodyInterface, body: BodyId) math.Vec3 {
         var out: math.Vec3 = math.vec3_zero;
         c.zjoltBodyGetAccumulatedForce(self.handle, body, &out);
@@ -904,11 +906,11 @@ pub const BodyInterface = struct {
     }
 
     /// The material of one leaf of the body's shape. @see `Shape.material`
-    /// for what a material is and the sub-shape id rules.
-    ///
-    /// **Not a way to test whether a body exists**: a failed lock answers
-    /// with the shared default material, same as a body with no materials
-    /// of its own — Jolt's own answer, forwarded rather than replaced with a null. Use `isAdded` when the question is really about the body.
+    /// for what a material is and the sub-shape id rules. **Not a way to
+    /// test whether a body exists**: a failed lock answers with the shared
+    /// default material, same as a body with no materials of its own —
+    /// Jolt's own answer, forwarded not replaced with null. Use `isAdded`
+    /// when the question is really about the body.
     pub fn getMaterial(
         self: BodyInterface,
         body: BodyId,
@@ -920,11 +922,10 @@ pub const BodyInterface = struct {
     }
 
     /// Tells the system a body's shape changed underneath it — what the
-    /// `MutableCompound` methods do.
-    ///
-    /// `previous_center_of_mass` is the shape's centre of mass BEFORE the
-    /// change; the body is moved so its geometry stays where it was.
-    /// Without this call the broad phase and contact cache keep describing the prior shape.
+    /// `MutableCompound` methods do. `previous_center_of_mass` is the
+    /// shape's centre of mass BEFORE the change; the body is moved so its
+    /// geometry stays where it was. Without this call the broad phase and
+    /// contact cache keep describing the prior shape.
     pub fn notifyShapeChanged(
         self: BodyInterface,
         body: BodyId,
@@ -977,11 +978,12 @@ pub const BodyInterface = struct {
         return group_mod.fromC(raw);
     }
 
-    /// Drops the cached collision result for every pair involving this
-    /// body, so the next step re-evaluates them — what makes a
-    /// collision-group change take effect on a pair already resting.
-    /// `PhysicsSettings.use_body_pair_contact_cache` (on by default)
-    /// skips the narrow phase for a pair whose transform has not moved, which a group change does not.
+    /// Drops the cached collision result for every pair involving this body, so
+    /// the next step re-evaluates them — what makes a collision-group change
+    /// take effect on a pair already resting.
+    /// `PhysicsSettings.use_body_pair_contact_cache` (on by default) skips the
+    /// narrow phase for a pair whose transform has not moved, which a group
+    /// change does not.
     pub fn invalidateContactCache(self: BodyInterface, body: BodyId) void {
         c.zjoltBodyInvalidateContactCache(self.handle, body);
     }
@@ -1118,11 +1120,10 @@ pub const Body = struct {
     }
 
     /// MotionProperties::GetSimulationStats, averaged over the simulation
-    /// island this body was part of during its last step.
-    ///
-    /// `error.Unsupported` unless built with `-Dtrack_simulation_stats`
-    /// (Jolt compiles the counters out without it). A STATIC body reads
-    /// back all zeroes either way — an ordinary body with nothing tracked, not an unsupported build.
+    /// island this body was part of during its last step. `error.Unsupported`
+    /// unless built with `-Dtrack_simulation_stats` (Jolt compiles the
+    /// counters out without it). A STATIC body reads back all zeroes either
+    /// way — an ordinary body with nothing tracked, not an unsupported build.
     pub fn simulationStats(self: Body) err.Error!SimulationStats {
         var out: SimulationStats = undefined;
         try err.check(c.zjoltBodyGetSimulationStatsLocked(self.handle, &out));
@@ -1139,10 +1140,11 @@ pub const Body = struct {
         try err.check(c.zjoltBodyValidateCachedBoundsLocked(self.handle));
     }
 
-    /// Debug check: a sleeping body has zero velocity, catching a velocity
-    /// set directly on motion properties rather than through
-    /// `BodyInterface.setLinearVelocity`/`setAngularVelocity`, which wake
-    /// the body first. `error.Unsupported` without asserts, same as `validateCachedBounds`.
+    /// Debug check: a sleeping body has zero velocity, catching a velocity set
+    /// directly on motion properties rather than through
+    /// `BodyInterface.setLinearVelocity`/`setAngularVelocity`, which wake the
+    /// body first. `error.Unsupported` without asserts, same as
+    /// `validateCachedBounds`.
     pub fn validateMotion(self: Body) err.Error!void {
         try err.check(c.zjoltBodyValidateMotionLocked(self.handle));
     }
@@ -1199,12 +1201,12 @@ pub const Lock = struct {
     }
 };
 
-/// A lock held over several bodies at once, under one mutex mask so
-/// nothing else can touch any of them between the first read and the
-/// last — what taking them one at a time with `Lock` cannot promise.
-/// Release it exactly once.
+/// A lock held over several bodies at once, under one mutex mask so nothing
+/// else can touch any of them between the first read and the last — what taking
+/// them one at a time with `Lock` cannot promise. Release it exactly once.
 ///
-/// `ids` (the slice `lockMultiRead`/`lockMultiWrite` was given) must stay valid until `release`: this borrows it, same as Jolt's own BodyLockMultiRead.
+/// `ids` (the slice `lockMultiRead`/`lockMultiWrite` was given) must stay valid
+/// until `release`: this borrows it, same as Jolt's own BodyLockMultiRead.
 pub const MultiLock = struct {
     raw: c.BodyLockMulti,
     write: bool,

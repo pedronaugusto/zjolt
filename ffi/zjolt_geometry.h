@@ -127,8 +127,9 @@ ZJOLT_API ZJoltResult zjoltGJKCastRay(
     bool *out_hit);
 
 /// Whether `a`, swept from `start` along `direction`, hits `b` -- GJK's own
-/// `CastShape` overload with no convex radius and no contact points. `io_lambda`
-/// is the max fraction of the sweep on entry and the hit fraction on a hit.
+/// `CastShape` overload with no convex radius and no contact points.
+/// `io_lambda` is the max fraction of the sweep on entry and the hit fraction
+/// on a hit.
 ZJOLT_API ZJoltResult zjoltGJKIntersectsSweep(
     ZJoltGJK *gjk, const ZJoltMat44 *start, const ZJoltVec3 *direction,
     float tolerance, const ZJoltConvexSupport *a, const ZJoltConvexSupport *b,

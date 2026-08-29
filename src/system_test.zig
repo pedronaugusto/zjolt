@@ -491,12 +491,12 @@ test "OnContactPersisted's live body reads the velocity the body has mid-step, n
 
     try std.testing.expect(recorder.persisted_calls > 0);
 
-    // JobApplyGravity is a hard dependency of JobFindCollisions, so this
-    // step's gravity is already applied to the body by the time
-    // OnContactPersisted runs -- but the velocity solve that cancels it
-    // back out for a resting contact has not happened yet. A resting
-    // ball's persisted callback therefore sees a small downward velocity
-    // every step, not the ~0 it settles back to. Reading a default body, or the wrong one, would read back exactly 0 instead.
+    // JobApplyGravity hard-depends on JobFindCollisions, so this step's gravity
+    // is already applied to the body by the time OnContactPersisted runs — but
+    // the velocity solve that cancels it out for a resting contact hasn't run
+    // yet. So a resting ball's persisted callback sees a small downward
+    // velocity each step, not the ~0 it settles to. Reading a default or wrong
+    // body would read back exactly 0 instead.
     try std.testing.expect(recorder.min_seen_vy < -0.01);
 
     const settled = rig.system.bodies().getLinearVelocity(ball);

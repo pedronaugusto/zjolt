@@ -434,11 +434,10 @@ pub fn createAndAddWithId(
 }
 
 /// The shared topology a live soft body was built from — the reference
-/// `Desc.shared_settings` took at creation. Borrowed: not valid past the
-/// body's own destruction. `null` for a rigid body or a stale id
-/// (indistinguishable here; ask `BodyInterface.getBodyType` first).
-///
-/// Mutable though borrowed: mutating it reaches every OTHER body sharing this topology.
+/// `Desc.shared_settings` took at creation. Borrowed: not valid past the body's
+/// own destruction. `null` for a rigid body or a stale id (indistinguishable
+/// here; ask `BodyInterface.getBodyType` first). Mutable though borrowed:
+/// mutating it reaches every OTHER body sharing this topology.
 pub fn getSharedSettings(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -630,10 +629,10 @@ pub fn setVertexInvMass(
 }
 
 /// Recomputes the body's total mass and inertia from its vertices' current
-/// inverse masses and positions. Jolt does this once, at creation, and
-/// never again — a body with changed per-vertex inverse masses keeps its
-/// birth mass until this runs. A single vertex with inverse mass 0 gives
-/// the WHOLE body infinite mass and inertia, stopping it responding to an impulse.
+/// inverse masses and positions. Jolt does this once, at creation, and never
+/// again — a body with changed per-vertex inverse masses keeps its birth mass
+/// until this runs. A single vertex with inverse mass 0 gives the WHOLE body
+/// infinite mass and inertia, stopping it responding to an impulse.
 pub fn calculateMassAndInertia(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -674,11 +673,10 @@ pub fn getLocalBounds(system: system_mod.PhysicsSystem, body: body_mod.BodyId) e
 //=============================================================================
 
 /// Skins every vertex carrying a `Skinned` constraint to `joint_matrices`
-/// (indexed by `InvBind.joint_index`). Matrices must be RELATIVE TO THE
-/// BODY'S CENTRE-OF-MASS TRANSFORM, not world space — a world-space
-/// matrix is not detectably wrong, just silently offset.
-///
-/// `hard_skin_all` snaps every vertex to its skinned position, a reset for spawn/teleport.
+/// (indexed by `InvBind.joint_index`). Matrices must be RELATIVE TO THE BODY'S
+/// CENTRE-OF-MASS TRANSFORM, not world space — a world-space matrix is not
+/// detectably wrong, just silently offset. `hard_skin_all` snaps every vertex
+/// to its skinned position, a reset for spawn/teleport.
 pub fn skinVertices(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -789,12 +787,12 @@ pub fn getFaceIndex(
     return out;
 }
 
-/// Runs one soft-body update immediately, on the calling thread, without
-/// going through `PhysicsSystem.step` — for a body kept out of the
-/// simulation on purpose; already IN the system, this updates it twice.
+/// Runs one soft-body update immediately, on the calling thread, without going
+/// through `PhysicsSystem.step` — for a body kept out of the simulation on
+/// purpose; already IN the system, this updates it twice.
 ///
-/// THREADING: takes locks on this body and everything it collides with.
-/// Never call from inside a contact callback, a step listener, or while `step` runs.
+/// THREADING: takes locks on this body and everything it collides with. Never
+/// call from inside a contact callback, a step listener, or while `step` runs.
 pub fn customUpdate(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -1031,10 +1029,9 @@ pub const Manifold = struct {
 
 /// Builds a soft-body contact listener from `context` and whichever of
 /// `onSoftBodyContactValidate`/`onSoftBodyContactAdded` `T` declares (an
-/// omitted one never fires). `context` must outlive the system.
-///
-/// Validate fires on bounding-box overlap, BEFORE any vertex test; Added
-/// fires once per body per step, after every contact is handled — not once per contact.
+/// omitted one never fires). `context` must outlive the system. Validate fires
+/// on bounding-box overlap, BEFORE any vertex test; Added fires once per body
+/// per step, after every contact is handled — not once per contact.
 pub fn contactListener(comptime T: type, context: *T) ContactListener {
     system_mod.requireAnyDecl(T, &.{
         "onSoftBodyContactValidate", "onSoftBodyContactAdded",
@@ -1358,7 +1355,8 @@ test "a vertex index nothing has is refused, not asserted" {
     // state only when there is one, then asserts that it fits.
     try std.testing.expectError(E.InvalidArgument, skinVertices(system, body, &.{}, false));
 
-    // A rigid body is not a soft body, and is told so rather than reinterpreted.
+    // A rigid body is not a soft body, and is told so rather than
+    // reinterpreted.
     const box = try shape_mod.Shape.initBox(math.vec3(0.5, 0.5, 0.5), .{});
     defer box.release();
     const rigid = try system.bodies().createAndAdd(.{

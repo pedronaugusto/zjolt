@@ -1,17 +1,17 @@
 //! Physics materials.
 //!
-//! A material is an **identity**, not a property bag: a debug name and
-//! colour, nothing else. Friction/restitution live on the body
-//! (`BodyInterface.setFriction`/`setRestitution`); a contact combines the two bodies' values, never the two surfaces'.
+//! A material is an **identity**, not a property bag: a debug name and colour.
+//! Friction/restitution live on the body via `BodyInterface.setFriction`/
+//! `setRestitution`; a contact combines both bodies' values, not the surfaces'.
 //!
-//! What it is for: telling surfaces apart *within* one shape. A mesh has
-//! one material per triangle, a height field one per quad; a hit's
-//! sub-shape id (via `Shape.material`) gives the exact triangle/quad's
-//! material. Map the result to your own data by identity (`eql`, or a hash of `.handle`).
+//! What it is for: telling surfaces apart *within* one shape. A mesh has one
+//! material per triangle, a height field one per quad; a hit's sub-shape id
+//! (via `Shape.material`) gives the exact triangle/quad's material. Map the
+//! result to your own data by identity (`eql`, or a hash of `.handle`).
 //!
-//! A shape holds a reference on its materials (create, build, `release`);
-//! two shapes may share one. Real-property subclasses are a C++ affair,
-//! out of reach here (Jolt's own RTTI macros, not the language's, since zjolt compiles `-fno-rtti`).
+//! A shape holds a reference on its materials (create, build, `release`); two
+//! shapes may share one. Real-property subclasses are C++-only, unreachable
+//! here since zjolt builds `-fno-rtti` (Jolt's own RTTI, not the language's).
 
 const std = @import("std");
 const c = @import("c/material.zig");

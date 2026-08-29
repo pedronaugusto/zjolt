@@ -505,7 +505,8 @@ fn mat3Scale(s: f32) Mat3 {
 // AxisConstraintPart
 //=============================================================================
 
-/// Constrains motion along 1 axis, with an optional spring. `AxisConstraintPart.h`.
+/// Constrains motion along 1 axis, with an optional spring.
+/// `AxisConstraintPart.h`.
 pub const AxisConstraintPart = struct {
     r1_plus_u_x_axis: Vec3 = vec3_zero,
     r2_x_axis: Vec3 = vec3_zero,

@@ -1,17 +1,17 @@
 //! Bridges a Zig `std.mem.Allocator` onto Jolt's global (process-wide)
-//! allocator seam, plus three more `Core` primitives with no other home:
-//! the flush-denormals guard, the profiler's measurement aggregator and
+//! allocator seam, plus three more `Core` primitives with no other home: the
+//! flush-denormals guard, the profiler's measurement aggregator and
 //! external-hook bridge, and a `FixedSizeFreeList`-style batched free.
 //!
-//! Jolt frees with `free(block)`/`aligned_free(block)` — no size, no
-//! alignment — but Zig's allocator interface requires both at free time.
-//! The gap is closed by allocating extra and stashing length + alignment
-//! in a header placed immediately before the pointer handed to Jolt.
-//! `reallocate` reads that header too, for consistency with blocks
-//! `allocate` produced, even though Jolt hands it the old size directly.
+//! Jolt frees with `free(block)`/`aligned_free(block)` — no size or alignment
+//! — but Zig's allocator interface needs both at free time. The gap closes by
+//! allocating extra and stashing length and alignment in a header just before
+//! the pointer handed to Jolt. `reallocate` reads that header too, matching
+//! blocks `allocate` produced, though Jolt already supplies the old size.
 //!
 //! Jolt's plain `allocate` takes no alignment yet places SIMD types in the
-//! memory it returns; that minimum is read from `zjoltDefaultAllocateAlignment()` at install time, not assumed to be 16.
+//! memory it returns; that minimum is read from
+//! `zjoltDefaultAllocateAlignment()` at install time, not assumed to be 16.
 
 const std = @import("std");
 const c = @import("c/core.zig");

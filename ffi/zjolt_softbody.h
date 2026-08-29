@@ -209,9 +209,8 @@ ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsSetMaterials(
 /// The settings' material list, in ZJoltSoftBodyFace::material_index order.
 /// Two-call protocol: out_materials = NULL learns the count. Borrowed
 /// pointers, valid as long as the settings are; zjoltPhysicsMaterialAddRef
-/// to outlive them.
-///
-/// Settings that never had SetMaterials called report one material: zjoltPhysicsMaterialDefault().
+/// to outlive them. Settings that never had SetMaterials called report one
+/// material: zjoltPhysicsMaterialDefault().
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsGetMaterials(
     const ZJoltSoftBodySharedSettings *settings,
     const ZJoltPhysicsMaterial **out_materials, uint32_t capacity,
@@ -287,12 +286,12 @@ ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsAddSkinnedConstraints(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodySkinned *constraints, uint32_t count);
 
-/// Builds edge, shear and bend constraints from the faces already added.
-/// Also derives an LRA constraint per vertex when
-/// `vertex_attributes[i].lra_type` asks for one, and calls CalculateEdgeLengths.
+/// Builds edge, shear and bend constraints from the faces already added. Also
+/// derives an LRA constraint per vertex when `vertex_attributes[i].lra_type`
+/// asks for one, and calls CalculateEdgeLengths.
 ///
-/// `vertex_attributes` is indexed in parallel with the vertices, repeating
-/// its last element if shorter; `vertex_attributes_count` must be >= 1.
+/// `vertex_attributes` is indexed in parallel with the vertices, repeating its
+/// last element if shorter; `vertex_attributes_count` must be >= 1.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsCreateConstraints(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodyVertexAttributes *vertex_attributes,
@@ -632,8 +631,9 @@ ZJOLT_API ZJoltResult zjoltSoftBodyGetRodStates(
 
 /// Which face of `body` a sub-shape id names — turns a hit's ZJoltSubShapeId
 /// into an index into the SHARED SETTINGS face list, in
-/// zjoltSoftBodySharedSettingsAddFaces order (never reordered). ZJOLT_RESULT_INVALID_ARGUMENT
-/// for a sub-shape id with bits left over after the face index.
+/// zjoltSoftBodySharedSettingsAddFaces order (never reordered).
+/// ZJOLT_RESULT_INVALID_ARGUMENT for a sub-shape id with bits left over after
+/// the face index.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetFaceIndex(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltSubShapeId sub_shape_id, uint32_t *out);
@@ -659,12 +659,12 @@ ZJOLT_API ZJoltResult zjoltSoftBodyCustomUpdate(ZJoltPhysicsSystem *system,
 // shapes use internally.
 //===----------------------------------------------------------------------===//
 
-/// Strided cursor over one soft-body vertex array's collision-relevant
-/// fields, mirroring Jolt's CollideSoftBodyVertexIterator: `position` and
-/// `inv_mass` read-only, the rest written as vertices are found to collide.
-/// `*_stride` is the byte distance between elements, not necessarily sizeof
-/// the element. Every pointer is borrowed and must stay valid and unmoved
-/// for as long as the iterator is used, and may NOT be NULL: every field is dereferenced unconditionally.
+/// Strided cursor over one soft-body vertex array's collision-relevant fields,
+/// mirroring Jolt's CollideSoftBodyVertexIterator: `position` and `inv_mass`
+/// read-only, the rest written as vertices are found to collide. `*_stride` is
+/// the byte distance between elements, not necessarily sizeof the element.
+/// Every pointer is borrowed, must stay valid and unmoved while the iterator is
+/// used, and may NOT be NULL: every field is dereferenced unconditionally.
 typedef struct ZJoltCollideSoftBodyVertexIterator {
   const uint8_t *position;
   uint32_t position_stride;
@@ -678,12 +678,12 @@ typedef struct ZJoltCollideSoftBodyVertexIterator {
   uint32_t colliding_shape_index_stride;
 } ZJoltCollideSoftBodyVertexIterator;
 
-/// Runs `shape`'s own CollideSoftBodyVertices against `vertices`,
-/// standalone — no PhysicsSystem or soft body needed. Dispatches to
-/// whatever concrete shape `shape` is, a soft body's own SoftBodyShape
-/// included, which is how two soft bodies collide with each other.
-/// `colliding_shape_index` marks any vertex this call wins, uninterpreted
-/// otherwise. ZJOLT_RESULT_INVALID_ARGUMENT for a NULL argument, or any NULL field of `vertices`.
+/// Runs `shape`'s own CollideSoftBodyVertices against `vertices`, standalone —
+/// no PhysicsSystem or soft body needed. Dispatches to whatever concrete shape
+/// `shape` is, a soft body's own SoftBodyShape included, which is how two soft
+/// bodies collide with each other. `colliding_shape_index` marks any vertex
+/// this call wins, uninterpreted otherwise. ZJOLT_RESULT_INVALID_ARGUMENT for a
+/// NULL argument, or any NULL field of `vertices`.
 ZJOLT_API ZJoltResult zjoltShapeCollideSoftBodyVertices(
     const ZJoltShape *shape, const ZJoltMat44 *center_of_mass_transform,
     ZJoltVec3 scale, const ZJoltCollideSoftBodyVertexIterator *vertices,

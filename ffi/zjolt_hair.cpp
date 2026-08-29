@@ -74,11 +74,11 @@ ZJoltComputeBarrier ToC(JPH::ComputeQueue::EBarrier barrier) {
 class BridgeSystem;
 
 /// The two things every bridge object needs: the table to call, and a
-/// reference on the system that owns the table.
-///
-/// The reference is not decoration: Jolt hands buffers out as `Ref`s that
-/// Hair keeps for its whole life, so without it, destroying a
-/// ZJoltComputeSystem handle while a hair is alive would leave every buffer forwarding into a freed ZJoltComputeInterface.
+/// reference keeping the owning system alive. The reference is not
+/// decoration: Jolt hands buffers out as `Ref`s that Hair keeps for its
+/// whole life, so without it, destroying a ZJoltComputeSystem handle while
+/// a hair is alive would leave buffers forwarding into a freed
+/// ZJoltComputeInterface.
 struct BridgeLink {
   JPH::Ref<JPH::ComputeSystem> keep_alive;
   BridgeSystem *owner = nullptr;
@@ -377,12 +377,12 @@ JPH::ComputeBufferResult BridgeBuffer::CreateReadBackBuffer() const {
 // tags have to match.
 //===----------------------------------------------------------------------===//
 
-/// Everything a hair needs from a backend: the system, its one queue, and the
-/// fifteen compiled shaders.
+/// Everything a hair needs from a backend: the system, its one queue, and
+/// the fifteen compiled shaders.
 ///
-/// Reference counted rather than owned by the ZJoltComputeSystem handle, so
-/// destroying that handle while a hair is still using it is legal. Exists
-/// because the three pieces are created and discarded together and a hair should hold one reference, not three.
+/// Reference counted, not owned by the ZJoltComputeSystem handle, so that
+/// handle can be destroyed while a hair still uses it. The three pieces are
+/// created and discarded together, so a hair holds one reference, not three.
 class ZJoltComputeContext : public JPH::RefTarget<ZJoltComputeContext> {
  public:
   JPH_OVERRIDE_NEW_DELETE
@@ -1259,10 +1259,10 @@ ZJoltResult zjoltHairReadBackVertexState(ZJoltHair *hair,
   hair->hair->ReadBackGPUState(hair->context->queue);
 
   // No Lock/Unlock around this one. ReadBackGPUState un-transposes the position
-  // and velocity buffers into plain CPU arrays of its own before it returns, and
-  // those are what the four accessors below read; the lock exists for the ones
-  // that hand back a still-mapped device buffer — the scalp, the grid and the
-  // render positions.
+  // and velocity buffers into plain CPU arrays of its own before it returns,
+  // and those are what the four accessors below read; the lock exists for the
+  // ones that hand back a still-mapped device buffer — the scalp, the grid and
+  // the render positions.
   const JPH::Float3 *positions = hair->hair->GetPositions();
   const JPH::Quat *rotations = hair->hair->GetRotations();
   const uint32_t n = capacity < count ? capacity : count;

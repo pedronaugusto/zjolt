@@ -1,17 +1,17 @@
 //! Broad-phase queries: which bodies are roughly there.
 //!
-//! Return body ids only. The broad phase tests only each body's bounding
-//! box, so it answers "which bodies could possibly be involved," never
-//! "where did they touch" — no contact point, normal, or penetration
-//! depth. `Queries` in `query.zig` runs the narrow phase and produces those.
+//! Return body ids only. The broad phase tests only each body's bounding box,
+//! so it answers "which bodies could possibly be involved," never "where did
+//! they touch" — no contact point, normal, or penetration depth. `Queries` in
+//! `query.zig` runs the narrow phase and produces those.
 //!
-//! Reach for these when the next thing you do is your own test anyway: a
-//! blast radius, an editor selection box, a streamer asking what is in a
-//! region. A hit means the AXIS-ALIGNED bounding box overlaps, which for a
-//! long thin body at forty-five degrees is a box several times its volume.
+//! Reach for these when the next step is your own test anyway — blast radius,
+//! editor selection box, streamer region query. A hit means the AXIS-ALIGNED
+//! box overlaps: several times a long thin body's volume at forty-five degrees.
 //!
-//! Positions are `RVec3` for consistency, narrowed to float on the way in
-//! since Jolt's broad phase is single precision, matching its own narrow-phase entry points.
+//! Positions are `RVec3` for consistency, narrowed to float on the way in since
+//! Jolt's broad phase is single precision, matching its own narrow-phase entry
+//! points.
 
 const std = @import("std");
 const c = @import("c/broadphase.zig");

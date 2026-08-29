@@ -39,11 +39,12 @@
 
 namespace {
 
-/// Turns Jolt's ShapeResult into the ABI's convention: a reference
-/// handed to the caller on success, or an error surviving in zjoltLastError.
+/// Turns Jolt's ShapeResult into the ABI's convention: a reference handed to
+/// the caller on success, or an error surviving in zjoltLastError.
 ///
-/// The extra AddRef is deliberate: ShapeResult's Ref drops its own
-/// reference when it goes out of scope, so this is what makes "every constructor returns a shape with a reference count of one" true.
+/// The extra AddRef is deliberate: ShapeResult's Ref drops its own reference
+/// when it goes out of scope, so this is what makes "every constructor returns
+/// a shape with a reference count of one" true.
 ZJoltResult Finish(JPH::Shape::ShapeResult &result, ZJoltShape **out) {
   if (result.HasError()) {
     return zjolt::SetError(ZJOLT_RESULT_SHAPE_INVALID, result.GetError().c_str());
@@ -97,11 +98,11 @@ ZJoltShapeSubType ToCSubType(JPH::EShapeSubType sub_type) {
     case JPH::EShapeSubType::SoftBody:
       return ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY;
     default:
-      // Every shape kind Jolt itself defines is named above; what's left
-      // is the sixteen User1..UserConvex8 slots for types registered by
-      // C++ outside this library — unconstructible and unnameable here.
-      // Deliberately NOT the same value a NULL handle reports: this arm
-      // says "a shape, of a kind I cannot name", ZJOLT_SHAPE_SUB_TYPE_NONE says "not a shape".
+      // Every shape kind Jolt itself defines is named above; what's left is the
+      // sixteen User1..UserConvex8 slots for types registered by C++ outside
+      // this library — unconstructible and unnameable here. Deliberately NOT
+      // the same value a NULL handle reports: this arm says "a shape, of a kind
+      // I cannot name", ZJOLT_SHAPE_SUB_TYPE_NONE says "not a shape".
       return ZJOLT_SHAPE_SUB_TYPE_USER_DEFINED;
   }
 }
@@ -130,9 +131,10 @@ const JPH::PhysicsMaterial *ToJoltMaterial(
 
 /// Copies a caller's material table into the list Jolt's settings want.
 ///
-/// Empty and one-entry lists are distinct, reachable states: no
-/// materials reports the shared default for every leaf, one reports
-/// that one. Jolt enforces the same distinction the other way — a triangle with a non-zero material index is refused when the list is empty.
+/// Empty and one-entry lists are distinct, reachable states: no materials
+/// reports the shared default for every leaf, one reports that one. Jolt
+/// enforces the same distinction the other way — a triangle with a non-zero
+/// material index is refused when the list is empty.
 ZJoltResult BuildMaterialList(const ZJoltPhysicsMaterial *const *materials,
                               uint32_t num_materials,
                               JPH::PhysicsMaterialList &out) {
@@ -156,12 +158,12 @@ ZJoltResult BuildMaterialList(const ZJoltPhysicsMaterial *const *materials,
   return ZJOLT_RESULT_OK;
 }
 
-/// The fewest children a compound that STAYS a compound may have — not
-/// a style rule: `CompoundShape::GetSubShapeIDBits` is `32 -
-/// CountLeadingZeros(count - 1)`, UB on ARM (`__builtin_clz(0)`) for a
-/// single-child compound, guarded elsewhere but not there. A static
-/// compound never reaches this (Jolt simplifies one child away); a
-/// mutable one does not simplify, so the floor is enforced here. See UPSTREAM.md.
+/// The fewest children a compound that STAYS a compound may have — not a style
+/// rule: `CompoundShape::GetSubShapeIDBits` is `32 - CountLeadingZeros(count -
+/// 1)`, UB on ARM (`__builtin_clz(0)`) for a single-child compound, guarded
+/// elsewhere but not there. A static compound never reaches this (Jolt
+/// simplifies one child away); a mutable one does not simplify, so the floor is
+/// enforced here. See UPSTREAM.md.
 constexpr uint32_t kMinCompoundChildren = 2;
 
 /// Fills a compound settings object from the caller's child array.
@@ -213,10 +215,11 @@ const JPH::ConvexShape *AsConvex(const ZJoltShape *shape) {
   return static_cast<const JPH::ConvexShape *>(jolt);
 }
 
-/// Whether `shape` or anything beneath it is one of the three leaf
-/// kinds whose GetSubmergedVolume vendored Jolt 5.6.0 implements as
-/// JPH_ASSERT(false), leaving its out-parameters uninitialised: Mesh,
-/// HeightField, Plane. Walks every compound and decoration, since the hazard is just as real several levels down as at the root.
+/// Whether `shape` or anything beneath it is one of the three leaf kinds whose
+/// GetSubmergedVolume vendored Jolt 5.6.0 implements as JPH_ASSERT(false),
+/// leaving its out-parameters uninitialised: Mesh, HeightField, Plane. Walks
+/// every compound and decoration, since the hazard is just as real several
+/// levels down as at the root.
 bool ContainsSubmergedVolumeHazard(const JPH::Shape *shape) {
   if (shape == nullptr) return false;
   switch (shape->GetSubType()) {
@@ -281,11 +284,12 @@ bool IsSubShapeIdValid(const JPH::Shape *shape, JPH::SubShapeID id) {
   return remainder.IsEmpty();
 }
 
-/// Opens a mutating compound entry point: the shape must be up, must
-/// be a mutable compound, and `index` must name a child it actually has.
+/// Opens a mutating compound entry point: the shape must be up, must be a
+/// mutable compound, and `index` must name a child it actually has.
 ///
 /// The range check is load-bearing: `RemoveShape`/`ModifyShape` index
-/// `mSubShapes` with no bounds check or assertion, so an out-of-range index there is a write past the end of a live array, not a diagnosable abort.
+/// `mSubShapes` with no bounds check or assertion, so an out-of-range index
+/// there is a write past the end of a live array, not a diagnosable abort.
 ZJoltResult OpenMutableCompound(ZJoltShape *shape, uint32_t index,
                                 bool check_index,
                                 JPH::MutableCompoundShape **out_compound) {
@@ -326,11 +330,12 @@ const JPH::HeightFieldShape *AsHeightField(const ZJoltShape *shape) {
   return static_cast<const JPH::HeightFieldShape *>(jolt);
 }
 
-/// The mutable counterpart of AsHeightField, for zjoltShapeHeightFieldSetHeights
-/// — the one height-field entry point that writes through the pointer. @see
-/// OpenMutableCompound for why this const_casts rather than taking a second
-/// ToJolt overload: only ffi/zjolt_internal.h converts handles, and it only
-/// hands out `const JPH::Shape *`.
+/// The mutable counterpart of AsHeightField, for
+/// zjoltShapeHeightFieldSetHeights — the one height-field entry point that
+/// writes through the pointer. @see OpenMutableCompound for why this
+/// const_casts rather than taking a second ToJolt overload: only
+/// ffi/zjolt_internal.h converts handles, and it only hands out `const
+/// JPH::Shape *`.
 JPH::HeightFieldShape *AsMutableHeightField(ZJoltShape *shape) {
   if (shape == nullptr) return nullptr;
   JPH::Shape *jolt = const_cast<JPH::Shape *>(zjolt::ToJolt(shape));
@@ -1946,10 +1951,10 @@ ZJoltResult zjoltShapeGetSubShapeTransformedShape(
   if (out_remainder != nullptr) *out_remainder = zjolt::ToC(remainder);
 
   // Built from the child's own public fields, not by reaching into
-  // JPH::TransformedShape's insides: zjoltTransformedShapeCreate is the
-  // one place a ZJoltTransformedShape is constructed, and this keeps
-  // that true instead of adding a second path with its own chance to
-  // drift. The body id is always invalid — this relates two shapes, not a shape and a body.
+  // JPH::TransformedShape's insides: zjoltTransformedShapeCreate is the one
+  // place a ZJoltTransformedShape is constructed, and this keeps that true
+  // instead of adding a second path with its own chance to drift. The body id
+  // is always invalid — this relates two shapes, not a shape and a body.
   const ZJoltRVec3 child_position = zjolt::ToCR(child.mShapePositionCOM);
   const ZJoltQuat child_rotation = zjolt::ToC(child.mShapeRotation);
   const ZJoltVec3 child_scale = zjolt::ToC(child.GetShapeScale());
@@ -2263,12 +2268,12 @@ ZJoltResult zjoltShapeHeightFieldSetHeights(
         "must fit within the sample grid, and stride must be at least size_x");
   }
 
-  // Jolt's own doc says a height outside [Min,Max] "will be clamped", but
-  // quantization (`(int)floor((h - offset) / scale)`) runs before that
-  // clamp, which is UB for an `h` far enough outside range — reachable
-  // when a flat field's zero-width-range guard leaves `scale` small
-  // enough to overflow int. So the clamp happens here, on the values
-  // themselves, first. `cNoCollisionValue` is left untouched (a sentinel, not a height — Jolt excludes it from quantization too).
+  // Jolt's doc says a height outside [Min,Max] "will be clamped", but
+  // quantization (`(int)floor((h - offset) / scale)`) runs first — UB for
+  // an `h` far enough outside range, reachable when a flat field's
+  // zero-width-range guard shrinks `scale` enough to overflow int. So the
+  // clamp runs here, before quantization; `cNoCollisionValue` stays
+  // untouched, a sentinel Jolt excludes from quantization too.
   JPH::Array<float> clamped(static_cast<size_t>(size_x) * size_y);
   const float min_height = hf->GetMinHeightValue();
   const float max_height = hf->GetMaxHeightValue();

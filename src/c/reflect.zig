@@ -85,7 +85,8 @@ pub const Vec4 = extern struct {
     w: f32,
 };
 
-/// A four-component unsigned-integer vector: wire type for `PrimitiveType.uvec4`.
+/// A four-component unsigned-integer vector: wire type for
+/// `PrimitiveType.uvec4`.
 pub const UVec4 = extern struct {
     x: u32,
     y: u32,
@@ -102,8 +103,8 @@ pub const DVec3 = extern struct {
     z: f64,
 };
 
-/// A 4x4 matrix, sixteen doubles in `Mat44`'s column-major layout, always
-/// `f64` regardless of `-Ddouble_precision`: wire type for `PrimitiveType.dmat44`.
+/// A 4x4 matrix, sixteen doubles in `Mat44`'s column-major layout, always `f64`
+/// regardless of `-Ddouble_precision`: wire type for `PrimitiveType.dmat44`.
 pub const DMat44 = extern struct {
     m: [16]f64,
 };

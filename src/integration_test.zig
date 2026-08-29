@@ -536,12 +536,12 @@ test "one save/load pair's buffer is refused by another's, on the tag" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    // Four save/load pairs share one framing, each with its own magic
-    // tag: the fields behind it line up between pairs, so without it a
-    // scene buffer would clear a shape's header checks and hand Jolt a
-    // payload it has no business reading — a parse of the wrong thing,
-    // not a refusal. Asserted on the MESSAGE, not just `BadFormat`: the
-    // length/checksum checks also report `BadFormat`, which would not generalise as a reason to refuse.
+    // Four save/load pairs share one framing, each with its own magic tag: the
+    // fields behind it line up between pairs, so without it a scene buffer
+    // would clear a shape's header checks and hand Jolt a payload it has no
+    // business reading — a parse of the wrong thing, not a refusal. Asserted on
+    // the MESSAGE, not just `BadFormat`: the length/checksum checks also report
+    // `BadFormat`, which would not generalise as a reason to refuse.
     const box = try zjolt.Shape.initBox(zjolt.vec3(0.25, 0.5, 0.75), .{});
     defer box.release();
 
@@ -1575,12 +1575,12 @@ fn containsBody(haystack: []const zjolt.BodyId, needle: zjolt.BodyId) bool {
 }
 
 test "a sweep starting inside a mesh reports a hit only when back faces count" {
-    // What the settings parameter is for. A mesh triangle met from the
-    // inside is a back face, and Jolt's default ignores those — so a
-    // sweep beginning inside geometry reports NOTHING, reading exactly
-    // like a clear placement, the opposite of one. The two casts below
-    // differ in one field, and that field is the whole answer. Both the
-    // system-level query and the per-shape one are checked, since they translate the same settings struct through separate code.
+    // What the settings parameter is for. A mesh triangle met from the inside
+    // is a back face, and Jolt's default ignores those, so a sweep beginning
+    // inside geometry reports NOTHING, reading exactly like a clear placement —
+    // the opposite of one. The two casts below differ in exactly one field —
+    // the whole answer. Both the system-level and per-shape queries are
+    // checked: each translates the same settings struct through separate code.
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
@@ -1747,12 +1747,12 @@ test "narrowing on every hit puts the hits in order, best last" {
         &narrowed,
     );
 
-    // Narrowing tells Jolt not to bother with anything worse than the
-    // hit it has just been given: every further hit is strictly nearer
-    // than the last, and uninteresting ones are never computed at all.
-    // The pruning effect mostly swallows the ordering one, worth
-    // knowing before reaching for this — the broad phase already walks
-    // roughly front to back, so this fixture's five unnarrowed hits become ONE narrowed.
+    // Narrowing tells Jolt not to bother with anything worse than the hit it
+    // has just been given: every further hit is strictly nearer than the last,
+    // and uninteresting ones are never computed at all. The pruning effect
+    // mostly swallows the ordering one, worth knowing before reaching for this
+    // — the broad phase already walks roughly front to back, so this fixture's
+    // five unnarrowed hits become ONE narrowed.
     try std.testing.expect(narrowed.count >= 1);
     try std.testing.expect(narrowed.count < Stack.total_hits);
     for (1..narrowed.count) |i| {

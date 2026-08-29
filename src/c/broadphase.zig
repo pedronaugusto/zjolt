@@ -1,9 +1,9 @@
 //! ZJolt C declarations for broad-phase layer queries.
 //!
-//! Mirrors `ffi/zjolt_broadphase.h` exactly: a declaration belongs to the module
-//! named after the header that declares it, so there is nothing to decide
-//! and nothing to drift. `src/c.zig` lists every one of these and is what
-//! the ABI cross-check and the misuse sweep walk.
+//! Mirrors `ffi/zjolt_broadphase.h` exactly: a declaration belongs to the
+//! module named after the header that declares it, so there is nothing to
+//! decide and nothing to drift. `src/c.zig` lists every one of these and is
+//! what the ABI cross-check and the misuse sweep walk.
 
 const std = @import("std");
 const core = @import("core.zig");

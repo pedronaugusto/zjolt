@@ -56,12 +56,12 @@ bool Satisfies(const JPH::Body *body, Require require) {
   return true;
 }
 
-/// Copies `bodies` into `out` and checks every one under a single
-/// multi-body read lock.
+/// Copies `bodies` into `out`, checking each under one multi-body read lock.
 ///
-/// `strict` decides what a failing id means: refuse the whole batch, or
-/// leave it out. Refuse where a partial result is worse than none (half a
-/// level inserted into the broad phase); drop where the caller's list is simply older than the world, e.g. ids collected last frame.
+/// `strict` sets what a failing id means: refuse the whole batch, or drop
+/// it. Refuse when a partial result is worse than none (half a level
+/// inserted into the broad phase); drop when the caller's list is simply
+/// older than the world, e.g. ids collected last frame.
 ZJoltResult GatherBodies(ZJoltPhysicsSystem *system, const ZJoltBodyId *bodies,
                          uint32_t count, Require require, bool strict,
                          JPH::Array<JPH::BodyID> &out) {
@@ -100,10 +100,10 @@ ZJoltResult GatherBodies(ZJoltPhysicsSystem *system, const ZJoltBodyId *bodies,
 
 /// Refuses a batch that names the same body twice.
 ///
-/// Jolt would not catch it: AddBodiesPrepare checks every id against the
-/// broad phase BEFORE inserting any, so both copies pass, and
-/// AddBodiesFinalize inserts the body into the tree twice. Sorting first
-/// makes duplicates adjacent — costing nothing, since Jolt sorts the array by broad-phase layer immediately afterwards anyway.
+/// Jolt does not catch it: AddBodiesPrepare checks each id against the
+/// broad phase before inserting any, so both copies pass, and
+/// AddBodiesFinalize inserts the body twice. Sorting first makes
+/// duplicates adjacent for free — Jolt sorts by broad-phase layer anyway.
 ZJoltResult RefuseDuplicates(JPH::Array<JPH::BodyID> &ids) {
   if (ids.size() < 2) return ZJOLT_RESULT_OK;
   JPH::QuickSort(ids.begin(), ids.end());

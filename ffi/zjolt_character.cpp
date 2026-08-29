@@ -116,8 +116,10 @@ ZJoltResult OwnTransformedShape(const JPH::TransformedShape &ts,
 
 /// Collects zjoltCharacterCheckCollision's hits.
 ///
-/// Two of its three jobs arrive through the base class, not AddHit, neither optional: Jolt sets CONTEXT to the TransformedShape a body hit came from (the only place to read its material, valid only for the call).
-/// USER DATA becomes the other CharacterVirtual for a character-vs-character hit — nothing else distinguishes the two, since a virtual character has no body id.
+/// Two facts arrive via the base class, not AddHit: CONTEXT is the hit's
+/// TransformedShape, the only place to read material, valid only for the call.
+/// USER DATA is the other CharacterVirtual, the only way to tell a
+/// character-vs-character hit apart, since virtual characters carry no body id.
 class CharacterHitCollector final : public JPH::CollideShapeCollector {
  public:
   CharacterHitCollector(ZJoltCharacterCollisionHit *out, uint32_t capacity)
@@ -674,12 +676,12 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
         static_cast<JPH::ObjectLayer>(desc->inner_body_layer);
   }
 
-  // The supporting volume is a plane through the character; a contact
-  // above it cannot count as ground. Jolt's default is effectively
-  // "everything supports", reporting a pressed-against wall as ground.
-  // Placed one inner radius above the shape's lowest point (a capsule/
-  // sphere's standing radius) rather than AT the lowest point: a
-  // floor-level plane discards a ramp's side-of-cap contact and reports unsupported on ground plainly stood on.
+  // The supporting volume is a plane through the character; a contact above it
+  // cannot count as ground. Jolt's default is effectively "everything
+  // supports", reporting a pressed-against wall as ground. Placed one inner
+  // radius above the shape's lowest point (a capsule/ sphere's standing radius)
+  // rather than AT the lowest point: a floor-level plane discards a ramp's
+  // side-of-cap contact and reports unsupported on ground plainly stood on.
   settings.mSupportingVolume = zjolt::SupportingVolumeFor(
       settings.mShape, settings.mUp);
 
@@ -929,12 +931,12 @@ ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
       adapters.object_layer, adapters.body, adapters.shape,
       *character->owner->temp_allocator);
 
-  // A refused shape change is a normal outcome — standing up under a
-  // low ceiling — reported through out_changed, not as an error.
+  // A refused shape change is a normal outcome (e.g. standing under a low
+  // ceiling), reported through out_changed, not as an error.
   //
-  // The inner body, when there is one, has to follow: Jolt's
-  // SetInnerBodyShape does not check for its absence first, and would
-  // reach BodyInterface::SetShape with an invalid id — harmless, but relying on that is not the same as not doing it.
+  // The inner body, if any, must follow: SetInnerBodyShape does not check
+  // for its absence and would reach BodyInterface::SetShape with an invalid
+  // id — harmless, but not something to rely on.
   if (changed && !impl->GetInnerBodyID().IsInvalid())
     impl->SetInnerBodyShape(zjolt::ToJolt(shape));
   if (out_changed != nullptr) *out_changed = changed;
@@ -1484,12 +1486,12 @@ ZJoltResult zjoltRigidCharacterCreate(ZJoltPhysicsSystem *system,
                            "a character needs a shape");
   }
 
-  // Character's constructor creates its rigid body eagerly with no way
-  // to report failure: a NULL CreateBody just leaves the body id at its
-  // invalid default. Destroying a Character in that state is not safe
-  // either — ~Character unconditionally calls DestroyBody(mBodyID), an
-  // out-of-bounds access on an invalid id, not a no-op. Checking room
-  // for one more body up front, and never destroying one that came out without it, binds this safely without touching Jolt.
+  // Character's constructor creates its rigid body eagerly with no way to
+  // report failure: a NULL CreateBody just leaves the body id invalid.
+  // Destroying a Character in that state is unsafe too — ~Character
+  // unconditionally calls DestroyBody(mBodyID), an out-of-bounds access on
+  // an invalid id, not a no-op. Room for one more body is checked up front,
+  // and one without it is never destroyed — safe without touching Jolt.
   if (system->system.GetNumBodies() >= system->system.GetMaxBodies()) {
     return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
                            "the system is already holding max_bodies bodies");

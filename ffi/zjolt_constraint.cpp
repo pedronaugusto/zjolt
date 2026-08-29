@@ -117,8 +117,8 @@ ZJoltResult CheckFloat(float v, const char *what) {
 /// An axis a constraint frame is built from.
 ///
 /// Jolt does not assert on a degenerate one — it feeds `Mat44::GetQuaternion`,
-/// producing a non-rotation quaternion and a joint whose frame is not a
-/// frame. Worse than an abort, so checked here: finite, and long enough to normalise.
+/// producing a non-rotation quaternion and a joint whose frame is not a frame.
+/// Worse than an abort, so checked here: finite, and long enough to normalise.
 ZJoltResult CheckAxis(const ZJoltVec3 &v, const char *what) {
   if (!IsFinite(v)) return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, what);
   const float length_sq = v.x * v.x + v.y * v.y + v.z * v.z;
@@ -129,9 +129,10 @@ ZJoltResult CheckAxis(const ZJoltVec3 &v, const char *what) {
 
 /// Two axes that have to span a plane.
 ///
-/// Tolerant rather than exact: a caller's axes have usually been
-/// through a transform, so an exact right angle is not demanded — only
-/// a pair so close to parallel that their cross product carries no direction, the case Jolt cannot recover from.
+/// Tolerant rather than exact: a caller's axes have usually been through a
+/// transform, so an exact right angle is not demanded — only a pair so close to
+/// parallel that their cross product carries no direction, the case Jolt cannot
+/// recover from.
 ZJoltResult CheckPerpendicular(const ZJoltVec3 &a, const ZJoltVec3 &b,
                                const char *what) {
   const JPH::Vec3 ja = zjolt::ToJolt(a).NormalizedOr(JPH::Vec3::sZero());
@@ -278,9 +279,10 @@ ZJoltConstraintSubType ToCSubType(JPH::EConstraintSubType sub_type) {
 
 /// A spring the constraint parts will accept.
 ///
-/// `MotorSettings::IsValid` requires non-negative frequency and
-/// damping, so a spring is validated wherever it crosses, not only when
-/// attached to a motor — the same struct also drives limit springs, which have no IsValid of their own but produce the same nonsense from a negative stiffness.
+/// `MotorSettings::IsValid` requires non-negative frequency and damping, so a
+/// spring is validated wherever it crosses, not only when attached to a motor —
+/// the same struct also drives limit springs, which have no IsValid of their
+/// own but produce the same nonsense from a negative stiffness.
 ZJoltResult ToJoltSpring(const ZJoltSpringSettings &spring,
                          JPH::SpringSettings *out) {
   if (!IsFinite(spring.frequency_or_stiffness) || !IsFinite(spring.damping)) {
@@ -336,10 +338,10 @@ ZJoltSpringSettings ToCSpring(const JPH::SpringSettings &spring) {
 
 /// A motor that `SetMotorState` will accept.
 ///
-/// Every joint with a motor asserts `mMotorSettings.IsValid()` before
-/// switching one on, so an invalid descriptor otherwise fails several
-/// frames later, not here. Fields are assigned rather than passed to a
-/// MotorSettings constructor: those assert IsValid() themselves, so building one to inspect would abort first.
+/// Every joint with a motor asserts `mMotorSettings.IsValid()` before switching
+/// one on, so an invalid descriptor fails several frames later, not here.
+/// Fields are assigned directly, not passed to a MotorSettings constructor:
+/// that asserts IsValid() itself, so building one to inspect would abort.
 ZJoltResult ToJoltMotor(const ZJoltMotorSettings &motor,
                         JPH::MotorSettings *out) {
   const ZJoltResult spring = ToJoltSpring(motor.spring, &out->mSpringSettings);
@@ -499,12 +501,12 @@ ZJoltResult Narrow(const ZJoltConstraint *constraint,
   return ZJOLT_RESULT_OK;
 }
 
-/// The handle as a TwoBodyConstraint, which carries the two bodies and
-/// the constraint frame.
+/// The handle as a TwoBodyConstraint: the two bodies and the constraint frame.
 ///
 /// Every kind this ABI can create is one, so this cannot fail for a
 /// zjoltConstraintCreate* handle — but it is checked, not assumed:
-/// zjoltVehicleConstraintAsConstraint hands back a JPH::VehicleConstraint, which derives from Constraint DIRECTLY, not a TwoBodyConstraint.
+/// zjoltVehicleConstraintAsConstraint hands back a JPH::VehicleConstraint,
+/// which derives from Constraint DIRECTLY, not a TwoBodyConstraint.
 ZJoltResult NarrowTwoBody(const ZJoltConstraint *constraint,
                           const JPH::TwoBodyConstraint **out) {
   if (constraint == nullptr) {
@@ -535,9 +537,10 @@ bool IsInSystem(const ZJoltPhysicsSystem *system,
 
 /// Whether both of a constraint's bodies live in `system`.
 ///
-/// Adding one whose bodies belong to a different system hands Jolt's
-/// island builder body indices from a body manager it is not looking at
-/// — out-of-bounds, silent without asserts. Compares the POINTER the id resolves to here against the one the constraint holds, for an exact answer.
+/// Adding one whose bodies belong to a different system hands Jolt's island
+/// builder body indices from a body manager it is not looking at —
+/// out-of-bounds, silent without asserts. Compares the POINTER the id resolves
+/// to here against the one the constraint holds, for an exact answer.
 bool BodiesBelongTo(const ZJoltPhysicsSystem *system,
                     const JPH::TwoBodyConstraint *constraint) {
   const JPH::Body *bodies[2] = {constraint->GetBody1(), constraint->GetBody2()};
@@ -555,10 +558,10 @@ bool BodiesBelongTo(const ZJoltPhysicsSystem *system,
 
 /// A six-DOF axis, checked to be one.
 ///
-/// SixDOFConstraint indexes `mLimitMin`/`mMaxFriction`/`mMotorSettings`
-/// with the enumerator directly, no bounds check of its own — an
-/// out-of-range value is an out-of-bounds access, not an assertion.
-/// `translations_only` covers soft limits (translation axes only). Takes the raw integer, like the conversions above (zjolt::RawEnum).
+/// SixDOFConstraint indexes `mLimitMin`/`mMaxFriction`/`mMotorSettings` by
+/// enumerator, unchecked: out-of-range is an out-of-bounds access, not an
+/// assertion. `translations_only` limits to translation-axis soft limits. Takes
+/// the raw integer, like the conversions above (zjolt::RawEnum).
 ZJoltResult CheckSixDofAxis(int32_t axis, bool translations_only,
                             JPH::SixDOFConstraintSettings::EAxis *out) {
   const int value = axis;
@@ -579,9 +582,10 @@ ZJoltResult CheckSixDofAxis(int32_t axis, bool translations_only,
 
 /// One of the auxiliary constraints a gear or rack and pinion is told about.
 ///
-/// NULL means "none": both joints fall back to matching velocities
-/// only. A constraint of the wrong kind is refused here, since
-/// SolvePositionConstraint's own cast asserts `false, "Unsupported"` during a step, not at the call that was wrong.
+/// NULL means "none": both joints fall back to matching velocities only. A
+/// constraint of the wrong kind is refused here, since
+/// SolvePositionConstraint's own cast asserts `false, "Unsupported"` during a
+/// step, not at the call that was wrong.
 ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
                            JPH::EConstraintSubType expected, const char *what,
                            const JPH::Constraint **out) {

@@ -151,10 +151,10 @@ ZJOLT_API ZJoltResult zjoltSkeletonPoseGetJoints(const ZJoltSkeletonPose *pose,
 
 /// Converts the per-joint LOCAL rotations/translations from
 /// zjoltSkeletonPoseSetJoints into the flattened form zjoltRagdollSetPose,
-/// GetPose and DriveToPoseUsingKinematics consume — call before any of them.
-///
-/// Requires the skeleton's joints to be correctly ordered
-/// (zjoltSkeletonAreJointsCorrectlyOrdered) and assigned; ZJOLT_RESULT_INVALID_ARGUMENT otherwise.
+/// GetPose, and DriveToPoseUsingKinematics consume — call before any of
+/// them. Requires the skeleton's joints correctly ordered
+/// (zjoltSkeletonAreJointsCorrectlyOrdered) and assigned;
+/// ZJOLT_RESULT_INVALID_ARGUMENT otherwise.
 ZJOLT_API ZJoltResult zjoltSkeletonPoseCalculateJointMatrices(
     ZJoltSkeletonPose *pose);
 
@@ -292,12 +292,12 @@ ZJOLT_API void zjoltSkeletonMapperRelease(const ZJoltSkeletonMapper *mapper);
 ZJOLT_API uint32_t zjoltSkeletonMapperGetRefCount(
     const ZJoltSkeletonMapper *mapper);
 
-/// Works out the correspondence between the two skeletons from their
-/// neutral poses; every other call below depends on this. `neutral1` is
-/// LOW-detail (simulated), `neutral2` HIGH-detail (Jolt requires that
-/// order), and both poses must be in MODEL space (unchecked — wrong space
-/// maps to nonsense, not an error). ZJOLT_RESULT_INVALID_ARGUMENT if
-/// already initialised, unassigned, misordered, or `neutral1` outsizes `neutral2`.
+/// Works out the correspondence between the two skeletons from their neutral
+/// poses; every other call below depends on this. `neutral1` is LOW-detail
+/// (simulated), `neutral2` HIGH-detail (Jolt requires that order), and both
+/// poses must be in MODEL space (unchecked — wrong space maps to nonsense, not
+/// an error). ZJOLT_RESULT_INVALID_ARGUMENT if already initialised, unassigned,
+/// misordered, or `neutral1` outsizes `neutral2`.
 ZJOLT_API ZJoltResult zjoltSkeletonMapperInitialize(
     ZJoltSkeletonMapper *mapper, const ZJoltSkeletonPose *neutral1,
     const ZJoltSkeletonPose *neutral2,

@@ -654,7 +654,8 @@ test "the convex-support adapters reproduce their Jolt originals' support point"
 
     const inner = Sphere{ .center = zjolt.vec3(0, 0, 0), .radius = 1 };
 
-    // Translated by (10, 0, 0): support in +X moves from (1, 0, 0) to (11, 0, 0).
+    // Translated by (10, 0, 0): support in +X moves from (1, 0, 0) to (11, 0,
+    // 0).
     var transform = zjolt.mat44_identity;
     transform.m[12] = 10;
     const transformed = try geometry.ConvexSupportAdapter.initTransformed(transform, sphere(&inner));

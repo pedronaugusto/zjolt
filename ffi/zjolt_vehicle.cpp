@@ -87,12 +87,12 @@ struct ZJoltVehicleConstraint {
   JPH::Ref<JPH::VehicleConstraint> impl;
   ZJoltPhysicsSystem *owner;
 
-  /// Which VehicleController subclass `impl->GetController()` actually
-  /// is — VehicleController has no runtime type tag (Jolt builds
-  /// without RTTI), so this makes the downcast in WheeledController/
-  /// TrackedController/MotorcycleControllerOf sound, not a guess.
-  ///
-  /// Kept as the raw integer, not the enum type: a host-written descriptor value this ABI never promised names an enumerator. See zjolt::RawEnum in zjolt_internal.h.
+  /// Which VehicleController subclass `impl->GetController()` actually is —
+  /// VehicleController has no runtime type tag (Jolt builds without RTTI),
+  /// so this makes the downcast in WheeledController/TrackedController/
+  /// MotorcycleControllerOf sound, not a guess. Kept as the raw integer,
+  /// not the enum type: a host-written descriptor value this ABI never
+  /// promised names an enumerator. See zjolt::RawEnum in zjolt_internal.h.
   int32_t controller_kind;
   int32_t collision_tester_kind;
 
@@ -292,7 +292,8 @@ void ApplyBaseWheelSettings(JPH::WheelSettings *w, const ZJoltVehicleWheelDesc &
   w->mPosition = zjolt::ToJolt(d.position);
   w->mSuspensionForcePoint = zjolt::ToJolt(d.suspension_force_point);
   w->mEnableSuspensionForcePoint = d.enable_suspension_force_point;
-  // Wheel.cpp asserts each of these four is normalized (recon: Wheel.cpp:70-73).
+  // Wheel.cpp asserts each of these four is normalized (recon:
+  // Wheel.cpp:70-73).
   w->mSuspensionDirection =
       zjolt::ToJolt(d.suspension_direction).NormalizedOr(JPH::Vec3(0, -1, 0));
   w->mSteeringAxis = zjolt::ToJolt(d.steering_axis).NormalizedOr(JPH::Vec3::sAxisY());
@@ -591,12 +592,12 @@ JPH::VehicleCollisionTester *BuildCollisionTester(
   }
 }
 
-/// Forwards VehicleCollisionTester's two pure virtuals to a caller
-/// -supplied ZJoltVehicleCollisionTesterCallback. See the header
-/// comment on that struct for why neither is handed a
-/// JPH::PhysicsSystem: both run from inside VehicleConstraint::OnStep,
-/// while PhysicsSystem::Update holds the body manager locked for the
-/// step, same as Jolt's own three testers using NoLock interfaces. A body id resolves back to `Body *` the same lock-free way OnStep itself uses to revalidate its cached contact.
+/// Forwards VehicleCollisionTester's two pure virtuals to a caller-supplied
+/// ZJoltVehicleCollisionTesterCallback. The struct's header covers why neither
+/// takes a JPH::PhysicsSystem: both run inside VehicleConstraint::OnStep, while
+/// PhysicsSystem::Update holds the body manager locked, like Jolt's three
+/// NoLock testers. A body id resolves to `Body *` the same lock-free way OnStep
+/// uses to revalidate its cached contact.
 class VehicleCollisionTesterCallbackAdapter final
     : public JPH::VehicleCollisionTester {
  public:

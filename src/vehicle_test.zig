@@ -47,10 +47,11 @@ fn differential(left_wheel: i32, right_wheel: i32, engine_torque_ratio: f32) zjo
 
 fn collisionTester() zjolt.VehicleCollisionTesterDesc {
     var tester = zjolt.defaultVehicleCollisionTesterDesc();
-    // The default (0) is Layers.static, which a wheel ray can never hit:
-    // the Layers map only lets a static-layer query hit the moving
-    // broad-phase layer (see integration_test.zig). Layers.moving
-    // collides with everything, including the static floor, which is what the wheels actually need to test against.
+    // The default (0) is Layers.static, which a wheel ray can never hit: the
+    // Layers map only lets a static-layer query hit the moving broad-phase
+    // layer (see integration_test.zig). Layers.moving collides with everything,
+    // including the static floor, which is what the wheels actually need to
+    // test against.
     tester.object_layer = Layers.moving;
     return tester;
 }
@@ -154,12 +155,12 @@ fn buildWheeledCarWithBars(
     return .{ .world = world, .chassis_shape = chassis_shape, .chassis = chassis, .vehicle = vehicle };
 }
 
-/// Jolt's default (`mNumVelocitySteps = 10`) is tuned for ordinary
-/// rigid-body contacts; a vehicle's wheel is a much stiffer coupling
-/// (tiny inertia next to the chassis it drags), and ten iterations
-/// under-converge — a locked, sliding wheel under hard braking stops
-/// decelerating the chassis correctly well before grip actually runs
-/// out. Thirty is enough for one small car; measure for many vehicles on screen.
+/// Jolt's default (`mNumVelocitySteps = 10`) is tuned for ordinary rigid-body
+/// contacts; a vehicle's wheel is a much stiffer coupling (tiny inertia next to
+/// the chassis it drags), and ten iterations under-converge — a locked, sliding
+/// wheel under hard braking stops decelerating the chassis correctly well
+/// before grip actually runs out. Thirty is enough for one small car; measure
+/// for many vehicles on screen.
 fn raiseVelocitySteps(system: zjolt.PhysicsSystem) void {
     var settings = system.getSettings();
     settings.num_velocity_steps = 30;
@@ -419,11 +420,11 @@ test "a tracked vehicle curves when its two tracks are driven at different rates
     // It actually went somewhere, rather than spinning its tracks in place.
     try std.testing.expect(@sqrt(dx * dx + dz * dz) > 0.5);
 
-    // A vehicle driven straight off +Z shows essentially no sideways
-    // travel; one curving under differential track rates displaces
-    // significantly in X. Checked on DISPLACEMENT, not the final heading
-    // angle: over a long curving run heading can wrap back around past
-    // "facing +Z again" while still turning, which a one-shot angle check would alias back down to near zero.
+    // A vehicle driven straight off +Z shows essentially no sideways travel;
+    // one curving under differential track rates displaces significantly in X.
+    // Checked on DISPLACEMENT, not the final heading angle: over a long curving
+    // run heading can wrap back around past "facing +Z again" while still
+    // turning, which a one-shot angle check would alias back down to near zero.
     try std.testing.expect(@abs(dx) > 1.5);
 }
 
@@ -878,7 +879,8 @@ test "getEngineDesc and getTransmissionDesc round-trip the rig's construction-ti
     for (expected_forward, forward[0..5]) |e, a| try std.testing.expectApproxEqAbs(e, a, 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, -2.90), reverse[0], 1e-4);
 
-    // A buffer shorter than the true count is refused rather than silently truncated.
+    // A buffer shorter than the true count is refused rather than silently
+    // truncated.
     var too_small: [1]f32 = undefined;
     try std.testing.expectError(error.BufferTooSmall, car.vehicle.gearRatios(&too_small, &reverse));
 }
@@ -1174,12 +1176,12 @@ test "a track's inertia, damping, brake torque and differential ratio are live, 
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    // High enough that no wheel ever reaches the ground in this test.
-    // Grounded, the longitudinal solve pulls a track's angular velocity
-    // toward rolling contact whenever it is not the one being braked
-    // (TrackedVehicleController.cpp:391-407) — real and correct, but it
-    // would swamp the difference isolated here. See "retuning a
-    // differential's engine torque ratio..." for the wheeled equivalent, via overrideGravity instead of height.
+    // High enough that no wheel touches ground in this test. Grounded, the
+    // longitudinal solve pulls a track's angular velocity toward rolling
+    // contact unless braked (TrackedVehicleController.cpp:391-407) — real and
+    // correct, but it would swamp the difference isolated here. See "retuning a
+    // differential's engine torque ratio..." for the wheeled equivalent, via
+    // overrideGravity instead of height.
     var tank = try buildTrackedCar(50.0);
     defer tank.deinit();
 
@@ -1203,12 +1205,12 @@ test "a track's inertia, damping, brake torque and differential ratio are live, 
     // ...and .right, never touched, is still what it was built with.
     try std.testing.expectApproxEqAbs(@as(f32, 15000), tank.vehicle.track(.right).?.max_brake_torque, 1e-1);
 
-    // Prove it is live, not just readable: seed the two tracks spinning
-    // at different rates, brake both fully, and step once. The right
-    // track's brakes are as strong as when built and fully lock it this
-    // step (TrackedVehicleController.cpp:293-312: brake_torque =
-    // mBrakeInput * mMaxBrakeTorque, 15000 stops it outright here). The
-    // left track's are gone, so only damping touches it, far too slow to remove the seeded speed in one step.
+    // Prove it is live, not just readable: seed both tracks spinning at
+    // different rates, brake both fully, step once. The right track's brakes,
+    // still 15000 as built, fully lock it this step
+    // (TrackedVehicleController.cpp:293-312). The left track's are gone, so
+    // only damping touches it — far too slow to remove the seeded speed in one
+    // step.
     try tank.vehicle.setTrackedDriverInput(0, 1.0, 1.0, 1.0);
     try tank.vehicle.setTrackAngularVelocity(.left, 4.0);
     try tank.vehicle.setTrackAngularVelocity(.right, 4.0);

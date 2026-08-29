@@ -340,12 +340,12 @@ pub const Shape = struct {
         material: ?PhysicsMaterial = null,
     };
 
-    /// A half space: the negative side of `dot(x, normal) + constant = 0`
-    /// is solid. `normal` must be unit length; a non-unit one is
-    /// `error.InvalidArgument` rather than quietly normalised (a rescaled
-    /// normal would move the surface from where `constant` says it is).
+    /// A half space: the negative side of `dot(x, normal) + constant = 0` is
+    /// solid. `normal` must be unit length; else `error.InvalidArgument`, not
+    /// silent normalisation (that would shift the surface `constant` sets).
     ///
-    /// Static or kinematic only — a half space has no volume for dynamic-body mass.
+    /// Static or kinematic only — a half space has no volume for dynamic-body
+    /// mass.
     pub fn initPlane(normal: math.Vec3, constant: f32, opts: PlaneOptions) err.Error!Shape {
         var handle: *c.Shape = undefined;
         try err.check(c.zjoltShapeCreatePlane(
@@ -1411,12 +1411,12 @@ pub const Shape = struct {
         ));
     }
 
-    /// Repaints height-field samples in place — craters, terrain
-    /// deformation, without rebuilding the shape. Same bounds as
-    /// `heightFieldHeights`; values clamp into
-    /// [`heightFieldMinHeightValue`, `heightFieldMaxHeightValue`].
+    /// Repaints height-field samples in place — craters, terrain deformation,
+    /// without a rebuild. Same bounds as `heightFieldHeights`; values
+    /// clamp into [`heightFieldMinHeightValue`, `heightFieldMaxHeightValue`].
     ///
-    /// NOT thread safe against a query or step; needs `notifyShapeChanged` after.
+    /// NOT thread safe against a query or step; needs `notifyShapeChanged`
+    /// after.
     pub fn heightFieldSetHeights(
         self: Shape,
         x: u32,
