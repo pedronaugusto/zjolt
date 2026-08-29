@@ -1,37 +1,17 @@
 //! Soft bodies: cloth, rope, and jelly-like volumes simulated as a mesh of
 //! particles rather than driven by a rigid shape.
 //!
-//! Building one is two stages, same as Jolt's own:
+//! Two stages, same as Jolt's own: `SharedSettings` carries the topology
+//! (vertices, faces, constraints) and is reference counted — build once,
+//! stamp out many soft bodies from it; `createConstraints` derives edge,
+//! shear and bend constraints from the faces automatically. `create`/
+//! `createAndAdd` then place one instance in the world through
+//! `BodyInterface::CreateSoftBody`, NOT `PhysicsSystem.bodies().create` —
+//! but the resulting `BodyId` is ordinary afterward.
 //!
-//!   1. `SharedSettings` carries the topology — vertices, faces, and the
-//!      constraints that hold them together. It is reference counted and
-//!      shareable: build one cloth or one blob of jelly and stamp out many
-//!      soft bodies from it. `createConstraints` derives edge, shear and
-//!      bend constraints from the faces automatically, rather than
-//!      requiring every edge spelled out by hand.
-//!   2. `create`/`createAndAdd` place one instance of that topology in the
-//!      world — NOT `PhysicsSystem.bodies().create`. A soft body has no
-//!      shape, no motion type, and none of a rigid body's mass overrides;
-//!      its "shape" is its own simulated vertices, and Jolt creates it
-//!      through `BodyInterface::CreateSoftBody`, a distinct entry point
-//!      from `CreateBody`. The `BodyId` that comes back is ordinary,
-//!      though: add it, remove it, put it in a collision group, through
-//!      `PhysicsSystem.bodies()` exactly like a rigid body.
-//!
-//! Per step, a soft body's vertices move on their own — there is no single
-//! transform to read back the way a rigid body has one. `getVertexStates`
-//! is the bulk read-back for that: one lock, one crossing, every vertex.
-//!
-//! A body that already exists is driven through the calls below
-//! `getVertexStates`: the live properties Jolt keeps on its
-//! `SoftBodyMotionProperties` (iteration count, pressure, vertex radius, the
-//! skin flags), per-vertex velocity and inverse mass, and `skinVertices`,
-//! which is what a host calls each frame to make a cloth follow an animated
-//! skeleton.
-//!
-//! There is no `PhysicsSystem.softBodies()` accessor, unlike `.bodies()` or
-//! `.broadPhase()`: every function below takes the `PhysicsSystem` it
-//! operates on directly instead.
+//! Per step, vertices move on their own; `getVertexStates` is the bulk
+//! read-back. There is no `PhysicsSystem.softBodies()` accessor: every
+//! function below takes the `PhysicsSystem` it operates on directly.
 
 const std = @import("std");
 const c = @import("c/softbody.zig");
@@ -40,6 +20,7 @@ const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const group_mod = @import("group.zig");
 const material_mod = @import("material.zig");
+const shape_mod = @import("shape.zig");
 const system_mod = @import("system.zig");
 
 pub const BendType = c.SoftBodyBendType;
@@ -57,6 +38,7 @@ pub const SkinWeight = c.SoftBodySkinWeight;
 pub const Skinned = c.SoftBodySkinned;
 pub const VertexAttributes = c.SoftBodyVertexAttributes;
 pub const VertexState = c.SoftBodyVertexState;
+pub const CollideSoftBodyVertexIterator = c.CollideSoftBodyVertexIterator;
 
 /// Jolt's own defaults for `VertexAttributes`, read out of a
 /// default-constructed one rather than transcribed.
@@ -94,14 +76,12 @@ pub const SharedSettings = struct {
         return c.zjoltSoftBodySharedSettingsGetRefCount(self.handle);
     }
 
-    /// A deep copy, with a reference count of one, sharing nothing with the
-    /// original but its material references.
+    /// A deep copy, reference count one, sharing nothing but material
+    /// references. The only way to vary a finished topology — every other
+    /// call here appends, with no remove and no reset.
     ///
-    /// This is the only way to vary a finished topology: every other call
-    /// here appends, and there is no remove and no reset. The copy inherits
-    /// the original's optimisation state, so a clone of something already
-    /// `optimize`d is optimised too — and must be optimised again if you add
-    /// to it, exactly as the original would.
+    /// Inherits the original's optimisation state; re-`optimize` after
+    /// adding to an already-optimised clone, same as the original needs.
     pub fn clone(self: SharedSettings) err.Error!SharedSettings {
         var handle: *c.SoftBodySharedSettings = undefined;
         try err.check(c.zjoltSoftBodySharedSettingsClone(self.handle, &handle));
@@ -109,23 +89,11 @@ pub const SharedSettings = struct {
     }
 
     /// Replaces the material list `Face.material_index` indexes, taking a
-    /// reference on each.
+    /// reference on each. `allocator` is used only for the call's duration.
     ///
-    /// A soft body's materials are read by QUERIES, not by its solver: they
-    /// are what `Shape.material` answers with for a hit against this body, so
-    /// this is how "that triangle of the sail is canvas and this one is rope"
-    /// survives a ray cast. Friction and restitution are not taken from them
-    /// — those are per-body, on `Desc`.
-    ///
-    /// An empty list is `error.InvalidArgument` rather than a clear: Jolt
-    /// indexes this with every face's `material_index` unguarded, so an empty
-    /// list is an out-of-bounds read for every face already added. Pass
-    /// `PhysicsMaterial.default()` for a slot with nothing of its own. A face
-    /// already added whose index would fall past the new list is refused too,
-    /// and nothing is replaced.
-    ///
-    /// The allocator is used only for the duration of the call, to lay the
-    /// materials out as the array of pointers the C side takes.
+    /// An empty list is `error.InvalidArgument` (Jolt indexes this
+    /// unguarded). Pass `PhysicsMaterial.default()` for an unused slot —
+    /// an existing face indexing past the new list refuses the whole call.
     pub fn setMaterials(
         self: SharedSettings,
         allocator: std.mem.Allocator,
@@ -152,13 +120,11 @@ pub const SharedSettings = struct {
         return count;
     }
 
-    /// The material list, in the order `Face.material_index` indexes it. The
-    /// returned slice belongs to the caller.
-    ///
-    /// The materials themselves are BORROWED from the settings and live
-    /// exactly as long as they do; `addRef` one to outlive them. Settings
-    /// that never had `setMaterials` called report exactly one material,
-    /// Jolt's shared default.
+    /// The material list, in the order `Face.material_index` indexes it.
+    /// The returned slice belongs to the caller; the materials themselves
+    /// are BORROWED from the settings and live exactly as long — `addRef`
+    /// one to outlive them. Settings that never had `setMaterials` called
+    /// report exactly one material, Jolt's shared default.
     pub fn getMaterials(
         self: SharedSettings,
         allocator: std.mem.Allocator,
@@ -228,18 +194,12 @@ pub const SharedSettings = struct {
         ));
     }
 
-    /// Appends Cosserat rods — edges that also carry an ORIENTATION, which
-    /// is the whole reason to reach for one. `getRodStates` is where that
-    /// orientation comes back out, to place a leaf or a cable on the rod.
-    ///
-    /// Fails without adding any of them if one connects a vertex to itself,
-    /// or names a vertex index past the vertices added so far. A rod's index,
-    /// for `addRodBendTwistConstraints`, is its position across every call
-    /// made so far.
-    ///
-    /// Rods do not work until `calculateRodProperties` has run — unlike
-    /// edges, where `calculateEdgeLengths` is a refinement rather than a
-    /// requirement.
+    /// Appends Cosserat rods — edges that also carry an ORIENTATION;
+    /// `getRodStates` reads it back to place a leaf or cable on the rod.
+    /// Fails, adding none, if one connects a vertex to itself or names a
+    /// vertex index past those added so far. A rod's index (for
+    /// `addRodBendTwistConstraints`) is its position across all calls so far.
+    /// Inert until `calculateRodProperties` runs — required, not optional.
     pub fn addRodStretchShearConstraints(self: SharedSettings, rods: []const RodStretchShear) err.Error!void {
         try err.check(c.zjoltSoftBodySharedSettingsAddRodStretchShearConstraints(
             self.handle,
@@ -248,13 +208,11 @@ pub const SharedSettings = struct {
         ));
     }
 
-    /// Appends rod bend-twist constraints, which limit how far two rods may
-    /// bend or twist relative to each other. A rod with none of these is free
-    /// to spin about its own axis at constant velocity, so a chain of rods
-    /// wants one between each neighbouring pair.
-    ///
-    /// Fails without adding any of them if one names the same rod twice, or
-    /// names a rod index past the rods added so far.
+    /// Appends rod bend-twist constraints, limiting how far two rods may
+    /// bend or twist relative to each other — without one, a rod spins
+    /// freely about its own axis, so a chain wants one between each
+    /// neighbouring pair. Fails, adding none, if one names the same rod
+    /// twice or a rod index past those added so far.
     pub fn addRodBendTwistConstraints(self: SharedSettings, constraints: []const RodBendTwist) err.Error!void {
         try err.check(c.zjoltSoftBodySharedSettingsAddRodBendTwistConstraints(
             self.handle,
@@ -286,12 +244,11 @@ pub const SharedSettings = struct {
     }
 
     /// Builds edge, shear and bend constraints from the faces already
-    /// added, instead of listing every edge by hand, and calls
-    /// `calculateEdgeLengths` for you.
-    ///
-    /// `vertex_attributes` is indexed in parallel with the vertices added
-    /// so far; Jolt repeats its last element for any vertex beyond the
-    /// list, which is why the list must have at least one entry.
+    /// added instead of listing every edge by hand, and calls
+    /// `calculateEdgeLengths` for you. `vertex_attributes` is indexed in
+    /// parallel with the vertices added so far; Jolt repeats its last
+    /// element for any vertex beyond the list, so it must have at least
+    /// one entry.
     pub fn createConstraints(
         self: SharedSettings,
         vertex_attributes: []const VertexAttributes,
@@ -316,56 +273,31 @@ pub const SharedSettings = struct {
     }
 
     /// Measures every volume constraint's rest volume from its four
-    /// vertices' current positions.
-    ///
-    /// NOTHING calls this for you, unlike the edge equivalent:
-    /// `createConstraints` never authors a volume constraint, so every
-    /// tetrahedron added through `addVolumeConstraints` keeps Jolt's
-    /// placeholder rest volume of 1 until this runs, and the solver spends
-    /// every step forcing it to that size. A jelly that inflates or collapses
-    /// the moment it is created is this call missing.
-    ///
-    /// Four coplanar vertices get a rest volume of zero, which is legal and
-    /// means "keep it flat".
+    /// vertices' current positions. NOTHING calls this for you — unlike
+    /// `createConstraints`, which never authors a volume constraint, so a
+    /// tetrahedron keeps Jolt's placeholder rest volume of 1 until this
+    /// runs, inflating or collapsing on creation if missed. Four coplanar
+    /// vertices get a legal rest volume of zero ("keep it flat").
     pub fn calculateVolumeConstraintVolumes(self: SharedSettings) void {
         c.zjoltSoftBodySharedSettingsCalculateVolumeConstraintVolumes(self.handle);
     }
 
-    /// Derives every rod's length, inverse mass and rest orientation from the
-    /// vertices, and every bend-twist constraint's rest rotation from the
-    /// rods it joins. Run it once, after every rod and bend-twist constraint
-    /// is in place and before `optimize`.
-    ///
-    /// Not the optional convenience `calculateEdgeLengths` is: a body's rod
-    /// states are seeded from the rest orientation this computes, so rods
-    /// that never had it run start every simulation at a zero quaternion
-    /// rather than a rotation.
-    ///
-    /// It propagates one frame along a chain of rods, which is why it wants
-    /// the bend-twist constraints first — they are what say which rods are
-    /// neighbours — and why it may SWAP a rod's two vertices to point it the
-    /// same way as the rod before it.
-    ///
-    /// `error.InvalidArgument`, rather than Jolt's assert, for a rod whose
-    /// two vertices sit at the same position: it has no direction to build a
-    /// frame from and no length to divide by.
+    /// Derives every rod's length, inverse mass, rest orientation, and
+    /// each bend-twist constraint's rest rotation. Run once, after every
+    /// rod/bend-twist constraint is added and before `optimize` — REQUIRED,
+    /// not optional like `calculateEdgeLengths`: a skipped rod starts at a
+    /// zero quaternion. Add bend-twist constraints FIRST; it may SWAP a
+    /// rod's two vertices. `error.InvalidArgument` for coincident vertices.
     pub fn calculateRodProperties(self: SharedSettings) err.Error!void {
         try err.check(c.zjoltSoftBodySharedSettingsCalculateRodProperties(self.handle));
     }
 
-    /// Works out which faces meet at each skinned vertex, which is what
-    /// gives that vertex a normal — and the normal is the direction
-    /// `Skinned.back_stop_distance` is measured along.
-    ///
-    /// Neither `optimize` nor `createConstraints` does this. Settings that
-    /// never had it run still simulate; every skinned vertex simply has a
-    /// zero normal, so the back stop does nothing and only `max_distance`
-    /// still bites. Only a face whose three vertices are ALL skinned
-    /// contributes a normal.
-    ///
-    /// Refused rather than left to Jolt's assert: more than 255 fully
-    /// skinned faces meeting at one skinned vertex, which does not fit the
-    /// 8-bit count Jolt packs it into.
+    /// Works out which faces meet at each skinned vertex, giving it a
+    /// normal — the direction `Skinned.back_stop_distance` is measured
+    /// along. Neither `optimize` nor `createConstraints` does this;
+    /// skipped, every skinned vertex has a zero normal, so only
+    /// `max_distance` bites. Only a face with all three vertices skinned
+    /// contributes. `error.InvalidArgument` past 255 such faces at one vertex.
     pub fn calculateSkinnedConstraintNormals(self: SharedSettings) err.Error!void {
         try err.check(c.zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(self.handle));
     }
@@ -474,6 +406,47 @@ pub fn createAndAdd(
     return id;
 }
 
+/// As `create`, but the body takes `id` instead of the next one Jolt would
+/// assign — see `BodyInterface.createWithId`, which this mirrors exactly,
+/// `id` requirements included.
+pub fn createWithId(
+    system: system_mod.PhysicsSystem,
+    desc: Desc,
+    id: body_mod.BodyId,
+) err.Error!body_mod.BodyId {
+    const c_desc = desc.toC();
+    var out: body_mod.BodyId = body_mod.invalid_body_id;
+    try err.check(c.zjoltSoftBodyCreateWithId(system.handle, &c_desc, id, &out));
+    return out;
+}
+
+/// As `createWithId`, followed immediately by adding the body.
+pub fn createAndAddWithId(
+    system: system_mod.PhysicsSystem,
+    desc: Desc,
+    id: body_mod.BodyId,
+    activation: body_mod.Activation,
+) err.Error!body_mod.BodyId {
+    const c_desc = desc.toC();
+    var out: body_mod.BodyId = body_mod.invalid_body_id;
+    try err.check(c.zjoltSoftBodyCreateAndAddWithId(system.handle, &c_desc, id, activation, &out));
+    return out;
+}
+
+/// The shared topology a live soft body was built from — the reference
+/// `Desc.shared_settings` took at creation. Borrowed: not valid past the
+/// body's own destruction. `null` for a rigid body or a stale id
+/// (indistinguishable here; ask `BodyInterface.getBodyType` first).
+///
+/// Mutable though borrowed: mutating it reaches every OTHER body sharing this topology.
+pub fn getSharedSettings(
+    system: system_mod.PhysicsSystem,
+    body: body_mod.BodyId,
+) ?SharedSettings {
+    const handle = c.zjoltSoftBodyGetSharedSettings(system.handle, body) orelse return null;
+    return .{ .handle = @constCast(handle) };
+}
+
 //=============================================================================
 // Per-step read-back
 //=============================================================================
@@ -487,11 +460,9 @@ pub fn countVertexStates(system: system_mod.PhysicsSystem, body: body_mod.BodyId
 /// Reads every simulated vertex of one soft body into `buffer`, under a
 /// single lock. Size `buffer` with `countVertexStates` first.
 ///
-/// Both `position` and `velocity` of each state are relative to the soft
-/// body's CENTER OF MASS, not world space — the same frame
-/// `BodyInterface.getCenterOfMassPosition` and `.getRotation` report. Add
-/// the body's center-of-mass position, rotated by its rotation if the body
-/// has moved, to place a vertex in the world.
+/// `position`/`velocity` are relative to the body's CENTER OF MASS
+/// (`BodyInterface.getCenterOfMassPosition`/`.getRotation`), not world
+/// space — add that position, rotated, to place a vertex in the world.
 pub fn getVertexStates(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -511,13 +482,8 @@ pub fn getVertexStates(
 //=============================================================================
 // Live properties of one soft body
 //
-// The knobs Jolt keeps on a body's own `SoftBodyMotionProperties`, which a
-// host changes while the simulation runs. Each takes the system and the body
-// id and resolves those properties under a lock, exactly as `getVertexStates`
-// does — a body id naming nothing is `error.BodyNotFound`, and one naming a
-// RIGID body is `error.InvalidArgument` rather than a blind cast.
-//
-// None of these wake a sleeping body.
+// Each getter/setter resolves under a lock: `error.BodyNotFound` for a
+// stale id, `error.InvalidArgument` for a RIGID body. None wake a sleeping body.
 //=============================================================================
 
 /// Solver iterations this body runs per step. @see `Desc.num_iterations` for
@@ -593,10 +559,9 @@ pub fn setFacesDoubleSided(
 /// How far this body's vertices are held off the surface of whatever they
 /// touch. Negative is `error.InvalidArgument`.
 ///
-/// Jolt's own setter asserts on this, but on the value it is about to
-/// OVERWRITE rather than the one being set, so upstream notices a bad radius
-/// one call late — or never, if the caller sets it only once. The check here
-/// is on the incoming value.
+/// Jolt's own setter asserts on the value it is about to OVERWRITE, not
+/// the one being set — so upstream notices a bad radius one call late, or
+/// never. The check here is on the incoming value.
 pub fn getVertexRadius(system: system_mod.PhysicsSystem, body: body_mod.BodyId) err.Error!f32 {
     var out: f32 = 0;
     try err.check(c.zjoltSoftBodyGetVertexRadius(system.handle, body, &out));
@@ -614,15 +579,8 @@ pub fn setVertexRadius(
 //=============================================================================
 // One vertex at a time
 //
-// Velocity and inverse mass are the only two parts of a simulated vertex Jolt
-// sanctions writing while the body runs. There is deliberately no setter for a
-// position: writing one moves the vertex without moving the previous position
-// the solver integrates from, and the step that follows misses every collision
-// along the way.
-//
-// `index` is into the same array `getVertexStates` reads, in the same order,
-// and past the end is `error.InvalidArgument` rather than an out-of-bounds
-// read inside Jolt.
+// Only velocity and inverse mass are writable mid-simulation (a written
+// position skips the solver's sweep); index past count is `error.InvalidArgument`.
 //=============================================================================
 
 /// One vertex's velocity, relative to the body's CENTRE OF MASS — the frame
@@ -672,13 +630,10 @@ pub fn setVertexInvMass(
 }
 
 /// Recomputes the body's total mass and inertia from its vertices' current
-/// inverse masses and positions. Jolt does this once, at creation, and never
-/// again — so a body whose per-vertex inverse masses were changed keeps the
-/// mass it was born with until this runs.
-///
-/// A single vertex with an inverse mass of 0 gives the WHOLE body infinite
-/// mass and inertia. That is upstream's rule, and it is why pinning one corner
-/// of a cloth stops the body as a whole from responding to an impulse.
+/// inverse masses and positions. Jolt does this once, at creation, and
+/// never again — a body with changed per-vertex inverse masses keeps its
+/// birth mass until this runs. A single vertex with inverse mass 0 gives
+/// the WHOLE body infinite mass and inertia, stopping it responding to an impulse.
 pub fn calculateMassAndInertia(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -714,38 +669,16 @@ pub fn getLocalBounds(system: system_mod.PhysicsSystem, body: body_mod.BodyId) e
 //=============================================================================
 // Skinning to an animated skeleton
 //
-// A cloth that follows a character is not simulated out of nothing. Each frame
-// the host hands Jolt the skeleton's joint matrices; Jolt skins every vertex
-// carrying a `Skinned` constraint the way a renderer would, and the solver is
-// then allowed to pull the simulated vertex away from that skinned position by
-// at most `Skinned.max_distance`.
-//
-// The authoring half is on `SharedSettings` — `addInvBindMatrices`,
-// `addSkinnedConstraints`, `calculateSkinnedConstraintNormals`. This is the
-// per-frame half: animate the skeleton, call `skinVertices`, then step.
+// Each frame, hand Jolt updated joint matrices; it skins every `Skinned`
+// vertex, and the solver may pull it away by at most `Skinned.max_distance`.
 //=============================================================================
 
-/// Skins every vertex carrying a `Skinned` constraint to `joint_matrices`, and
-/// records the result for the solver to constrain against on the next step.
+/// Skins every vertex carrying a `Skinned` constraint to `joint_matrices`
+/// (indexed by `InvBind.joint_index`). Matrices must be RELATIVE TO THE
+/// BODY'S CENTRE-OF-MASS TRANSFORM, not world space — a world-space
+/// matrix is not detectably wrong, just silently offset.
 ///
-/// `joint_matrices` is indexed by `InvBind.joint_index`. Each matrix must be
-/// expressed RELATIVE TO THE BODY'S CENTRE-OF-MASS TRANSFORM, not in world
-/// space: take the world joint matrix and pre-multiply it by the inverse of
-/// `PhysicsSystem.bodies().getCenterOfMassTransform`. World-space matrices are
-/// not detectably wrong and nothing here fails — the cloth simply skins to
-/// wherever the body's centre of mass sits relative to the origin, which is
-/// the single most common way to get this call wrong.
-///
-/// `hard_skin_all` puts every skinned vertex exactly on its skinned position
-/// and zeroes its velocity, ignoring `max_distance` entirely. That is a reset,
-/// for the frame a character spawns or is teleported.
-///
-/// `error.InvalidArgument` rather than one of Jolt's asserts when an inverse
-/// bind matrix names a joint past `joint_matrices`, when a skin weight names
-/// an inverse bind matrix that was never added, or when the body's shared
-/// settings carry no skinned constraints at all — Jolt sizes the per-instance
-/// skinning state once, at creation, and only when there is at least one
-/// skinned constraint to size it for.
+/// `hard_skin_all` snaps every vertex to its skinned position, a reset for spawn/teleport.
 pub fn skinVertices(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -763,11 +696,10 @@ pub fn skinVertices(
 
 /// Whether the solver enforces this body's skin constraints at all.
 ///
-/// Switching it off does not stop `skinVertices` from doing its work: with the
-/// constraints off, that call hard-skins every vertex whose `max_distance` is
-/// 0 and leaves the rest to simulate freely. So this is the difference between
-/// "cloth that follows the character" and "cloth pinned at its kinematic
-/// vertices and otherwise loose".
+/// Off does not stop `skinVertices`: it still hard-skins any vertex whose
+/// `max_distance` is 0 and leaves the rest to simulate freely — the
+/// difference between "cloth that follows the character" and "cloth
+/// pinned at its kinematic vertices and otherwise loose".
 pub fn getEnableSkinConstraints(system: system_mod.PhysicsSystem, body: body_mod.BodyId) err.Error!bool {
     var out: bool = false;
     try err.check(c.zjoltSoftBodyGetEnableSkinConstraints(system.handle, body, &out));
@@ -805,9 +737,8 @@ pub fn setSkinnedMaxDistanceMultiplier(
 //=============================================================================
 // Rod state
 //
-// The read-back that makes rods worth having over edges: a rod carries an
-// orientation, and this is where a host collects it to place the geometry
-// riding on it.
+// The read-back that makes rods worth having over edges: where a host
+// collects a rod's orientation to place geometry riding on it.
 //=============================================================================
 
 pub fn countRodStates(system: system_mod.PhysicsSystem, body: body_mod.BodyId) err.Error!u32 {
@@ -816,20 +747,12 @@ pub fn countRodStates(system: system_mod.PhysicsSystem, body: body_mod.BodyId) e
     return count;
 }
 
-/// Reads every rod of one soft body into `buffer`, under a single lock. Size
-/// `buffer` with `countRodStates` first; a body whose settings carry no rods
-/// reports zero rather than failing.
-///
-/// `RodState.vertex` is how a caller recognises WHICH rod each entry is:
-/// `optimize` reorders rods, so the position in this array is not the order
-/// they were added in. Treat the pair as unordered — `calculateRodProperties`
-/// may have swapped the two while orienting a chain.
-///
-/// `rotation` and `angular_velocity` are both relative to the body's CENTRE
-/// OF MASS, the frame `VertexState` uses. And `angular_velocity` is only
-/// meaningful BETWEEN steps: Jolt overlays it on the rod's previous rotation
-/// for the duration of one, so reading it from inside a contact callback
-/// yields a quaternion's first three components rather than a velocity.
+/// Reads every rod into `buffer` under a single lock (size with
+/// `countRodStates`; no rods reports zero). `RodState.vertex` identifies
+/// WHICH rod each entry is — unordered, since `optimize` and
+/// `calculateRodProperties` may reorder or swap it. `rotation` and
+/// `angular_velocity` are CENTRE-OF-MASS relative, and `angular_velocity`
+/// is meaningful only BETWEEN steps, not inside a contact callback.
 pub fn getRodStates(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -850,17 +773,12 @@ pub fn getRodStates(
 // Hit read-back and manual update
 //=============================================================================
 
-/// Which face of `body` a sub-shape id names.
+/// Which face of `body` a sub-shape id names — turns a hit's `SubShapeId`
+/// into an index into the shared settings' face list, in the order
+/// `addFaces` built it (faces are never reordered, unlike constraints).
 ///
-/// Every hit against a soft body carries a `SubShapeId`, and this is what
-/// turns one into an index into the faces the host itself added — so "the
-/// arrow hit the flag" can become "the arrow hit triangle 412". The index is
-/// into the shared settings' face list in the order `addFaces` built it;
-/// unlike constraints, faces are never reordered.
-///
-/// `error.InvalidArgument`, rather than Jolt's assert, for an id that has
-/// bits left over once the face index is taken out of it — which is what an
-/// id belonging to a different body's shape looks like from here.
+/// `error.InvalidArgument`, not Jolt's assert, for an id with bits left
+/// over once the face index is extracted — an id from a different body's shape.
 pub fn getFaceIndex(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -872,23 +790,11 @@ pub fn getFaceIndex(
 }
 
 /// Runs one soft-body update immediately, on the calling thread, without
-/// going through `PhysicsSystem.step`.
+/// going through `PhysicsSystem.step` — for a body kept out of the
+/// simulation on purpose; already IN the system, this updates it twice.
 ///
-/// For the soft body that has just been teleported and needs to settle before
-/// anyone sees it, and for the one deliberately kept out of the simulation so
-/// it can be updated right after the animated object it hangs from. A body
-/// that IS in the system is stepped by the system too, so calling this on one
-/// updates it twice.
-///
-/// It is single threaded where a step is not, it bypasses the sleep check,
-/// and the rigid bodies it pushes against do not move while it runs — so
-/// calling it repeatedly without stepping in between produces artefacts Jolt
-/// documents but does not prevent.
-///
-/// THREADING: it takes body locks of its own, on this body and on everything
-/// it collides with. Do not call it while `step` is running on the same
-/// system, and do not call it from inside a contact callback or a step
-/// listener — those already hold locks it would wait on.
+/// THREADING: takes locks on this body and everything it collides with.
+/// Never call from inside a contact callback, a step listener, or while `step` runs.
 pub fn customUpdate(
     system: system_mod.PhysicsSystem,
     body: body_mod.BodyId,
@@ -898,18 +804,162 @@ pub fn customUpdate(
 }
 
 //=============================================================================
+// Vertex-vs-shape collision
+//
+// What Shape::CollideSoftBodyVertices runs on: for each vertex, keep
+// whichever call reports the deepest penetration. `CollideSoftBodyVertexIterator`
+// is a strided view over caller-owned arrays; every field is required
+// non-NULL wherever real Jolt shape code reads it (`collideSoftBodyVertices`,
+// `CollideVsTriangles`), the same as the C ABI documents.
+//=============================================================================
+
+/// Resets one vertex's collision bookkeeping before a new collision pass —
+/// SoftBodyVertex::ResetCollision. Pure constant writes; no Jolt call needed.
+pub fn resetVertexCollision(
+    largest_penetration: *f32,
+    colliding_shape_index: *i32,
+    has_contact: *bool,
+) void {
+    largest_penetration.* = -std.math.floatMax(f32);
+    colliding_shape_index.* = -1;
+    has_contact.* = false;
+}
+
+/// Lowest index among a constraint's own vertices —
+/// SoftBodySharedSettings::Edge/Volume/RodStretchShear's own
+/// GetMinVertexIndex, used while sorting constraints by locality. `vertices`
+/// must be non-empty.
+pub fn minVertexIndex(vertices: []const u32) u32 {
+    var lowest = vertices[0];
+    for (vertices[1..]) |v| lowest = @min(lowest, v);
+    return lowest;
+}
+
+/// Scales `weights` so they sum to 1 — SoftBodySharedSettings::Skinned::
+/// NormalizeWeights. Left alone if they already sum to 0 or less, same as
+/// Jolt: an unweighted vertex stays unweighted rather than dividing by zero.
+pub fn normalizeSkinWeights(weights: []SkinWeight) void {
+    var total: f32 = 0;
+    for (weights) |w| total += w.weight;
+    if (total > 0) for (weights) |*w| {
+        w.weight /= total;
+    };
+}
+
+/// Runs `shape`'s own CollideSoftBodyVertices against `vertices`,
+/// standalone — Shape::CollideSoftBodyVertices, dispatched directly rather
+/// than through a soft body's collision pass. A soft body's own shape
+/// (`Body.shape`, when it names a soft body) is a valid `shape` here too —
+/// how two soft bodies collide with each other.
+pub fn collideSoftBodyVertices(
+    shape: shape_mod.Shape,
+    center_of_mass_transform: math.Mat44,
+    scale: math.Vec3,
+    vertices: *const CollideSoftBodyVertexIterator,
+    count: u32,
+    colliding_shape_index: i32,
+) err.Error!void {
+    try err.check(c.zjoltShapeCollideSoftBodyVertices(
+        shape.handle,
+        &center_of_mass_transform,
+        scale,
+        vertices,
+        count,
+        colliding_shape_index,
+    ));
+}
+
+/// Collides soft-body vertices against caller-supplied triangles —
+/// CollideSoftBodyVerticesVsTriangles, the closest-point search
+/// TriangleShape/MeshShape/HeightFieldShape build their own
+/// CollideSoftBodyVertices from. `center_of_mass_transform`/`scale` are
+/// fixed for its lifetime; `deinit` releases it.
+pub const CollideVsTriangles = struct {
+    handle: *c.CollideSoftBodyVerticesVsTriangles,
+
+    pub fn init(
+        center_of_mass_transform: math.Mat44,
+        scale: math.Vec3,
+    ) err.Error!CollideVsTriangles {
+        var handle: *c.CollideSoftBodyVerticesVsTriangles = undefined;
+        try err.check(c.zjoltCollideSoftBodyVerticesVsTrianglesCreate(
+            &center_of_mass_transform,
+            scale,
+            &handle,
+        ));
+        return .{ .handle = handle };
+    }
+
+    pub fn deinit(self: CollideVsTriangles) void {
+        c.zjoltCollideSoftBodyVerticesVsTrianglesDestroy(self.handle);
+    }
+
+    /// Begins vertex `index`'s closest-triangle search, discarding whatever
+    /// `processTriangle` found for whichever vertex this last began.
+    pub fn startVertex(
+        self: CollideVsTriangles,
+        vertex: *const CollideSoftBodyVertexIterator,
+        index: u32,
+    ) void {
+        c.zjoltCollideSoftBodyVerticesVsTrianglesStartVertex(self.handle, vertex, index);
+    }
+
+    /// Considers one candidate triangle, LOCAL space and unscaled — kept
+    /// only if closer than every triangle already seen since `startVertex`.
+    pub fn processTriangle(
+        self: CollideVsTriangles,
+        v0: math.Vec3,
+        v1: math.Vec3,
+        v2: math.Vec3,
+    ) void {
+        c.zjoltCollideSoftBodyVerticesVsTrianglesProcessTriangle(self.handle, v0, v1, v2);
+    }
+
+    /// Commits the closest triangle found since `startVertex` into vertex
+    /// `index` — a no-op unless it beats what was already recorded there.
+    pub fn finishVertex(
+        self: CollideVsTriangles,
+        vertex: *const CollideSoftBodyVertexIterator,
+        index: u32,
+        colliding_shape_index: i32,
+    ) void {
+        c.zjoltCollideSoftBodyVerticesVsTrianglesFinishVertex(
+            self.handle,
+            vertex,
+            index,
+            colliding_shape_index,
+        );
+    }
+};
+
+/// One vertex's state after `markCcdContact` marked it as touching `body`.
+pub const CcdContact = struct {
+    collision_plane: math.Plane,
+    colliding_shape_index: i32,
+    has_contact: bool,
+};
+
+/// Marks one vertex as touching `body` via continuous collision detection —
+/// SoftBodyVertex::MarkCCDContact. The returned `colliding_shape_index` is
+/// stamped from `body`'s own id, NOT an index into a per-step
+/// colliding-shape list the way a discrete contact's is.
+pub fn markCcdContact(body: body_mod.BodyId, contact_plane: math.Plane) CcdContact {
+    var out: CcdContact = undefined;
+    c.zjoltSoftBodyVertexMarkCcdContact(
+        body,
+        &contact_plane,
+        &out.collision_plane,
+        &out.colliding_shape_index,
+        &out.has_contact,
+    );
+    return out;
+}
+
+//=============================================================================
 // Contact listener
 //
-// Fires as soft bodies collide with rigid ones. SEPARATE from the rigid
-// contact listener in `system.zig`, and not a substitute for it: Jolt routes
-// soft-body collisions through their own listener entirely, so a world with
-// soft bodies in it and only `PhysicsSystem.setContactListener` installed
-// hears nothing about them.
-//
-// Both callbacks run WITH ALL BODIES LOCKED, on Jolt's job threads. Do not
-// call back into the system from inside one — not a query, not a body read,
-// not another soft body's properties. Copy what is needed and act on it after
-// the step.
+// Fires as soft bodies collide with rigid ones — SEPARATE from the rigid listener in `system.zig` (silent if unset).
+// Both callbacks run WITH ALL BODIES LOCKED — never call back into the system; copy what's needed and act after the step.
 //=============================================================================
 
 pub const ValidateResult = c.SoftBodyValidateResult;
@@ -921,8 +971,8 @@ pub const ContactListener = c.SoftBodyContactListener;
 ///
 /// A view over the solver's own arrays, not a copy: it is valid ONLY for the
 /// duration of the `onSoftBodyContactAdded` call that was handed it. Keeping
-/// one and reading it later reads freed solver state, which is why nothing
-/// here hands out a pointer into it.
+/// one and reading it later reads freed solver state — nothing here hands
+/// out a pointer into it.
 pub const Manifold = struct {
     handle: *const c.SoftBodyManifold,
 
@@ -932,17 +982,12 @@ pub const Manifold = struct {
         return count;
     }
 
-    /// The vertices that touched something, and what each touched. Only
-    /// vertices that actually collided appear — a cloth of ten thousand
-    /// vertices resting on a table produces as many entries as there are
-    /// vertices on the table, not ten thousand — so size `buffer` with
-    /// `countVertexContacts` rather than with the body's vertex count.
+    /// The vertices that touched something, and what each touched (only
+    /// colliding ones — size with `countVertexContacts`, not vertex count).
     ///
-    /// A contact's `normal` points from the soft body INTO what it touched:
-    /// the direction the soft body pushes, not the direction it is pushed, so
-    /// a cloth resting on a floor reports a normal pointing down. Its
-    /// `local_contact_point` is relative to the soft body's centre of mass,
-    /// the frame `VertexState` uses.
+    /// `normal` points from the soft body INTO what it touched (the push
+    /// direction, not the pushed direction — a cloth on a floor reports
+    /// down). `local_contact_point` is relative to the body's centre of mass.
     pub fn vertexContacts(
         self: Manifold,
         buffer: []VertexContact,
@@ -963,15 +1008,12 @@ pub const Manifold = struct {
         return count;
     }
 
-    /// The sensors this body is overlapping. Reported once for the whole
-    /// body rather than once per vertex, which is why they are a separate
-    /// list and not a flag on a vertex contact.
+    /// The sensors this body is overlapping, reported once per body rather
+    /// than once per vertex.
     ///
-    /// Installing this listener is not merely how a host HEARS about those
-    /// overlaps, it is what makes them happen: Jolt skips sensors entirely
-    /// for a soft body when no soft-body contact listener is installed. A
-    /// world that only sets the rigid contact listener sees no soft-body
-    /// sensor overlaps at all.
+    /// Installing this listener is not merely how a host HEARS about these
+    /// overlaps — it is what makes them happen: Jolt skips soft-body sensor
+    /// checks entirely when no soft-body contact listener is installed.
     pub fn sensorContacts(
         self: Manifold,
         buffer: []body_mod.BodyId,
@@ -987,20 +1029,12 @@ pub const Manifold = struct {
     }
 };
 
-/// Builds a soft-body contact listener from `context` and whichever of these
-/// `T` declares — either it omits simply does not fire:
+/// Builds a soft-body contact listener from `context` and whichever of
+/// `onSoftBodyContactValidate`/`onSoftBodyContactAdded` `T` declares (an
+/// omitted one never fires). `context` must outlive the system.
 ///
-/// ```zig
-/// pub fn onSoftBodyContactValidate(self: *T, soft_body: BodyId, other: BodyId, settings: *ContactSettings) ValidateResult
-/// pub fn onSoftBodyContactAdded(self: *T, soft_body: BodyId, manifold: Manifold) void
-/// ```
-///
-/// `context` must outlive the system it is installed on.
-///
-/// Validate fires when the two bodies' bounding boxes overlap, BEFORE any
-/// vertex is tested, so receiving it does not mean anything touched. Added
-/// fires once per soft body per step, after every contact has been handled —
-/// not once per contact; the manifold carries all of them.
+/// Validate fires on bounding-box overlap, BEFORE any vertex test; Added
+/// fires once per body per step, after every contact is handled — not once per contact.
 pub fn contactListener(comptime T: type, context: *T) ContactListener {
     system_mod.requireAnyDecl(T, &.{
         "onSoftBodyContactValidate", "onSoftBodyContactAdded",
@@ -1133,7 +1167,6 @@ test "a pressurised soft body settles on the floor with its volume intact" {
     defer system.deinit();
     system.setGravity(math.gravity_earth);
 
-    const shape_mod = @import("shape.zig");
     const floor_shape = try shape_mod.Shape.initBox(math.vec3(20, 0.5, 20), .{});
     defer floor_shape.release();
     _ = try system.bodies().createAndAdd(.{
@@ -1326,7 +1359,6 @@ test "a vertex index nothing has is refused, not asserted" {
     try std.testing.expectError(E.InvalidArgument, skinVertices(system, body, &.{}, false));
 
     // A rigid body is not a soft body, and is told so rather than reinterpreted.
-    const shape_mod = @import("shape.zig");
     const box = try shape_mod.Shape.initBox(math.vec3(0.5, 0.5, 0.5), .{});
     defer box.release();
     const rigid = try system.bodies().createAndAdd(.{
@@ -1527,7 +1559,6 @@ test "a soft-body contact listener reports which vertices touched what" {
     defer system.deinit();
     system.setGravity(math.gravity_earth);
 
-    const shape_mod = @import("shape.zig");
     const floor_shape = try shape_mod.Shape.initBox(math.vec3(20, 0.5, 20), .{});
     defer floor_shape.release();
     const floor = try system.bodies().createAndAdd(.{
@@ -1783,7 +1814,7 @@ test "a rod's rotation tracks the direction between its two vertices" {
         // The rod's rotation takes its local +Z onto the direction between
         // its two vertices — that is the whole contract of a Cosserat rod's
         // orientation, and it is what makes it usable for placing geometry.
-        const tangent = try math.quatRotateVector(rod.rotation, math.vec3(0, 0, 1));
+        const tangent = try rod.rotation.rotateVector(math.vec3(0, 0, 1));
         try std.testing.expectApproxEqAbs(delta.x / length, tangent.x, 0.05);
         try std.testing.expectApproxEqAbs(delta.y / length, tangent.y, 0.05);
         try std.testing.expectApproxEqAbs(delta.z / length, tangent.z, 0.05);
@@ -1918,7 +1949,6 @@ test "a ray cast at a soft body names the face it hit and the material on it" {
     defer zjolt.deinit();
 
     const material_lib = @import("material.zig");
-    const shape_mod = @import("shape.zig");
     const query_mod = @import("query.zig");
 
     const system = try system_mod.PhysicsSystem.init(.{
@@ -1999,8 +2029,6 @@ test "customUpdate advances a soft body with no step at all" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    const shape_mod = @import("shape.zig");
-
     const system = try system_mod.PhysicsSystem.init(.{
         .layers = system_mod.layersFromType(TestLayers),
         .max_bodies = 8,
@@ -2053,4 +2081,216 @@ test "customUpdate advances a soft body with no step at all" {
         err.Error.BodyNotFound,
         customUpdate(system, body_mod.invalid_body_id, 1.0 / 60.0),
     );
+}
+
+test "updatePenetration records only the deepest value seen so far" {
+    var largest_penetration = [1]f32{-std.math.floatMax(f32)};
+    const it: CollideSoftBodyVertexIterator = .{
+        .largest_penetration = @ptrCast(&largest_penetration),
+        .largest_penetration_stride = @sizeOf(f32),
+    };
+    try std.testing.expect(it.updatePenetration(0, 0.1));
+    try std.testing.expectEqual(@as(f32, 0.1), largest_penetration[0]);
+
+    // A shallower write loses: the deepest one already recorded stands.
+    try std.testing.expect(!it.updatePenetration(0, 0.05));
+    try std.testing.expectEqual(@as(f32, 0.1), largest_penetration[0]);
+
+    try std.testing.expect(it.updatePenetration(0, 0.2));
+    try std.testing.expectEqual(@as(f32, 0.2), largest_penetration[0]);
+}
+
+test "updatePenetration is false with no write when largest_penetration is unset" {
+    const it: CollideSoftBodyVertexIterator = .{};
+    try std.testing.expect(!it.updatePenetration(0, 1.0));
+}
+
+test "resetVertexCollision resets to Jolt's own sentinel values" {
+    var largest_penetration: f32 = 5.0;
+    var colliding_shape_index: i32 = 3;
+    var has_contact = true;
+    resetVertexCollision(&largest_penetration, &colliding_shape_index, &has_contact);
+    try std.testing.expectEqual(-std.math.floatMax(f32), largest_penetration);
+    try std.testing.expectEqual(@as(i32, -1), colliding_shape_index);
+    try std.testing.expect(!has_contact);
+}
+
+test "minVertexIndex matches what Edge/Volume/RodStretchShear compute by hand" {
+    const edge = Edge{ .vertex = .{ 7, 2 }, .compliance = 0 };
+    try std.testing.expectEqual(@as(u32, 2), minVertexIndex(&edge.vertex));
+
+    const volume = VolumeConstraint{ .vertex = .{ 5, 1, 9, 3 }, .compliance = 0 };
+    try std.testing.expectEqual(@as(u32, 1), minVertexIndex(&volume.vertex));
+
+    const rod = RodStretchShear{ .vertex = .{ 4, 4 }, .compliance = 0 };
+    try std.testing.expectEqual(@as(u32, 4), minVertexIndex(&rod.vertex));
+}
+
+test "normalizeSkinWeights sums to 1, and leaves an unweighted vertex at 0" {
+    var weights = [4]SkinWeight{
+        .{ .inv_bind_index = 0, .weight = 1 },
+        .{ .inv_bind_index = 1, .weight = 3 },
+        .{ .inv_bind_index = 2, .weight = 0 },
+        .{ .inv_bind_index = 3, .weight = 0 },
+    };
+    normalizeSkinWeights(&weights);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), weights[0].weight, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75), weights[1].weight, 1e-6);
+    try std.testing.expectEqual(@as(f32, 0), weights[2].weight);
+
+    var unweighted = [4]SkinWeight{
+        .{ .inv_bind_index = 0, .weight = 0 },
+        .{ .inv_bind_index = 0, .weight = 0 },
+        .{ .inv_bind_index = 0, .weight = 0 },
+        .{ .inv_bind_index = 0, .weight = 0 },
+    };
+    normalizeSkinWeights(&unweighted);
+    for (unweighted) |w| try std.testing.expectEqual(@as(f32, 0), w.weight);
+}
+
+test "collideSoftBodyVertices against a box matches BoxShape's own math" {
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const box = try shape_mod.Shape.initBox(math.vec3(1, 1, 1), .{});
+    defer box.release();
+
+    // Inside the box, closest to the top face: half_extent.y (1) minus the
+    // vertex's own height (0.4) is the expected penetration.
+    var positions = [1]math.Vec3{math.vec3(0, 0.4, 0)};
+    var inv_masses = [1]f32{1};
+    var planes = [1]math.Plane{.{ .normal = math.vec3_zero, .constant = 0 }};
+    var largest_penetration = [1]f32{-std.math.floatMax(f32)};
+    var colliding_shape_index = [1]i32{-1};
+    const vertices: CollideSoftBodyVertexIterator = .{
+        .position = @ptrCast(&positions),
+        .position_stride = @sizeOf(math.Vec3),
+        .inv_mass = @ptrCast(&inv_masses),
+        .inv_mass_stride = @sizeOf(f32),
+        .collision_plane = @ptrCast(&planes),
+        .collision_plane_stride = @sizeOf(math.Plane),
+        .largest_penetration = @ptrCast(&largest_penetration),
+        .largest_penetration_stride = @sizeOf(f32),
+        .colliding_shape_index = @ptrCast(&colliding_shape_index),
+        .colliding_shape_index_stride = @sizeOf(i32),
+    };
+
+    try collideSoftBodyVertices(box, math.mat44_identity, math.vec3(1, 1, 1), &vertices, 1, 42);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.6), largest_penetration[0], 1e-5);
+    try std.testing.expectEqual(@as(i32, 42), colliding_shape_index[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), planes[0].normal.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), planes[0].normal.y, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), planes[0].normal.z, 1e-5);
+
+    // A vertex with no mass is skipped outright, the same as Jolt's own
+    // built-in shapes skip a pinned vertex: nothing is written for it.
+    inv_masses[0] = 0;
+    largest_penetration[0] = -std.math.floatMax(f32);
+    colliding_shape_index[0] = -1;
+    try collideSoftBodyVertices(box, math.mat44_identity, math.vec3(1, 1, 1), &vertices, 1, 42);
+    try std.testing.expectEqual(-std.math.floatMax(f32), largest_penetration[0]);
+    try std.testing.expectEqual(@as(i32, -1), colliding_shape_index[0]);
+}
+
+test "collideSoftBodyVertices dispatches into a soft body's own SoftBodyShape" {
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const system = try system_mod.PhysicsSystem.init(.{
+        .layers = system_mod.layersFromType(TestLayers),
+        .max_bodies = 8,
+    });
+    defer system.deinit();
+
+    const settings = try buildCube();
+    defer settings.release();
+    const cube = try createAndAdd(system, .{
+        .shared_settings = settings,
+        .object_layer = TestLayers.moving,
+        .position = math.rvec3(0, 5, 0),
+    }, .activate);
+
+    var lock = system.lockRead(cube);
+    defer lock.release();
+    const cube_shape = lock.body().?.shape().?;
+
+    // A soft body's own CollideSoftBodyVertices is Jolt's own no-op — soft
+    // bodies do not collide against each other's vertices in this Jolt
+    // version — so a real dispatch through a valid vtable leaves every
+    // field exactly as it was, rather than crashing or writing garbage.
+    var positions = [1]math.Vec3{math.vec3(0, 0, 0)};
+    var inv_masses = [1]f32{1};
+    var planes = [1]math.Plane{.{ .normal = math.vec3(0, 1, 0), .constant = 7 }};
+    var largest_penetration = [1]f32{-1.0};
+    var colliding_shape_index = [1]i32{-1};
+    const vertices: CollideSoftBodyVertexIterator = .{
+        .position = @ptrCast(&positions),
+        .position_stride = @sizeOf(math.Vec3),
+        .inv_mass = @ptrCast(&inv_masses),
+        .inv_mass_stride = @sizeOf(f32),
+        .collision_plane = @ptrCast(&planes),
+        .collision_plane_stride = @sizeOf(math.Plane),
+        .largest_penetration = @ptrCast(&largest_penetration),
+        .largest_penetration_stride = @sizeOf(f32),
+        .colliding_shape_index = @ptrCast(&colliding_shape_index),
+        .colliding_shape_index_stride = @sizeOf(i32),
+    };
+    try collideSoftBodyVertices(cube_shape, math.mat44_identity, math.vec3(1, 1, 1), &vertices, 1, 9);
+    try std.testing.expectEqual(@as(f32, -1.0), largest_penetration[0]);
+    try std.testing.expectEqual(@as(i32, -1), colliding_shape_index[0]);
+    try std.testing.expectEqual(@as(f32, 7), planes[0].constant);
+}
+
+test "CollideVsTriangles keeps the closest triangle a vertex was tested against" {
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const collider = try CollideVsTriangles.init(math.mat44_identity, math.vec3(1, 1, 1));
+    defer collider.deinit();
+
+    var positions = [1]math.Vec3{math.vec3(0, 0.3, 0)};
+    var planes = [1]math.Plane{.{ .normal = math.vec3_zero, .constant = 0 }};
+    var largest_penetration = [1]f32{-std.math.floatMax(f32)};
+    var colliding_shape_index = [1]i32{-1};
+    const vertex: CollideSoftBodyVertexIterator = .{
+        .position = @ptrCast(&positions),
+        .position_stride = @sizeOf(math.Vec3),
+        .collision_plane = @ptrCast(&planes),
+        .collision_plane_stride = @sizeOf(math.Plane),
+        .largest_penetration = @ptrCast(&largest_penetration),
+        .largest_penetration_stride = @sizeOf(f32),
+        .colliding_shape_index = @ptrCast(&colliding_shape_index),
+        .colliding_shape_index_stride = @sizeOf(i32),
+    };
+
+    collider.startVertex(&vertex, 0);
+    // A large CCW (seen from +Y) triangle in the y=0 plane, well under the
+    // vertex: closest point is its interior, straight down.
+    collider.processTriangle(math.vec3(-10, 0, -10), math.vec3(0, 0, 10), math.vec3(10, 0, -10));
+    // A second, farther-away candidate must lose to the first.
+    collider.processTriangle(math.vec3(-10, -5, -10), math.vec3(0, -5, 10), math.vec3(10, -5, -10));
+    collider.finishVertex(&vertex, 0, 3);
+
+    try std.testing.expectApproxEqAbs(@as(f32, -0.3), largest_penetration[0], 1e-5);
+    try std.testing.expectEqual(@as(i32, 3), colliding_shape_index[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), planes[0].normal.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), planes[0].normal.y, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), planes[0].constant, 1e-5);
+}
+
+test "markCcdContact stamps the given plane and a body-derived shape index" {
+    const plane = math.Plane{ .normal = math.vec3(0, 1, 0), .constant = -2 };
+    const result = markCcdContact(77, plane);
+    try std.testing.expectEqual(plane.normal.x, result.collision_plane.normal.x);
+    try std.testing.expectEqual(plane.normal.y, result.collision_plane.normal.y);
+    try std.testing.expectEqual(plane.normal.z, result.collision_plane.normal.z);
+    try std.testing.expectEqual(plane.constant, result.collision_plane.constant);
+    try std.testing.expect(result.has_contact);
+
+    // Two different bodies stamp two different shape indices.
+    const other = markCcdContact(78, plane);
+    try std.testing.expect(other.colliding_shape_index != result.colliding_shape_index);
 }

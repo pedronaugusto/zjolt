@@ -1,135 +1,115 @@
 //===----------------------------------------------------------------------===//
-// zjolt — saving and restoring the state of a simulation.
+// zjolt — save and restore simulation state.
 //
-// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part; this
-// file is split out so that no single header has to carry the whole surface.
-//
-// The state a step CHANGES, as a flat buffer: for rollback in a networked
-// game, for a replay, or for a determinism check. Positions, rotations,
-// velocities, sleep state, and the solver's contact cache.
-//
-// What it deliberately does not carry is everything the simulation only reads:
-// shapes, layers, motion types, masses, friction, restitution, collision
-// groups, the settings in zjolt_system.h. A restore expects to find the same
-// bodies, in the same system, configured the same way, and puts their motion
-// back. It is a snapshot of where the world is, not of what the world is.
-//
-// So a body created or destroyed since the save is not something a restore can
-// paper over, and zjoltPhysicsSystemRestoreState reports failure instead of
-// guessing. Save and restore the same set of bodies, or rebuild the set first.
-//
-// The buffer follows the same container convention as zjoltShapeSave — a magic
-// tag, a container version, this library's config id, the Jolt version, the
-// payload length and a CRC-32, all validated before Jolt reads a byte — and
-// carries the same caveat: it rejects the wrong file, a truncated file and a
-// damaged file, and it is not a defence against a crafted payload that carries
-// a matching checksum.
-//===----------------------------------------------------------------------===//
+// Captures what a step changes: position, rotation, velocity, sleep,
+// contact cache. Restore requires matching bodies, system, and
+// configuration, or fails. Buffer format matches zjoltShapeSave's
+// container; it catches a wrong, truncated, or damaged file, not a
+// crafted payload with a matching checksum.
 
 #ifndef ZJOLT_STATE_H_
 #define ZJOLT_STATE_H_
 
+#include "zjolt_constraint.h"
 #include "zjolt_core.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/// Which parts of a simulation a save writes, as a bit mask.
-///
-/// The mask is recorded in the payload, so a restore is not told what it is
-/// reading — it restores exactly the parts that were saved.
-///
-/// ZJOLT_STATE_RECORDER_STATE_ALL is what rollback wants. Anything less leaves
-/// some part of the solver holding data from a different frame, and the step
-/// after the restore is then merely close to the one that was saved rather
-/// than identical to it.
+/// Bit mask of what a save writes. Restore reads exactly what was saved.
+/// ZJOLT_STATE_RECORDER_STATE_ALL for a rollback; less makes the restored
+/// step merely close to the saved one, not identical.
 typedef enum ZJoltStateRecorderState {
   ZJOLT_STATE_RECORDER_STATE_NONE = 0,
-  /// The previous step's delta time, and the world gravity.
+  /// Previous step's delta time and world gravity.
   ZJOLT_STATE_RECORDER_STATE_GLOBAL = 1 << 0,
-  /// Position, rotation, velocity and sleep state of every body.
+  /// Position, rotation, velocity, sleep state of every body.
   ZJOLT_STATE_RECORDER_STATE_BODIES = 1 << 1,
-  /// The contact cache, including the accumulated impulses the solver warm
-  /// starts the next step from. Leaving this out is what makes a restored
-  /// world settle differently from the one it was copied out of.
+  /// Contact cache, including warm-start impulses.
   ZJOLT_STATE_RECORDER_STATE_CONTACTS = 1 << 2,
-  /// Constraint state, including vehicle constraints. Required for a world
-  /// with joints: a restore without it leaves every constraint warm-started
-  /// from a different frame than the bodies it acts on, which reads as a
-  /// world that was fine a moment ago and is now tearing itself apart.
+  /// Constraint state, including vehicles. Required for a world with joints.
   ZJOLT_STATE_RECORDER_STATE_CONSTRAINTS = 1 << 3,
   ZJOLT_STATE_RECORDER_STATE_ALL = 0b1111,
 } ZJoltStateRecorderState;
 
-/// Writes the state into `buffer`.
-///
-/// Two-call protocol: `buffer` NULL reports the size in `*out_size` and writes
-/// nothing, and a `capacity` short of that reports
-/// ZJOLT_RESULT_BUFFER_TOO_SMALL with the required size still written. The
-/// size is not stable across steps — a world that gained contacts needs more
-/// — so ask each time rather than caching it.
-///
-/// `state` is a mask of ZJoltStateRecorderState. Pass
-/// ZJOLT_STATE_RECORDER_STATE_ALL unless you know why you are not; a mask of
-/// ZJOLT_STATE_RECORDER_STATE_NONE is accepted and writes an empty payload
-/// that restores nothing.
-///
-/// Do not call this during a step. It reads bodies without locking them,
-/// because it is meant to run between steps, where nothing is moving.
+/// NULL callback accepts every item of that kind. A PARTIAL save (any
+/// non-NULL should_save_*) carries no body-set digest; restoring
+/// overlapping partial saves is undefined.
+typedef struct ZJoltStateFilter {
+  /// NULL saves every body.
+  bool (*should_save_body)(void *user, ZJoltBodyId body);
+  /// NULL saves every constraint.
+  bool (*should_save_constraint)(void *user, ZJoltConstraint *constraint);
+  /// NULL saves every contact.
+  bool (*should_save_contact)(void *user, ZJoltBodyId body1, ZJoltBodyId body2);
+  /// NULL restores every contact the payload carries.
+  bool (*should_restore_contact)(void *user, ZJoltBodyId body1,
+                                 ZJoltBodyId body2);
+  void *user;
+} ZJoltStateFilter;
+
+/// Writes state into `buffer`. `buffer` NULL sizes into `*out_size`; a
+/// short `capacity` returns ZJOLT_RESULT_BUFFER_TOO_SMALL with the size
+/// still written. `filter` NULL saves everything `state` names. Not
+/// callable during a step.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveState(
-    const ZJoltPhysicsSystem *system, uint32_t state, void *buffer,
-    size_t capacity, size_t *out_size);
+    const ZJoltPhysicsSystem *system, uint32_t state,
+    const ZJoltStateFilter *filter, void *buffer, size_t capacity,
+    size_t *out_size);
 
-/// Puts the saved state back.
-///
-/// ZJOLT_RESULT_BAD_FORMAT covers five different kinds of wrong input: not a
-/// zjolt state buffer at all, written by a different zjolt or a different
-/// precision setting, truncated or carrying trailing bytes, damaged in
-/// storage, and — the one that is not about the buffer — a payload Jolt
-/// refused because the world no longer holds the bodies it names.
-///
-/// The first four leave the system untouched, because they are all decided
-/// before Jolt sees a byte. The fifth does not: a payload Jolt started reading
-/// and then rejected leaves the world partly restored, and the only sound
-/// recovery from there is to restore a state that does apply.
+/// As zjoltPhysicsSystemSaveState, writing through `stream`. Omits length
+/// and CRC-32. ZJOLT_RESULT_IO_ERROR if `stream` fails.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveStateStream(
+    const ZJoltPhysicsSystem *system, uint32_t state,
+    const ZJoltStateFilter *filter, const ZJoltStream *stream);
+
+/// Restores saved state. `filter`'s should_restore_contact runs if
+/// non-NULL. `is_last_part` false for every part but the last of a
+/// partial sequence, true otherwise. ZJOLT_RESULT_BAD_FORMAT for a
+/// malformed, mismatched, or unrecognized buffer; a failure partway
+/// through can leave the system PARTLY RESTORED.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreState(
-    ZJoltPhysicsSystem *system, const void *data, size_t size);
+    ZJoltPhysicsSystem *system, const void *data, size_t size,
+    const ZJoltStateFilter *filter, bool is_last_part);
 
-//===----------------------------------------------------------------------===//
-// One body at a time
-//
-// PhysicsSystem::SaveBodyState / RestoreBodyState, for a caller that only
-// wants to roll one body back rather than the whole simulation — a grabbed
-// object dropped by a networking correction, say, without touching anything
-// else's contacts. Position, rotation, velocity and sleep state; nothing a
-// whole-system restore's body-set digest needs to guard, since there is only
-// ever the one body named here.
-//
-// `body` must already be locked — see zjoltBodyLockRead / zjoltBodyLockWrite
-// in zjolt_body.h. Jolt's own Body::RestoreState reads a different number of
-// bytes for a body with motion properties than for one without, so restoring
-// a dynamic body's saved state onto a static body (or the reverse) would
-// misread the stream rather than fail cleanly; the container records the
-// body's motion type and rejects that case before Jolt reads a byte.
-//===----------------------------------------------------------------------===//
+/// As zjoltPhysicsSystemRestoreState, reading through `stream`.
+/// ZJOLT_RESULT_IO_ERROR or ZJOLT_RESULT_BAD_FORMAT on a bad stream.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreStateStream(
+    ZJoltPhysicsSystem *system, const ZJoltStream *stream,
+    const ZJoltStateFilter *filter, bool is_last_part);
 
-/// Two-call protocol, as zjoltPhysicsSystemSaveState.
-///
-/// Do not call this during a step, for the same reason as
-/// zjoltPhysicsSystemSaveState: it reads the body without taking a fresh
-/// lock, on the assumption that the caller's lock already has it still.
+/// Reports the first payload byte where `state_a` and `state_b` differ.
+/// A length mismatch diverges at the shorter length. Compares payload
+/// only, not the container header. ZJOLT_RESULT_BAD_FORMAT if either
+/// buffer fails to parse.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemCompareState(
+    const void *state_a, size_t size_a, const void *state_b, size_t size_b,
+    bool *out_diverged, size_t *out_offset);
+
+/// As zjoltPhysicsSystemSaveState, for `body` alone. `body` must already
+/// be locked (zjoltBodyLockRead/Write). Not callable during a step.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveBodyStateLocked(
     const ZJoltPhysicsSystem *system, const ZJoltBody *body, void *buffer,
     size_t capacity, size_t *out_size);
 
-/// Puts one body's saved state back. See zjoltPhysicsSystemSaveBodyStateLocked
-/// for the container, and zjoltBodyLockWrite for the lock this needs — a
-/// write lock, since restoring can move the body between the active and
-/// sleeping lists.
+/// As zjoltPhysicsSystemSaveBodyStateLocked, writing through `stream`.
+/// ZJOLT_RESULT_IO_ERROR if `stream` fails.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveBodyStateLockedStream(
+    const ZJoltPhysicsSystem *system, const ZJoltBody *body,
+    const ZJoltStream *stream);
+
+/// Restores one body's saved state. Requires zjoltBodyLockWrite, not a
+/// read lock: restoring can move the body between the active and
+/// sleeping lists. Rejects a dynamic/static motion-type mismatch against
+/// the saved data before reading the payload.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreBodyStateLocked(
     ZJoltPhysicsSystem *system, ZJoltBody *body, const void *data,
     size_t size);
+
+/// As zjoltPhysicsSystemRestoreBodyStateLocked, reading through `stream`.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreBodyStateLockedStream(
+    ZJoltPhysicsSystem *system, ZJoltBody *body, const ZJoltStream *stream);
 
 #ifdef __cplusplus
 }  // extern "C"

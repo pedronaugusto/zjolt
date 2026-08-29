@@ -4,14 +4,13 @@
 // Every query here is the same collector-based traversal zjolt_query.cpp
 // uses, over JPH::TransformedShape's own CastRay/CollideShape/CastShape/
 // CollidePoint instead of NarrowPhaseQuery's. The generic COLLECTOR is
-// reimplemented rather than shared: zjolt_query.cpp's lives in an anonymous
-// namespace, invisible outside that translation unit, and this file needs
-// only two of its three sinks — there is no *Each form here, see
-// zjolt_transformed.h for why a caller does not lose anything by that.
+// reimplemented rather than shared, since zjolt_query.cpp's lives in an
+// anonymous namespace; this file needs only two of its three sinks (no
+// *Each form — zjolt_transformed.h says why nothing is lost by that).
 //
-// The settings TRANSLATION is shared, in zjolt_query_internal.h. That part is
-// pure data with no collector in it, and the two copies it used to have had
-// already drifted apart in what they documented.
+// The settings TRANSLATION is shared, in zjolt_query_internal.h: pure data
+// with no collector in it, kept in one place so duplicate copies cannot
+// drift apart in what they document.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -117,9 +116,57 @@ struct FillBuffer {
 };
 
 //===----------------------------------------------------------------------===//
+// zjoltTransformedShapeCollectTransformedShapes's collector
+//
+// Not a HitStream instantiation: a hit here IS a JPH::TransformedShape, reported as a fresh ZJoltTransformedShape handle — no "project the fields" step, since every field matters, and no separate sink, since a discarded handle (past `capacity`) would leak rather than simply going unused like FillBuffer's POD hits. Allocation happens here, gated on capacity, in one place.
+//===----------------------------------------------------------------------===//
+
+class CollectShapesCollector final : public JPH::TransformedShapeCollector {
+ public:
+  CollectShapesCollector(ZJoltTransformedShape **out, uint32_t capacity)
+      : out_(out), capacity_(capacity) {}
+
+  void AddHit(const JPH::TransformedShape &hit) override {
+    if (out_of_memory_) return;
+
+    if (out_ != nullptr && count_ < capacity_) {
+      ZJoltTransformedShape *ts = zjolt::New<ZJoltTransformedShape>();
+      if (ts == nullptr) {
+        // zjolt::New reports failure rather than aborting the way Jolt's own
+        // containers do (zjolt_internal.h); honouring that here means
+        // undoing what this call already produced rather than handing back
+        // a result silently short by an amount the caller has no way to
+        // learn. Every handle stored so far in `out_` was allocated by THIS
+        // call, so every one of them is safe to release right here.
+        for (uint32_t i = 0; i < count_; ++i) {
+          zjolt::Delete(out_[i]);
+          zjolt::HandleDestroyed();
+        }
+        out_of_memory_ = true;
+        this->ForceEarlyOut();
+        return;
+      }
+      ts->impl = hit;
+      zjolt::HandleCreated();
+      out_[count_] = ts;
+    }
+    ++count_;
+  }
+
+  uint32_t count() const { return count_; }
+  bool out_of_memory() const { return out_of_memory_; }
+
+ private:
+  ZJoltTransformedShape **out_;
+  uint32_t capacity_;
+  uint32_t count_ = 0;
+  bool out_of_memory_ = false;
+};
+
+//===----------------------------------------------------------------------===//
 // Projections. Unlike zjolt_query.cpp's, these close over `ts` directly
-// rather than reading it back from the collector's context: the caller
-// already handed it to us, so there is nothing to recover.
+// rather than reading it back from the collector's context, which the
+// caller already supplied.
 //===----------------------------------------------------------------------===//
 
 struct ProjectRayHit {
@@ -216,11 +263,18 @@ ZJoltResult zjoltTransformedShapeCreate(const ZJoltShape *shape,
   ZJoltTransformedShape *ts = zjolt::New<ZJoltTransformedShape>();
   if (ts == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
-  ts->impl = JPH::TransformedShape(zjolt::ToJoltR(*position),
-                                   zjolt::ToJoltRotation(*rotation),
+  // TransformedShape's constructor takes mShapePositionCOM directly, not the
+  // shape's own origin -- the two differ once a shape's centre of mass is
+  // off zero (e.g. inside a compound). SetWorldTransform is the conversion
+  // (zjoltTransformedShapeSetWorldTransform uses it too), and it needs
+  // mShape set first to read the centre of mass, so shape/body go in via the
+  // constructor and the placement goes through this call instead.
+  ts->impl = JPH::TransformedShape(JPH::RVec3::sZero(), JPH::Quat::sIdentity(),
                                    zjolt::ToJolt(shape), zjolt::ToJolt(body));
-  ts->impl.SetShapeScale(scale != nullptr ? zjolt::ToJolt(*scale)
-                                          : JPH::Vec3::sOne());
+  ts->impl.SetWorldTransform(zjolt::ToJoltR(*position),
+                             zjolt::ToJoltRotation(*rotation),
+                             scale != nullptr ? zjolt::ToJolt(*scale)
+                                              : JPH::Vec3::sOne());
 
   zjolt::HandleCreated();
   *out = ts;
@@ -314,6 +368,35 @@ ZJoltResult zjoltTransformedShapeGetSupportingFace(
     out_vertices[i] = zjolt::ToC(face[i]);
   *out_count = static_cast<uint32_t>(face.size());
   return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Decomposing a compound
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltTransformedShapeCollectTransformedShapes(
+    const ZJoltTransformedShape *ts, const ZJoltAABox *box,
+    const ZJoltShapeFilter *filter, ZJoltTransformedShape **out_shapes,
+    uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(ts, box, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::AABox jolt_box(zjolt::ToJolt(box->min), zjolt::ToJolt(box->max));
+  zjolt::ShapeFilterAdapter shape_filter = MakeShapeFilter(filter);
+
+  CollectShapesCollector collector(out_shapes, capacity);
+  ts->impl.CollectTransformedShapes(jolt_box, collector, shape_filter);
+
+  if (collector.out_of_memory()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_OUT_OF_MEMORY,
+        "a leaf handle could not be allocated partway through the "
+        "traversal; every handle this call had already produced was "
+        "released rather than reporting a result short by an amount the "
+        "caller has no way to learn");
+  }
+
+  return ReportCount(collector.count(), out_shapes, capacity, out_count);
 }
 
 //===----------------------------------------------------------------------===//

@@ -1,27 +1,16 @@
 //===----------------------------------------------------------------------===//
 // zjolt — hair, and the compute backend it runs on.
 //
-// Two things live here, and the first exists so the second can.
+// JPH::ComputeSystem is an abstract interface with three factory methods
+// and twelve more virtuals between the objects they hand back. Jolt
+// implements it three times over (DX12, Vulkan, Metal); zjolt compiles
+// none of those, so it is projected onto a flat C table
+// (ZJoltComputeInterface) and reflected back by the bridge classes below,
+// one C++ subclass per Jolt interface forwarding to a function pointer.
 //
-// JPH::ComputeSystem is an abstract interface with three factory methods, and
-// the objects those hand back have another twelve virtuals between them.
-// Jolt implements the lot three times over — DX12, Vulkan, Metal — and zjolt
-// compiles none of those, because a physics package that cannot be built
-// without a graphics SDK is not a physics package. So the whole interface is
-// projected onto a flat C table (ZJoltComputeInterface) and reflected back into
-// Jolt by the bridge classes below: one C++ subclass per Jolt interface, each
-// holding an opaque host handle and forwarding to a function pointer.
-//
-// The reflection is not quite mechanical, in one place that matters. Jolt's own
-// queues retain the buffers bound to them until execution finishes — see
-// `ComputeQueueCPU::mUsedBuffers` — because a shader reading a buffer whose
-// last reference was dropped mid-frame reads freed memory. That is a contract
-// on the implementation, not on the caller, so the bridge queue honours it here
-// rather than writing it into the C header as a rule every host would have to
-// re-derive.
-//
-// The second thing is hair itself, which needs no bridge: JPH::Hair is an
-// ordinary C++ object that happens to do its work through a ComputeSystem.
+// Jolt's queues retain buffers bound to them until execution finishes
+// (`ComputeQueueCPU::mUsedBuffers` — reading a freed buffer mid-frame is
+// UB), enforced by the bridge queue. Hair needs no bridge: JPH::Hair is an ordinary C++ object working through a ComputeSystem.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -84,14 +73,12 @@ ZJoltComputeBarrier ToC(JPH::ComputeQueue::EBarrier barrier) {
 
 class BridgeSystem;
 
-/// The two things every bridge object needs: the table to call, and a reference
-/// on the system that owns the table.
+/// The two things every bridge object needs: the table to call, and a
+/// reference on the system that owns the table.
 ///
-/// The reference is not decoration. Jolt hands buffers out as `Ref`s and Hair
-/// keeps them for its whole life, so a host that destroys its
-/// ZJoltComputeSystem handle while a hair is still alive would otherwise leave
-/// every buffer forwarding into a freed ZJoltComputeInterface. Holding the
-/// system from below makes the destroy order of the two handles a non-question.
+/// The reference is not decoration: Jolt hands buffers out as `Ref`s that
+/// Hair keeps for its whole life, so without it, destroying a
+/// ZJoltComputeSystem handle while a hair is alive would leave every buffer forwarding into a freed ZJoltComputeInterface.
 struct BridgeLink {
   JPH::Ref<JPH::ComputeSystem> keep_alive;
   BridgeSystem *owner = nullptr;
@@ -282,8 +269,15 @@ JPH::ComputeShaderResult BridgeSystem::CreateComputeShader(
   JPH::ComputeShaderResult result;
 
   void *host = nullptr;
-  if (iface_.create_shader(iface_.user, inName, inGroupSizeX, inGroupSizeY,
-                           inGroupSizeZ, &host) != ZJOLT_RESULT_OK ||
+  // The host writes the body of this callback, so what comes back is an
+  // integer of the host's choosing wearing an enum's type — reading it as
+  // ZJoltResult is the same illegal load a by-value enum parameter would be,
+  // arriving by the other door. Every result any of these callbacks hands
+  // back is compared through zjolt::RawEnum for that reason; see
+  // zjolt_internal.h.
+  if (zjolt::RawEnum(iface_.create_shader(iface_.user, inName, inGroupSizeX,
+                                          inGroupSizeY, inGroupSizeZ,
+                                          &host)) != ZJOLT_RESULT_OK ||
       host == nullptr) {
     result.SetError("the compute backend could not create this shader");
     return result;
@@ -306,9 +300,9 @@ JPH::ComputeBufferResult BridgeSystem::CreateComputeBuffer(
   JPH::ComputeBufferResult result;
 
   void *host = nullptr;
-  if (iface_.create_buffer(iface_.user, ToC(inType), inSize,
-                           static_cast<uint32_t>(inStride), inData,
-                           &host) != ZJOLT_RESULT_OK ||
+  if (zjolt::RawEnum(iface_.create_buffer(
+          iface_.user, ToC(inType), inSize, static_cast<uint32_t>(inStride),
+          inData, &host)) != ZJOLT_RESULT_OK ||
       host == nullptr) {
     result.SetError("the compute backend could not create this buffer");
     return result;
@@ -329,7 +323,8 @@ JPH::ComputeQueueResult BridgeSystem::CreateComputeQueue() {
   JPH::ComputeQueueResult result;
 
   void *host = nullptr;
-  if (iface_.create_queue(iface_.user, &host) != ZJOLT_RESULT_OK ||
+  if (zjolt::RawEnum(iface_.create_queue(iface_.user, &host)) !=
+          ZJOLT_RESULT_OK ||
       host == nullptr) {
     result.SetError("the compute backend could not create a queue");
     return result;
@@ -350,12 +345,13 @@ JPH::ComputeBufferResult BridgeBuffer::CreateReadBackBuffer() const {
   const ZJoltComputeInterface &table = link_.Table();
 
   void *host = nullptr;
-  const ZJoltResult created =
+  const int32_t created =
       table.create_readback_buffer != nullptr
-          ? table.create_readback_buffer(table.user, host_, &host)
-          : table.create_buffer(table.user, ZJOLT_COMPUTE_BUFFER_TYPE_READBACK,
-                                GetSize(), static_cast<uint32_t>(GetStride()),
-                                nullptr, &host);
+          ? zjolt::RawEnum(
+                table.create_readback_buffer(table.user, host_, &host))
+          : zjolt::RawEnum(table.create_buffer(
+                table.user, ZJOLT_COMPUTE_BUFFER_TYPE_READBACK, GetSize(),
+                static_cast<uint32_t>(GetStride()), nullptr, &host));
   if (created != ZJOLT_RESULT_OK || host == nullptr) {
     result.SetError("the compute backend could not create a readback buffer");
     return result;
@@ -384,11 +380,9 @@ JPH::ComputeBufferResult BridgeBuffer::CreateReadBackBuffer() const {
 /// Everything a hair needs from a backend: the system, its one queue, and the
 /// fifteen compiled shaders.
 ///
-/// Reference counted rather than owned by the ZJoltComputeSystem handle so that
-/// destroying that handle while a hair is still using it is legal. Jolt's own
-/// reference counting does the work; this exists because the three pieces are
-/// created and discarded together and a hair should hold one reference, not
-/// three.
+/// Reference counted rather than owned by the ZJoltComputeSystem handle, so
+/// destroying that handle while a hair is still using it is legal. Exists
+/// because the three pieces are created and discarded together and a hair should hold one reference, not three.
 class ZJoltComputeContext : public JPH::RefTarget<ZJoltComputeContext> {
  public:
   JPH_OVERRIDE_NEW_DELETE
@@ -429,6 +423,13 @@ struct ZJoltHair {
   /// nowhere, so there is no second chance to ask: it is the only signal that a
   /// groom was authored against a different head than the one it is on.
   float max_root_distance_to_scalp = 0.0f;
+
+  /// Whether zjoltHairLockReadBackBuffers is between its call and the
+  /// matching zjoltHairUnlockReadBackBuffers. Jolt's Lock/Unlock are not
+  /// documented as safe to nest or to unlock without a matching lock, so
+  /// this is what turns either misuse into a refusal instead of a
+  /// double-unmap.
+  bool read_back_locked = false;
 };
 
 namespace {
@@ -436,6 +437,17 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Shared helpers
 //===----------------------------------------------------------------------===//
+
+/// The two reinterpret_casts zjoltHairLockReadBackBuffers takes on faith:
+/// JPH::Float3/Float4 are plain, trivially-copyable float tuples with no
+/// padding, so a ZJoltVec3/ZJoltHairGridCell pointer aliases one exactly
+/// rather than needing an element-by-element copy.
+static_assert(sizeof(ZJoltVec3) == sizeof(JPH::Float3) &&
+                  alignof(ZJoltVec3) == alignof(JPH::Float3),
+              "ZJoltVec3 must alias JPH::Float3 exactly");
+static_assert(sizeof(ZJoltHairGridCell) == sizeof(JPH::Float4) &&
+                  alignof(ZJoltHairGridCell) == alignof(JPH::Float4),
+              "ZJoltHairGridCell must alias JPH::Float4 exactly");
 
 /// A 4x4 matrix from sixteen floats in column-major order, which is how Jolt
 /// stores one and therefore the only order that does not need a transpose at
@@ -641,10 +653,7 @@ bool TableIsComplete(const ZJoltComputeInterface &iface) {
 //===----------------------------------------------------------------------===//
 // Groom validation
 //
-// Every check here stands in for something Jolt does not check. The asserts it
-// does have fire in HairSettings::Init, several thousand vertices into a build
-// that has already allocated; in a build without asserts the same inputs divide
-// by zero or index past an array.
+// Stands in for checks Jolt does not make: its own asserts fire in HairSettings::Init, several thousand vertices into a build that has already allocated, and in a build without asserts the same inputs divide by zero or index past an array.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult ValidateGroom(const ZJoltHairDesc *desc, uint32_t material_count) {
@@ -1324,6 +1333,141 @@ ZJoltResult zjoltHairGetInfo(const ZJoltHair *hair, ZJoltHairInfo *out) {
   out->grid_size_z = static_cast<uint32_t>(settings->mGridSize.GetZ());
   out->max_root_distance_to_scalp = hair->max_root_distance_to_scalp;
   return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// The raw buffer window
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltHairLockReadBackBuffers(ZJoltHair *hair,
+                                         ZJoltHairReadBackView *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(hair, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (hair->read_back_locked) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this hair's read-back buffers are already "
+                           "locked; call zjoltHairUnlockReadBackBuffers "
+                           "first");
+  }
+
+  hair->hair->ReadBackGPUState(hair->context->queue);
+  hair->hair->LockReadBackBuffers();
+  hair->read_back_locked = true;
+
+  out->scalp_vertices =
+      reinterpret_cast<const ZJoltVec3 *>(hair->hair->GetScalpVertices());
+  out->grid_velocity_and_density = reinterpret_cast<const ZJoltHairGridCell *>(
+      hair->hair->GetGridVelocityAndDensity());
+  out->render_positions =
+      reinterpret_cast<const ZJoltVec3 *>(hair->hair->GetRenderPositions());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairUnlockReadBackBuffers(ZJoltHair *hair) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(hair)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!hair->read_back_locked) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this hair's read-back buffers are not locked");
+  }
+  hair->hair->UnlockReadBackBuffers();
+  hair->read_back_locked = false;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairGetNeutralDensity(const ZJoltHair *hair, uint32_t x,
+                                       uint32_t y, uint32_t z,
+                                       float *out_density) {
+  ZJOLT_ENTER(out_density);
+  if (!zjolt::Present(hair, out_density)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  if (x >= settings->mGridSize.GetX() || y >= settings->mGridSize.GetY() ||
+      z >= settings->mGridSize.GetZ()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "a grid coordinate is outside this groom's grid");
+  }
+  *out_density = settings->GetNeutralDensity(x, y, z);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairPositionToGridIndex(const ZJoltHair *hair,
+                                         const ZJoltVec3 *position,
+                                         uint32_t *out_index_x,
+                                         uint32_t *out_index_y,
+                                         uint32_t *out_index_z,
+                                         ZJoltVec3 *out_fraction) {
+  ZJOLT_ENTER(out_index_x, out_index_y, out_index_z, out_fraction);
+  if (!zjolt::Present(hair, position, out_index_x, out_index_y, out_index_z,
+                      out_fraction)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const JPH::HairSettings::GridSampler sampler(settings);
+  JPH::UVec4 index;
+  JPH::Vec3 fraction;
+  sampler.PositionToIndexAndFraction(zjolt::ToJolt(*position), index,
+                                     fraction);
+  *out_index_x = index.GetX();
+  *out_index_y = index.GetY();
+  *out_index_z = index.GetZ();
+  zjolt::WriteVec3(out_fraction, fraction);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Skinning the scalp off the solver
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltHairSkinScalpVertices(const ZJoltHair *hair,
+                                       const float *joint_to_hair,
+                                       const float *joint_matrices,
+                                       uint32_t joint_count,
+                                       ZJoltVec3 *out_vertices,
+                                       uint32_t capacity,
+                                       uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, joint_to_hair, joint_matrices, out_count)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const uint32_t expected =
+      static_cast<uint32_t>(settings->mScalpInverseBindPose.size());
+  if (expected == 0) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this groom has no scalp, so it has no skeleton to "
+                           "skin");
+  }
+  if (joint_count != expected) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "joint_count must match the groom's inverse bind "
+                           "pose; Jolt indexes it without a bound of its own");
+  }
+
+  const uint32_t count =
+      static_cast<uint32_t>(settings->mScalpVertices.size());
+  *out_count = count;
+  if (out_vertices == nullptr) return ZJOLT_RESULT_OK;
+
+  JPH::Array<JPH::Mat44> joints;
+  joints.reserve(joint_count);
+  for (uint32_t i = 0; i < joint_count; ++i) {
+    joints.push_back(LoadMat44(joint_matrices + 16 * i));
+  }
+
+  JPH::Array<JPH::Vec3> skinned;
+  settings->SkinScalpVertices(LoadMat44(joint_to_hair), joints.data(),
+                              skinned);
+
+  const uint32_t n = capacity < count ? capacity : count;
+  for (uint32_t i = 0; i < n; ++i) {
+    zjolt::WriteVec3(&out_vertices[i], skinned[i]);
+  }
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//

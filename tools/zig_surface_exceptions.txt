@@ -1,0 +1,15 @@
+# Entry points that ffi/*.h declares and no non-test Zig file calls.
+#
+# `ci/check-coverage.sh` requires every entry point to be reachable from the
+# Zig API, because one that is not is a capability stranded in C: it ships, it
+# is documented, and the host this library exists to serve cannot get at it.
+# That rule found `zjoltRigidCharacterGetId` sitting unwrapped while the
+# virtual character's identical accessor had a wrapper.
+#
+# This file is empty, and the check is what keeps it that way. It is here
+# rather than absent because an exception should have to be written down and
+# argued: without somewhere to put one, the pressure is to weaken the rule
+# instead. It is enforced in both directions — a name here that IS called is
+# an error too — so the list cannot quietly outlive its reason.
+#
+# Format: NAME<TAB>reason.

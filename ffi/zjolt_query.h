@@ -34,24 +34,23 @@ typedef struct ZJoltObjectLayerFilter {
   void *user;
 } ZJoltObjectLayerFilter;
 
+/// Rejects whole bodies. Jolt asks twice: `should_collide` by id with no
+/// lock held, then `should_collide_locked` with the body once it is locked.
+/// A NULL callback accepts. `body` is borrowed for the call only: read it
+/// with the `zjoltBody*Locked` accessors, do not store it, and do not call
+/// anything that takes a body lock from inside the callback.
 typedef struct ZJoltBodyFilter {
   bool (*should_collide)(void *user, ZJoltBodyId body);
+  bool (*should_collide_locked)(void *user, const ZJoltBody *body);
   void *user;
 } ZJoltBodyFilter;
 
-/// Rejects individual shapes, after the body carrying them has been accepted.
-///
-/// Jolt asks this once per SHAPE, never once per triangle: a mesh is accepted
-/// or rejected whole, and a compound is asked about each of its children, so
-/// `sub_shape_id` names the child. Against a shape with no children it is
-/// ZJOLT_SUB_SHAPE_ID_EMPTY and the answer is one a ZJoltBodyFilter could have
-/// given; against a compound it is the only way to reject one child and keep
-/// the rest. To drop individual triangles of a mesh, reject them in the hit
-/// callback by `sub_shape_id`, which is where Jolt reports them.
-///
+/// Rejects individual shapes, once the shape's body has been accepted.
+/// Called once per SHAPE, never per triangle — reject mesh triangles by
+/// `sub_shape_id` in the hit callback instead. `sub_shape_id` names the
+/// child shape (ZJOLT_SUB_SHAPE_ID_EMPTY for a childless one);
 /// `query_sub_shape_id` names the sub-shape of the shape being cast or
-/// overlapped. A ray and a point have no shape of their own, so they pass
-/// ZJOLT_SUB_SHAPE_ID_EMPTY.
+/// overlapped (ZJOLT_SUB_SHAPE_ID_EMPTY for a ray or point).
 typedef struct ZJoltShapeFilter {
   bool (*should_collide)(void *user, ZJoltBodyId body,
                          ZJoltSubShapeId sub_shape_id,
@@ -75,13 +74,8 @@ typedef struct ZJoltRayCastHit {
   ZJoltSubShapeId sub_shape_id;
   /// Hit point is origin + fraction * direction, with fraction in [0, 1].
   float fraction;
-  /// World-space surface normal at the hit, already resolved.
-  ///
-  /// Jolt does not put it in its own result. Reaching it needs the
-  /// TransformedShape the collector holds while it reports a hit, and that
-  /// pointer is live for exactly one call — Jolt does not clear it afterwards,
-  /// so a kept copy points at freed memory. Handing it across the ABI would
-  /// export that trap. Resolving it here does not.
+  /// World-space surface normal at the hit, already resolved — Jolt's own
+  /// result does not carry one.
   ZJoltVec3 normal;
   /// The material of the surface at `sub_shape_id`, resolved the same way
   /// `normal` is. Borrowed from the shape the hit body owns; it outlives this
@@ -94,11 +88,6 @@ typedef struct ZJoltRayCastHit {
 
 /// Contact points in a shape query are RELATIVE TO the `position` the query
 /// was given; add it back for world space.
-///
-/// They are relative rather than absolute because they are floats. In a
-/// double-precision world an absolute contact point does not survive the
-/// conversion, and quietly losing that precision on every hit would defeat the
-/// reason to build with double precision at all.
 typedef struct ZJoltShapeCastHit {
   ZJoltBodyId body;
   ZJoltSubShapeId sub_shape_id;
@@ -142,94 +131,30 @@ typedef struct ZJoltCollidePointHit {
 } ZJoltCollidePointHit;
 
 //===----------------------------------------------------------------------===//
-// The forms, and the one traversal underneath them
-//
-// Jolt finds hits with a collector — an object it calls once per hit, as it
-// finds them. The shapes a caller wants out of that are built on one
-// streaming collector here, so there is a single traversal path rather than
-// several that can drift apart:
+// The forms, and the one traversal underneath them:
 //
 //   *Closest  the best hit, and whether there was one
-//   *All      every hit, into the caller's buffer, with the true count
-//             reported even when the buffer was too small
-//   *Each     every hit, handed to a callback as it is found
+//   *All      every hit, into the caller's buffer, true count always reported
+//   *Each     every hit, handed to a callback as found
 //
-// Not every query family has all three. A ray cast and a shape cast both have
-// a real distance to travel, so "closest" is unambiguous: the smallest
-// fraction, which is also what ZJOLT_HIT_ACTION_NARROW already prunes by. An
-// overlap test (zjoltCollideShape*) has no travel distance, but it does have
-// a comparable depth — Jolt's own CollideShapeResult::GetEarlyOutFraction is
-// `-penetration_depth` — so "closest" there means DEEPEST, and
-// zjoltCollideShapeClosest is exactly as well-defined as the other two.
+// Point tests have no *Closest: every hit's fraction is a constant 0.0. Use
+// zjoltCollidePointEach with ZJOLT_HIT_ACTION_STOP instead.
 //
-// A point test (zjoltCollidePoint*) has neither. CollidePointResult::
-// GetEarlyOutFraction is a constant 0.0f for every hit: a point is either
-// inside a shape or it is not, with no scalar that makes one "closer" than
-// another. A zjoltCollidePointClosest built on this collector would silently
-// return whichever hit the traversal happened to visit first — an accident
-// of internal order dressed up as an answer — so it is deliberately not
-// offered. Use zjoltCollidePointEach with ZJOLT_HIT_ACTION_STOP if "is this
-// point inside anything at all" is the actual question.
-//
-// The streaming form is the one that materialises nothing. It matters most for
-// overlap queries: Jolt's own AllHitCollisionCollector accumulates into an
-// unbounded array, and a CollideShapeResult is about a kilobyte because it
-// embeds two 32-vertex face arrays — sized that way whether or not faces were
-// asked for. No form here builds that array any more, and the count-then-fill
-// pair is one traversal per call rather than one per call twice over.
-//
-// NOTHING MAY UNWIND OUT OF A HIT CALLBACK. This is the rule with teeth. Jolt
-// is compiled with exceptions off, so an exception crossing a collector is
-// std::terminate; worse, a stack unwind through one skips the broad phase's
-// read-lock destructor and PERMANENTLY DEADLOCKS the next step, with nothing
-// at the point of failure to say why. A callback that has failed must record
-// that where it can reach it, return ZJOLT_HIT_ACTION_STOP, and raise the
-// failure after the query has returned.
-//
-// Two things a callback does NOT get, both decisions rather than oversights:
-//
-//   * The TransformedShape Jolt is holding. It is live for exactly one call
-//     and Jolt does not clear it afterwards, so it cannot be handed out
-//     safely. The two things a caller actually wants from it — the surface
-//     normal and the surface material — are resolved into the hit instead,
-//     the same way and for the same reason.
-//   * A per-body bracket. Jolt calls OnBody / OnBodyEnd around the hits
-//     belonging to one body, and that is the only point in a query where a
-//     JPH::Body is readable. Its base-class versions do nothing, so leaving
-//     them out costs nothing today and adding them later is purely additive.
+// NOTHING MAY UNWIND OUT OF A HIT CALLBACK. Exceptions are off; a stack
+// unwind through a collector PERMANENTLY DEADLOCKS the next step. Record a
+// failure elsewhere, return ZJOLT_HIT_ACTION_STOP, and raise it afterward.
 //===----------------------------------------------------------------------===//
 
-/// What a streaming query does after a hit.
-///
-/// The narrowed fraction is computed from the hit rather than taken from the
-/// caller, and that is the whole reason this is an enum. Jolt's collectors
-/// assert that the early-out fraction only ever decreases, and with assertions
-/// compiled out an increasing one violates preconditions the narrow phase
-/// asserts on — which surfaces as a crash inside Jolt with the caller's
-/// mistake nowhere in sight. A float parameter would put that in every
-/// caller's hands. An enum cannot be got wrong.
-///
-/// A value outside this enum is treated as ZJOLT_HIT_ACTION_CONTINUE, that
-/// being the one answer which can neither lose a hit nor break a precondition.
+/// What a streaming query does after a hit, returned by the query's hit
+/// callback. A value outside this enum is treated as
+/// ZJOLT_HIT_ACTION_CONTINUE.
 typedef enum ZJoltHitAction {
   /// Keep going, accepting hits at any distance. Hit order is UNSPECIFIED.
   ZJOLT_HIT_ACTION_CONTINUE = 0,
   /// Keep going, but only accept hits better than this one: nearer for a ray
-  /// or a shape cast, deeper for an overlap.
-  ///
-  /// Narrowing on every hit is what gives the traversal an order: each hit is
-  /// then strictly better than the one before it, so hits arrive WORST FIRST
-  /// and the last one is the best. Narrowing on some hits and not others
-  /// orders nothing.
-  ///
-  /// Expect FEWER hits, not sorted ones. Pruning is the point and ordering is
-  /// the side effect — the broad phase already walks roughly front to back, so
-  /// a ray that reports five hits without narrowing may well report one with
-  /// it. Reach for this to avoid work, not to sort.
-  ///
-  /// For a ray this can end the query outright: a hit at fraction 0 leaves
-  /// nothing that could be nearer, so Jolt stops. That is correct rather than
-  /// a surprise, and it is only reachable because narrowing is opt-in.
+  /// or shape cast, deeper for an overlap. Narrowing on EVERY hit makes hits
+  /// arrive WORST FIRST; narrowing on only some orders nothing. For a ray, a
+  /// hit at fraction 0 ends the query outright — nothing can be nearer.
   ZJOLT_HIT_ACTION_NARROW = 1,
   /// End the query now. Hits already reported stand.
   ZJOLT_HIT_ACTION_STOP = 2,
@@ -253,13 +178,8 @@ typedef ZJoltHitAction (*ZJoltCollidePointHitFn)(
 //===----------------------------------------------------------------------===//
 
 /// How a ray treats surfaces it meets from behind, and shapes it starts
-/// inside. NULL takes these defaults, which are Jolt's.
-///
-/// This is exposed because the three ray forms share one traversal and so one
-/// set of settings. Jolt's single-hit CastRay overload — which the closest-hit
-/// form used to be — bakes in a different answer for triangles than its
-/// collector overload does, and burying that would have left the closest hit
-/// and the full list disagreeing about whether the underside of a mesh is a
+/// inside. NULL takes these defaults, which are Jolt's. Shared by
+/// zjoltCastRayClosest/All/Each, so all three agree on what counts as a
 /// surface.
 typedef struct ZJoltRayCastSettings {
   /// Whether a triangle hit from behind counts. Applies to mesh shapes.
@@ -285,13 +205,11 @@ ZJOLT_API ZJoltResult zjoltCastRayClosest(const ZJoltPhysicsSystem *system,
                                           ZJoltRayCastHit *out_hit,
                                           bool *out_hit_any);
 
-/// Every hit along the ray, in an unspecified order, written into `out_hits`.
-///
-/// Two-call protocol, as everywhere here: `*out_count` always receives the
-/// true number of hits, so a capacity of 0 (with out_hits = NULL) is a size
-/// query. A short buffer receives the first `capacity` hits and reports
-/// ZJOLT_RESULT_BUFFER_TOO_SMALL with the true count; WHICH hits those are is
-/// unspecified, for the same reason the order is.
+/// Every hit along the ray, in an unspecified order, written into
+/// `out_hits`. Two-call protocol, as everywhere here: `*out_count` always
+/// receives the true number of hits, so capacity 0 (out_hits = NULL) sizes
+/// the buffer. A short buffer gets the first `capacity` hits and
+/// ZJOLT_RESULT_BUFFER_TOO_SMALL; WHICH hits those are is unspecified.
 ZJOLT_API ZJoltResult zjoltCastRayAll(const ZJoltPhysicsSystem *system,
                                       const ZJoltRVec3 *origin,
                                       const ZJoltVec3 *direction,
@@ -319,12 +237,9 @@ ZJOLT_API ZJoltResult zjoltCastRayEach(const ZJoltPhysicsSystem *system,
 //===----------------------------------------------------------------------===//
 
 /// Whether a triangle edge that a neighbouring triangle already covers can
-/// produce a contact.
-///
-/// An edge is "active" when nothing sits on the other side of it at a shallow
-/// enough angle. Colliding with the inactive ones is what makes a box slid
-/// across a flat mesh catch on the seams between its triangles, so simulation
-/// wants only the active ones. A query asking what geometry is really there
+/// produce a contact. An edge is "active" when nothing covers it at a
+/// shallow enough angle. Simulation wants only active edges (avoids
+/// catching on mesh seams); a query asking what geometry is really there
 /// usually wants all of them.
 typedef enum ZJoltActiveEdgeMode {
   /// Jolt's default. A contact on an edge a neighbour covers is dropped.
@@ -350,13 +265,9 @@ typedef enum ZJoltCollectFacesMode {
 typedef struct ZJoltCollideShapeSettings {
   /// @see ZJoltActiveEdgeMode.
   ZJoltActiveEdgeMode active_edge_mode;
-  /// Faces are computed into Jolt's own result and ZJoltCollideShapeHit does
-  /// not carry them, so asking for them here buys nothing today and costs the
-  /// work of finding them. It is exposed because it is the other half of what
-  /// `active_edge_movement_direction` below is for, and because a settings
-  /// struct that quietly drops a field is worse than one that explains it.
-  /// Reach for zjoltTransformedShapeGetSupportingFace when the face itself is
-  /// the answer wanted.
+  /// Computed into Jolt's own result, but ZJoltCollideShapeHit does not carry
+  /// faces — setting this buys nothing today, only costs the work. Reach for
+  /// zjoltTransformedShapeGetSupportingFace when the face itself is wanted.
   ZJoltCollectFacesMode collect_faces_mode;
   /// How close counts as touching inside GJK, in metres. Jolt's default is
   /// 1e-4.
@@ -376,10 +287,18 @@ typedef struct ZJoltCollideShapeSettings {
   /// penetration_depth giving the gap — "is anything within a metre of here".
   /// The contact points are then the closest points rather than touching ones.
   float max_separation_distance;
-  /// Whether a triangle met from behind counts. Applies to mesh and height
-  /// field shapes; an overlap test has no direction of travel, which is why
-  /// this is one mode where a shape cast below has two.
+  /// Whether a triangle met from behind counts. Applies to mesh and
+  /// height field shapes. The matching shape-cast setting below has two
+  /// modes (triangle and convex) since a sweep has a direction; this has
+  /// only one.
   ZJoltBackFaceMode back_face_mode;
+  /// How close two vertices must be (max squared distance, in metres
+  /// squared) to count as the same one when deciding whether an edge is
+  /// shared between triangles. Read only by the
+  /// zjoltCollideShapeWithInternalEdgeRemoval* family below; every other
+  /// query in this header ignores it. Jolt's default is 1e-8 (a 1e-4 metre
+  /// tolerance, squared).
+  float internal_edge_removal_vertex_tolerance_sq;
 } ZJoltCollideShapeSettings;
 
 /// Options for a sweep, taken by every zjoltCastShape* entry point here and by
@@ -429,13 +348,12 @@ ZJOLT_API void zjoltShapeCastSettingsInit(ZJoltShapeCastSettings *settings);
 // Shape casts
 //===----------------------------------------------------------------------===//
 
-/// Sweeps `shape` from `position`/`rotation` along `direction` and reports the
-/// nearest hit. `scale` may be NULL for (1,1,1).
+/// Sweeps `shape` from `position`/`rotation` along `direction` and reports
+/// the nearest hit. `scale` may be NULL for (1,1,1).
 ///
-/// `settings` may be NULL for Jolt's defaults, which ignore back faces — so a
-/// sweep that STARTS inside geometry reports nothing at all until
-/// `back_face_mode_convex` or `back_face_mode_triangles` says otherwise. That
-/// is the usual reason a placement test comes back empty.
+/// `settings` NULL takes Jolt's defaults, which ignore back faces — a sweep
+/// that STARTS inside geometry then reports nothing until
+/// `back_face_mode_convex` or `back_face_mode_triangles` says otherwise.
 ZJOLT_API ZJoltResult zjoltCastShapeClosest(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
@@ -461,13 +379,9 @@ ZJOLT_API ZJoltResult zjoltCastShapeEach(
     ZJoltShapeCastHitFn on_hit, void *user);
 
 //===----------------------------------------------------------------------===//
-// Overlap
-//
-// A `settings->max_separation_distance` above zero reports near misses too,
-// with a negative penetration depth — "is there anything within a metre of
-// here". It used to be a parameter of its own on these three; it is a field of
-// ZJoltCollideShapeSettings as well, and one query cannot be given two answers
-// to the same question, so the parameter went and the field stayed.
+// Overlap. `settings->max_separation_distance` above zero reports near
+// misses too, as a negative penetration depth: "anything within a metre
+// of here".
 //===----------------------------------------------------------------------===//
 
 /// The single deepest overlap of `shape` placed at `position`/`rotation` —
@@ -493,6 +407,45 @@ ZJOLT_API ZJoltResult zjoltCollideShapeAll(
 /// path was built for: an overlap hit is the expensive one to accumulate.
 /// @see zjoltCastRayEach.
 ZJOLT_API ZJoltResult zjoltCollideShapeEach(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
+    void *user);
+
+//===----------------------------------------------------------------------===//
+// Overlap, with internal edge removal — the fix
+// zjoltCharacterSetEnhancedInternalEdgeRemoval applies automatically for a
+// character, run here by hand: drops a contact on a triangle edge that is
+// really another triangle's interior, not a real seam.
+//
+// Same forms/settings/filters as zjoltCollideShape* above, except
+// `active_edge_mode`/`collect_faces_mode` are forced to COLLIDE_WITH_ALL/
+// COLLECT_FACES regardless of `settings`, and
+// `internal_edge_removal_vertex_tolerance_sq` is read (ignored elsewhere).
+// Versus zjoltCollideShapeEach, hits can arrive later and out of order:
+// Jolt buffers and sorts them deepest-first per body before deciding which
+// survive.
+//===----------------------------------------------------------------------===//
+
+/// @see zjoltCollideShapeClosest.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalClosest(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hit,
+    bool *out_hit_any);
+
+/// @see zjoltCollideShapeAll for the two-call protocol.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalAll(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
+
+/// @see zjoltCollideShapeEach.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalEach(
     const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
@@ -526,67 +479,196 @@ ZJOLT_API ZJoltResult zjoltCollidePointEach(const ZJoltPhysicsSystem *system,
                                             void *user);
 
 //===----------------------------------------------------------------------===//
-// Shape versus shape
+// Observing a hit's body before the hit: CollisionCollector::OnBody fires
+// once per body, under the traversal's own lock, strictly before any of
+// that body's hits reach on_hit — for filtering/annotating by user data,
+// layer or motion type without a second lookup inside on_hit.
 //
-// Two shapes, two placements, and no physics system anywhere: "would these
-// overlap if I put them here", answered without creating a body, adding it to
-// a world or stepping anything. Placement validation, an editor's drag handle,
-// a sweep against geometry that is not in the world.
-//
-// Every other query in this file walks a broad phase and reports the BODIES it
-// found. These have no broad phase and no body, so every hit reports
-// ZJOLT_BODY_ID_INVALID and a ZJoltShapeFilter is handed that same invalid id
-// — the two sub-shape ids are all it has to decide on, and against shapes with
-// no children both are ZJOLT_SUB_SHAPE_ID_EMPTY. `material` still resolves; it
-// comes off the second shape, as it does everywhere else here.
-//
-// They take the same ZJoltCollideShapeSettings and ZJoltShapeCastSettings the
-// system-level queries above do, with NULL meaning Jolt's defaults there too.
-//
-// WHAT JOLT ASSERTS, AND WHAT IS REFUSED INSTEAD
-//
-// Jolt dispatches a pair through a table indexed by both sub-types, and the
-// cells nothing ever registered assert "Unsupported shape pair" — a mesh
-// against a mesh, a height field against a plane, any two surfaces with no
-// convex shape between them. That is a real gap rather than an oversight:
-// neither surface has an inside, so there is nothing for the narrow phase to
-// separate. With assertions compiled out the same cell is a function that
-// returns without reporting anything, so the answer would be a confident "no
-// overlap" for a query that never ran. These refuse it up front with
-// ZJOLT_RESULT_UNSUPPORTED, in every build.
-//
-// The check looks THROUGH a compound or a decorated shape rather than at it,
-// because Jolt does: those re-dispatch whatever they hold, so a compound of
-// meshes against a mesh reaches the same unregistered cell a bare mesh would.
-// Wrapping does not rescue a pair. What decides the answer is the leaves, and
-// the rule is that one side has to be convex all the way down.
-//
-// That rule is deliberately all-or-nothing per side. A compound holding one
-// convex child and one mesh child is refused against a mesh, even though the
-// convex child on its own would have dispatched — because the mesh child
-// would reach the unregistered cell, and a partial answer to "do these
-// overlap" is worse than a refusal. Split the compound if you want the half
-// that works. A shape tree deeper than 64 levels is refused for the same
-// reason: the walk stops rather than the stack.
-//
-// A scale the shape cannot take is the other assert: a sphere insists on a
-// uniform one, every shape refuses a zero one. zjoltShapeIsValidScale asks the
-// same question ahead of time and zjoltShapeMakeScaleValid answers with the
-// nearest scale that passes; here it is ZJOLT_RESULT_INVALID_ARGUMENT.
+// Not offered on *Closest/*All (neither runs host code during traversal);
+// only alongside on_hit, as *EachWithBody. OnBodyEnd is deliberately not
+// offered either — the per-hit callback has nothing left to close out once
+// a body's last hit has arrived.
 //===----------------------------------------------------------------------===//
 
-/// The deepest overlap between two placed shapes, or nothing.
+/// Called once per body, from inside the traversal, before any of that
+/// body's hits reach the query's on_hit callback.
 ///
-/// `scale1` and `scale2` may be NULL for (1, 1, 1). `position` and `rotation`
-/// are each shape's own world placement, NOT its centre of mass; Jolt collides
-/// in centre-of-mass space and the conversion happens here, so a shape built
-/// with an offset centre of mass sits where it was asked to.
+/// `body` is valid only for this call — copy out what is needed before
+/// returning; do not keep the pointer past it. Under the traversal's own
+/// lock, every zjoltBody*Locked accessor (zjolt_body.h) may be called on it.
+typedef void (*ZJoltOnBodyFn)(void *user, const ZJoltBody *body);
+
+/// @see zjoltCastRayEach; the same ray and the same traversal, with `on_body`
+/// additionally called once per body before its hits reach `on_hit`.
+ZJOLT_API ZJoltResult zjoltCastRayEachWithBody(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *origin,
+    const ZJoltVec3 *direction, const ZJoltRayCastSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltRayCastHitFn on_hit, void *user,
+    ZJoltOnBodyFn on_body, void *on_body_user);
+
+/// @see zjoltCastShapeEach and zjoltCastRayEachWithBody.
+ZJOLT_API ZJoltResult zjoltCastShapeEachWithBody(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHitFn on_hit, void *user, ZJoltOnBodyFn on_body,
+    void *on_body_user);
+
+/// @see zjoltCollideShapeEach and zjoltCastRayEachWithBody.
+ZJOLT_API ZJoltResult zjoltCollideShapeEachWithBody(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
+    void *user, ZJoltOnBodyFn on_body, void *on_body_user);
+
+/// @see zjoltCollideShapeWithInternalEdgeRemovalEach and
+/// zjoltCastRayEachWithBody.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalEachWithBody(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
+    void *user, ZJoltOnBodyFn on_body, void *on_body_user);
+
+/// @see zjoltCollidePointEach and zjoltCastRayEachWithBody.
+ZJOLT_API ZJoltResult zjoltCollidePointEachWithBody(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *point,
+    const ZJoltQueryFilters *filters, ZJoltCollidePointHitFn on_hit,
+    void *user, ZJoltOnBodyFn on_body, void *on_body_user);
+
+//===----------------------------------------------------------------------===//
+// The unlocked path: the locked queries above take PhysicsSystem's body
+// locks — correct outside a step, but deadlocks inside one where a contact
+// listener, combine callback or step listener already holds them. These
+// *NoLock twins skip that lock, the same trade
+// zjoltPhysicsSystemTryGetBodyNoLock makes for a single body.
+//
+// Same settings/filters/hits as the locked entry point of the same name
+// minus the suffix. USE WITH GREAT CARE (Jolt's own phrase): nothing stops
+// another thread mutating a body this reads while it reads it — calling one
+// outside a step that already excludes that race IS a data race, not a
+// slower path with the same answer.
+//===----------------------------------------------------------------------===//
+
+/// @see zjoltCastRayClosest.
+ZJOLT_API ZJoltResult zjoltCastRayClosestNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *origin,
+    const ZJoltVec3 *direction, const ZJoltRayCastSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltRayCastHit *out_hit,
+    bool *out_hit_any);
+
+/// @see zjoltCastRayAll.
+ZJOLT_API ZJoltResult zjoltCastRayAllNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *origin,
+    const ZJoltVec3 *direction, const ZJoltRayCastSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltRayCastHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
+
+/// @see zjoltCastRayEach.
+ZJOLT_API ZJoltResult zjoltCastRayEachNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *origin,
+    const ZJoltVec3 *direction, const ZJoltRayCastSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltRayCastHitFn on_hit, void *user);
+
+/// @see zjoltCastShapeClosest.
+ZJOLT_API ZJoltResult zjoltCastShapeClosestNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHit *out_hit, bool *out_hit_any);
+
+/// @see zjoltCastShapeAll.
+ZJOLT_API ZJoltResult zjoltCastShapeAllNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHit *out_hits, uint32_t capacity, uint32_t *out_count);
+
+/// @see zjoltCastShapeEach.
+ZJOLT_API ZJoltResult zjoltCastShapeEachNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltVec3 *direction,
+    const ZJoltShapeCastSettings *settings, const ZJoltQueryFilters *filters,
+    ZJoltShapeCastHitFn on_hit, void *user);
+
+/// @see zjoltCollideShapeClosest.
+ZJOLT_API ZJoltResult zjoltCollideShapeClosestNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hit,
+    bool *out_hit_any);
+
+/// @see zjoltCollideShapeAll.
+ZJOLT_API ZJoltResult zjoltCollideShapeAllNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
+
+/// @see zjoltCollideShapeEach.
+ZJOLT_API ZJoltResult zjoltCollideShapeEachNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
+    void *user);
+
+/// @see zjoltCollideShapeWithInternalEdgeRemovalClosest.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalClosestNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hit,
+    bool *out_hit_any);
+
+/// @see zjoltCollideShapeWithInternalEdgeRemovalAll.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalAllNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
+
+/// @see zjoltCollideShapeWithInternalEdgeRemovalEach.
+ZJOLT_API ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalEachNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltShape *shape,
+    const ZJoltVec3 *scale, const ZJoltRVec3 *position,
+    const ZJoltQuat *rotation, const ZJoltCollideShapeSettings *settings,
+    const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
+    void *user);
+
+/// @see zjoltCollidePointAll.
+ZJOLT_API ZJoltResult zjoltCollidePointAllNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *point,
+    const ZJoltQueryFilters *filters, ZJoltCollidePointHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
+
+/// @see zjoltCollidePointEach.
+ZJOLT_API ZJoltResult zjoltCollidePointEachNoLock(
+    const ZJoltPhysicsSystem *system, const ZJoltRVec3 *point,
+    const ZJoltQueryFilters *filters, ZJoltCollidePointHitFn on_hit,
+    void *user);
+
+//===----------------------------------------------------------------------===//
+// Shape versus shape: two placed shapes, no physics system. Every hit
+// reports ZJOLT_BODY_ID_INVALID. ZJOLT_RESULT_UNSUPPORTED for a pair with
+// no convex side (one side must be convex all the way down, checked
+// through any compound/decorated shape). ZJOLT_RESULT_INVALID_ARGUMENT
+// for a scale a shape cannot take.
+//===----------------------------------------------------------------------===//
+
+/// The deepest overlap between two placed shapes, or nothing. `scale1`/
+/// `scale2` may be NULL for (1,1,1). `position`/`rotation` are each shape's
+/// own world placement (not centre of mass); the conversion happens here.
 ///
-/// Contact points come back RELATIVE TO `base_offset`, which may be NULL for
-/// world space. They are floats: in a double-precision build a contact point
-/// far from the origin does not survive the conversion, and passing one of the
-/// two positions here is what keeps the precision.
-///
+/// Contact points are RELATIVE TO `base_offset` (NULL for world space).
 /// `*out_hit_any` says whether `out_hit` was written.
 ZJOLT_API ZJoltResult zjoltCollideShapeVsShapeClosest(
     const ZJoltShape *shape1, const ZJoltVec3 *scale1,
@@ -609,16 +691,27 @@ ZJOLT_API ZJoltResult zjoltCollideShapeVsShapeAll(
     const ZJoltShapeFilter *filter, ZJoltCollideShapeHit *out_hits,
     uint32_t capacity, uint32_t *out_count);
 
-/// Sweeps `shape1` from its placement along `direction` and reports the
-/// nearest hit against `shape2`, which does not move.
+/// Like zjoltCollideShapeVsShapeAll, but AT MOST ONE hit per pair of LEAF
+/// shapes that overlap, not one per pair of intersecting triangles. The hit
+/// kept per leaf pair is the DEEPEST found, as with
+/// zjoltCollideShapeClosest's "closest".
 ///
-/// `direction` carries the sweep's length: nothing beyond it is reported, and
-/// the swept shape's centre of mass at the hit is where it started plus
-/// `fraction * direction`. A sweep that starts already overlapping reports
-/// fraction 0 — but only if `settings->back_face_mode_convex` says to collide
-/// with back faces, which Jolt's default does not.
-///
-/// @see zjoltCollideShapeVsShapeClosest for scale, placement and base offset.
+/// @see zjoltCollideShapeVsShapeAll for the two-call protocol and arguments.
+ZJOLT_API ZJoltResult zjoltCollideShapeVsShapePerLeafAll(
+    const ZJoltShape *shape1, const ZJoltVec3 *scale1,
+    const ZJoltRVec3 *position1, const ZJoltQuat *rotation1,
+    const ZJoltShape *shape2, const ZJoltVec3 *scale2,
+    const ZJoltRVec3 *position2, const ZJoltQuat *rotation2,
+    const ZJoltRVec3 *base_offset, const ZJoltCollideShapeSettings *settings,
+    const ZJoltShapeFilter *filter, ZJoltCollideShapeHit *out_hits,
+    uint32_t capacity, uint32_t *out_count);
+
+/// Sweeps `shape1` along `direction` and reports the nearest hit against
+/// `shape2`, which does not move. The hit's centre of mass is the start
+/// plus `fraction * direction`; nothing beyond it is reported. A sweep
+/// starting already overlapping reports fraction 0 only if
+/// `settings->back_face_mode_convex` allows back faces. @see
+/// zjoltCollideShapeVsShapeClosest for scale, placement and base offset.
 ZJOLT_API ZJoltResult zjoltCastShapeVsShapeClosest(
     const ZJoltShape *shape1, const ZJoltVec3 *scale1,
     const ZJoltRVec3 *position1, const ZJoltQuat *rotation1,
@@ -638,6 +731,99 @@ ZJOLT_API ZJoltResult zjoltCastShapeVsShapeAll(
     const ZJoltQuat *rotation2, const ZJoltRVec3 *base_offset,
     const ZJoltShapeCastSettings *settings, const ZJoltShapeFilter *filter,
     ZJoltShapeCastHit *out_hits, uint32_t capacity, uint32_t *out_count);
+
+//===----------------------------------------------------------------------===//
+// Predicting a contact's response, without running a step: standalone Jolt
+// utilities over plain contact data, not a shape or system — the second one
+// does not even take a body.
+//
+// zjoltEstimateCollisionResponse reads `body1`/`body2` through Jolt's own
+// no-lock body interface — safe only where they are already guaranteed
+// readable without a lock of this call's own, as inside ZJoltContactListener
+// (zjolt_system.h), which this exists for. Elsewhere, without that
+// guarantee, it is a data race. `combined_friction`/`combined_restitution`
+// are the values ZJoltContactSettings carries from OnContactAdded;
+// `num_iterations` of 1 computes no friction at all.
+//===----------------------------------------------------------------------===//
+
+/// The size of `ZJoltCollisionEstimationResult::contact_impulses`, and the
+/// bound zjoltPruneContactPoints reduces toward from the other direction --
+/// JPH::ContactPoints::Capacity, the width every one of Jolt's own contact
+/// manifolds is built around.
+#define ZJOLT_CONTACT_POINTS_CAPACITY 64
+
+/// Input for zjoltEstimateCollisionResponse: a contact manifold reduced to
+/// what its algorithm reads. `points_on_1`/`points_on_2` each hold
+/// `num_points` entries, relative to `base_offset` (add it back for world
+/// space). `num_points` must be at least 1 and at most
+/// ZJOLT_CONTACT_POINTS_CAPACITY.
+typedef struct ZJoltCollisionEstimationManifold {
+  ZJoltRVec3 base_offset;
+  /// Direction to move body 2 out of collision along the shortest path.
+  ZJoltVec3 world_space_normal;
+  uint32_t num_points;
+  const ZJoltVec3 *points_on_1;
+  const ZJoltVec3 *points_on_2;
+} ZJoltCollisionEstimationManifold;
+
+/// @see JPH::CollisionEstimationResult. Every velocity and impulse here is a
+/// PREDICTION: accurate for two bodies colliding, not for three or more
+/// resolving at the same time, because this knows nothing of any other
+/// contact either body is in.
+typedef struct ZJoltCollisionEstimationResult {
+  ZJoltVec3 linear_velocity1;
+  ZJoltVec3 angular_velocity1;
+  ZJoltVec3 linear_velocity2;
+  ZJoltVec3 angular_velocity2;
+  /// Point at which friction was applied, relative to the manifold's
+  /// base_offset -- the average of its contact points.
+  ZJoltVec3 friction_point;
+  /// Normalized tangent of the contact normal.
+  ZJoltVec3 tangent1;
+  /// Second normalized tangent; forms a basis with tangent1 and the
+  /// manifold's world_space_normal.
+  ZJoltVec3 tangent2;
+  float friction_impulse1;
+  float friction_impulse2;
+  float angular_friction_impulse;
+  /// Entries [0, num_contact_impulses) are valid, one per point in the
+  /// manifold passed in, same order. Always equal to that manifold's
+  /// num_points.
+  uint32_t num_contact_impulses;
+  float contact_impulses[ZJOLT_CONTACT_POINTS_CAPACITY];
+} ZJoltCollisionEstimationResult;
+
+/// Predicts impulses and post-collision velocities of a contact, for sizing
+/// an impact response from inside a contact callback (see the note above).
+///
+/// ZJOLT_RESULT_BODY_NOT_FOUND if either id names no live body.
+/// ZJOLT_RESULT_INVALID_ARGUMENT if manifold->num_points is 0 or exceeds
+/// ZJOLT_CONTACT_POINTS_CAPACITY.
+ZJOLT_API ZJoltResult zjoltEstimateCollisionResponse(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body1, ZJoltBodyId body2,
+    const ZJoltCollisionEstimationManifold *manifold, float combined_friction,
+    float combined_restitution, float min_velocity_for_restitution,
+    uint32_t num_iterations, ZJoltCollisionEstimationResult *out_result);
+
+//===----------------------------------------------------------------------===//
+// zjoltPruneContactPoints: reduces a manifold to 4 or fewer points in place,
+// the same reduction Jolt's own solver applies before a manifold becomes a
+// contact constraint — for a host running identical contact processing.
+//
+// `*count` is read as the input count and written as the surviving count
+// (always <= 4); refused (ZJOLT_RESULT_INVALID_ARGUMENT) if above
+// ZJOLT_CONTACT_POINTS_CAPACITY or already at 4 or below.
+//===----------------------------------------------------------------------===//
+
+/// `points_on_1`/`points_on_2` are overwritten IN PLACE, relative to the
+/// caller's existing offset (a choice of points, not a coordinate change).
+///
+/// `penetration_axis` must be normalizable: zero, non-finite or otherwise
+/// degenerate is ZJOLT_RESULT_INVALID_ARGUMENT; near-unit vectors are
+/// renormalized instead of refused.
+ZJOLT_API ZJoltResult zjoltPruneContactPoints(
+    const ZJoltVec3 *penetration_axis, ZJoltVec3 *points_on_1,
+    ZJoltVec3 *points_on_2, uint32_t *count);
 
 #ifdef __cplusplus
 }  // extern "C"

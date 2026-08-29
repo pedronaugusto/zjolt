@@ -12,19 +12,18 @@
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
 
+#ifdef JPH_DEBUG_RENDERER
+#include <Jolt/Renderer/DebugRenderer.h>
+#endif  // JPH_DEBUG_RENDERER
+
 #include <algorithm>
 #include <cmath>
 
 //===----------------------------------------------------------------------===//
 // Viewed as a plain constraint
 //
-// ZJoltConstraint's own ToC/ToJolt live in zjolt_constraint.cpp, the only
-// other translation unit that needs them; this local, identical inline
-// definition is the same call zjolt_softbody.cpp makes for
-// ZJoltSoftBodySharedSettings, and for the same reason (see its own
-// comment): the tag is never completed or dereferenced as itself, so
-// duplicating one reinterpret_cast rather than promoting it to a shared
-// header is the smaller change.
+// ZJoltConstraint's own ToC/ToJolt live in zjolt_constraint.cpp; this
+// local, identical inline definition duplicates one reinterpret_cast rather than promoting it to a shared header, the same call zjolt_softbody.cpp makes for ZJoltSoftBodySharedSettings and for the same reason.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -36,18 +35,8 @@ inline ZJoltConstraint *ToC(JPH::Constraint *constraint) {
 //===----------------------------------------------------------------------===//
 // Wheel-ground collision filters
 //
-// zjolt_internal.h already has adapters of exactly this shape for queries,
-// but they are `final` and hold their ZJolt* table by value at construction.
-// A vehicle's filters are retargetable after the fact and live inside the
-// handle, so these are the same three forwards written to be mutated in
-// place instead.
-//
-// The body one is not quite a forward: it also re-applies the self-exclusion
-// that installing any body filter would otherwise take away from Jolt (see
-// VehicleCollisionTester.cpp, where a NULL mBodyFilter means
-// IgnoreSingleBodyFilter(vehicle body)). Wheels colliding with their own
-// chassis is not a thing any caller wants, so it is not a thing this ABI
-// lets one ask for by omission.
+// zjolt_internal.h has adapters of this shape for queries, but `final` with the table held by value; a vehicle's filters are retargetable and live in the handle, so these are the same three forwards written to be mutated in place.
+// The body one also re-applies the self-exclusion installing any body filter would otherwise take away (VehicleCollisionTester.cpp): wheels colliding with their own chassis is never wanted, so it cannot be asked for by omission.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -91,24 +80,21 @@ class VehicleBodyFilter final : public JPH::BodyFilter {
 //===----------------------------------------------------------------------===//
 // The handle
 //
-// Defined here rather than in zjolt_internal.h — the handle types living
-// there are the ones shared across translation units, and nothing outside
-// this file ever sees a ZJoltVehicleConstraint*. It must still match the
-// incomplete tag zjolt_vehicle.h declares, exactly as that header's own
-// comment on ZJoltCharacter describes.
+// Defined here, not zjolt_internal.h: nothing outside this file ever sees a ZJoltVehicleConstraint*. Must still match the incomplete tag zjolt_vehicle.h declares, as that header's own comment on ZJoltCharacter describes.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltVehicleConstraint {
   JPH::Ref<JPH::VehicleConstraint> impl;
   ZJoltPhysicsSystem *owner;
 
-  /// Which VehicleController subclass `impl->GetController()` actually is.
-  /// VehicleController carries no runtime type tag of its own (Jolt builds
-  /// without RTTI), so this is what makes the downcast in WheeledController /
-  /// TrackedController / MotorcycleControllerOf below sound rather than a
-  /// guess.
-  ZJoltVehicleControllerKind controller_kind;
-  ZJoltVehicleCollisionTesterKind collision_tester_kind;
+  /// Which VehicleController subclass `impl->GetController()` actually
+  /// is — VehicleController has no runtime type tag (Jolt builds
+  /// without RTTI), so this makes the downcast in WheeledController/
+  /// TrackedController/MotorcycleControllerOf sound, not a guess.
+  ///
+  /// Kept as the raw integer, not the enum type: a host-written descriptor value this ABI never promised names an enumerator. See zjolt::RawEnum in zjolt_internal.h.
+  int32_t controller_kind;
+  int32_t collision_tester_kind;
 
   /// The tester `impl` is using. `impl` holds it as a RefConst, so this is
   /// the only mutable route to it — which both the filters and
@@ -131,6 +117,11 @@ struct ZJoltVehicleConstraint {
   ZJoltVehicleStepCallback post_step{};
   ZJoltVehicleCombineFrictionCallback combine_friction{};
   ZJoltVehicleTireMaxImpulseCallback tire_max_impulse{};
+
+  /// What zjoltVehicleConstraintGetCollisionTesterCallback gives back;
+  /// all-NULL whenever `tester` is one of the three built-in kinds rather
+  /// than a VehicleCollisionTesterCallbackAdapter.
+  ZJoltVehicleCollisionTesterCallback collision_tester_callback{};
 };
 
 namespace {
@@ -356,7 +347,9 @@ void FillEngineSettings(JPH::VehicleEngineSettings &out, const ZJoltVehicleEngin
 
 void FillTransmissionSettings(JPH::VehicleTransmissionSettings &out,
                               const ZJoltVehicleTransmissionDesc &d) {
-  out.mMode = d.mode == ZJOLT_VEHICLE_TRANSMISSION_MODE_MANUAL
+  // Converted here, at the read of a field the host filled in — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  out.mMode = zjolt::RawEnum(d.mode) == ZJOLT_VEHICLE_TRANSMISSION_MODE_MANUAL
                   ? JPH::ETransmissionMode::Manual
                   : JPH::ETransmissionMode::Auto;
   if (d.forward_gear_ratios != nullptr && d.forward_gear_ratio_count > 0) {
@@ -389,14 +382,8 @@ bool WheelIndexValid(int32_t index, uint32_t wheel_count, bool allow_none) {
 //===----------------------------------------------------------------------===//
 // Numeric-range validation
 //
-// Wheel.cpp, WheeledVehicleController.cpp and TrackedVehicleController.cpp
-// each JPH_ASSERT a laundry list of numeric ranges on the settings they are
-// handed, none of it checked on this side before now — every one below is a
-// recon'd assert line, turned into a returned ZJOLT_RESULT_INVALID_ARGUMENT
-// instead of a caller-trippable abort in an asserts-on build. Every function
-// here validates only; none of them mutate anything, so the caller of a
-// batch (every wheel, every differential) sees the first failure with
-// nothing partially applied.
+// Every function below is a recon'd JPH_ASSERT from Wheel.cpp/WheeledVehicleController.cpp/TrackedVehicleController.cpp, turned into a returned ZJOLT_RESULT_INVALID_ARGUMENT instead of a caller-trippable abort.
+// Validates only, mutates nothing, so a batch caller (every wheel, every differential) sees the first failure with nothing partially applied.
 //===----------------------------------------------------------------------===//
 
 /// Wheel.cpp:74-80 — every wheel regardless of controller kind.
@@ -489,7 +476,9 @@ ZJoltResult ValidateTransmissionDesc(const ZJoltVehicleTransmissionDesc &d,
   if (!(d.shift_down_rpm > 0.0f))
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "transmission shift_down_rpm must be > 0");
-  if (d.mode == ZJOLT_VEHICLE_TRANSMISSION_MODE_AUTO &&
+  // Converted here, at the read of a field the host filled in — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  if (zjolt::RawEnum(d.mode) == ZJOLT_VEHICLE_TRANSMISSION_MODE_AUTO &&
       !(d.shift_up_rpm < engine.max_rpm)) {
     return zjolt::SetError(
         ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -579,7 +568,10 @@ ZJoltResult FillWheeledCommon(JPH::WheeledVehicleControllerSettings *cs,
 JPH::VehicleCollisionTester *BuildCollisionTester(
     const ZJoltVehicleCollisionTesterDesc &d) {
   const JPH::Vec3 up = zjolt::ToJolt(d.up).NormalizedOr(JPH::Vec3::sAxisY());
-  switch (d.kind) {
+  // Switched on the raw integer, not on the field: `d` is a descriptor the
+  // host filled in, and a switch on the field itself is the load — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  switch (zjolt::RawEnum(d.kind)) {
     case ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_SPHERE:
       return zjolt::New<JPH::VehicleCollisionTesterCastSphere>(
           static_cast<JPH::ObjectLayer>(d.object_layer), d.radius, up,
@@ -598,6 +590,74 @@ JPH::VehicleCollisionTester *BuildCollisionTester(
           static_cast<JPH::ObjectLayer>(d.object_layer), up, d.max_slope_angle);
   }
 }
+
+/// Forwards VehicleCollisionTester's two pure virtuals to a caller
+/// -supplied ZJoltVehicleCollisionTesterCallback. See the header
+/// comment on that struct for why neither is handed a
+/// JPH::PhysicsSystem: both run from inside VehicleConstraint::OnStep,
+/// while PhysicsSystem::Update holds the body manager locked for the
+/// step, same as Jolt's own three testers using NoLock interfaces. A body id resolves back to `Body *` the same lock-free way OnStep itself uses to revalidate its cached contact.
+class VehicleCollisionTesterCallbackAdapter final
+    : public JPH::VehicleCollisionTester {
+ public:
+  ZJoltVehicleCollisionTesterCallback table{};
+
+  bool Collide(JPH::PhysicsSystem &inPhysicsSystem,
+               const JPH::VehicleConstraint &inVehicleConstraint,
+               JPH::uint inWheelIndex, JPH::RVec3Arg inOrigin,
+               JPH::Vec3Arg inDirection, const JPH::BodyID &inVehicleBodyID,
+               JPH::Body *&outBody, JPH::SubShapeID &outSubShapeID,
+               JPH::RVec3 &outContactPosition, JPH::Vec3 &outContactNormal,
+               float &outSuspensionLength) const override {
+    (void)inVehicleConstraint;
+    if (table.collide == nullptr) return false;
+
+    const ZJoltVehicleGroundTestInput input{
+        static_cast<uint32_t>(inWheelIndex), zjolt::ToCR(inOrigin),
+        zjolt::ToC(inDirection), zjolt::ToC(inVehicleBodyID)};
+    ZJoltVehicleGroundContact contact{};
+    if (!table.collide(table.user, &input, &contact)) return false;
+
+    JPH::Body *body = inPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(
+        zjolt::ToJolt(contact.body));
+    if (body == nullptr) return false;
+
+    outBody = body;
+    outSubShapeID = zjolt::ToJoltSubShapeId(contact.sub_shape_id);
+    outContactPosition = zjolt::ToJoltR(contact.position);
+    outContactNormal = zjolt::ToJolt(contact.normal);
+    outSuspensionLength = contact.suspension_length;
+    return true;
+  }
+
+  void PredictContactProperties(
+      JPH::PhysicsSystem &inPhysicsSystem,
+      const JPH::VehicleConstraint &inVehicleConstraint,
+      JPH::uint inWheelIndex, JPH::RVec3Arg inOrigin, JPH::Vec3Arg inDirection,
+      const JPH::BodyID &inVehicleBodyID, JPH::Body *&ioBody,
+      JPH::SubShapeID &ioSubShapeID, JPH::RVec3 &ioContactPosition,
+      JPH::Vec3 &ioContactNormal, float &ioSuspensionLength) const override {
+    (void)inVehicleConstraint;
+    if (table.predict_contact_properties == nullptr) return;
+
+    const ZJoltVehicleGroundTestInput input{
+        static_cast<uint32_t>(inWheelIndex), zjolt::ToCR(inOrigin),
+        zjolt::ToC(inDirection), zjolt::ToC(inVehicleBodyID)};
+    ZJoltVehicleGroundContact contact{
+        ioBody != nullptr ? zjolt::ToC(ioBody->GetID()) : ZJOLT_BODY_ID_INVALID,
+        zjolt::ToC(ioSubShapeID), zjolt::ToCR(ioContactPosition),
+        zjolt::ToC(ioContactNormal), ioSuspensionLength};
+    table.predict_contact_properties(table.user, &input, &contact);
+
+    JPH::Body *body = inPhysicsSystem.GetBodyLockInterfaceNoLock().TryGetBody(
+        zjolt::ToJolt(contact.body));
+    if (body != nullptr) ioBody = body;
+    ioSubShapeID = zjolt::ToJoltSubShapeId(contact.sub_shape_id);
+    ioContactPosition = zjolt::ToJoltR(contact.position);
+    ioContactNormal = zjolt::ToJolt(contact.normal);
+    ioSuspensionLength = contact.suspension_length;
+  }
+};
 
 /// Points the tester at whichever of the three adapters the caller actually
 /// filled in. A level with a NULL function pointer is left unset rather than
@@ -631,9 +691,7 @@ void ApplyFilters(ZJoltVehicleConstraint *c) {
 //===----------------------------------------------------------------------===//
 // Callback shims
 //
-// Each captures only the handle and re-reads the C table out of it, so
-// clearing a callback takes effect even while Jolt still holds the shim, and
-// one pointer is all the capture std::function has to store (no allocation).
+// Each captures only the handle and re-reads the C table out of it, so clearing a callback takes effect even while Jolt still holds the shim, and one pointer is all the capture std::function has to store (no allocation).
 //===----------------------------------------------------------------------===//
 
 void InvokeStepCallback(const ZJoltVehicleStepCallback &cb,
@@ -675,9 +733,7 @@ extern "C" {
 //===----------------------------------------------------------------------===//
 // Descriptor defaults
 //
-// Every DescInit reads out of a default-constructed Jolt settings object
-// rather than transcribing numbers, so an upstream tuning change moves with
-// it (same reasoning as zjoltCharacterDescInit).
+// Every DescInit reads out of a default-constructed Jolt settings object rather than transcribing numbers, so an upstream tuning change moves with it (same reasoning as zjoltCharacterDescInit).
 //===----------------------------------------------------------------------===//
 
 void zjoltVehicleWheelDescInit(ZJoltVehicleWheelDesc *desc) {
@@ -830,7 +886,13 @@ ZJoltResult zjoltVehicleConstraintCreate(ZJoltPhysicsSystem *system,
                            "anti_roll_bar_count without anti_roll_bars");
   }
 
-  const bool tracked = desc->controller_kind == ZJOLT_VEHICLE_CONTROLLER_KIND_TRACKED;
+  // Converted once here, at the entry point that receives the descriptor
+  // from the host, and used as the raw integer everywhere below — including
+  // the switch on controller kind, which on the field itself would be the
+  // same load. See zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_controller_kind = zjolt::RawEnum(desc->controller_kind);
+  const bool tracked =
+      raw_controller_kind == ZJOLT_VEHICLE_CONTROLLER_KIND_TRACKED;
 
   // Engine range checks are identical in WheeledVehicleController's and
   // TrackedVehicleController's constructors (recon: WheeledVehicleController.
@@ -891,7 +953,7 @@ ZJoltResult zjoltVehicleConstraintCreate(ZJoltPhysicsSystem *system,
   }
 
   JPH::Ref<JPH::VehicleControllerSettings> controller_settings;
-  switch (desc->controller_kind) {
+  switch (raw_controller_kind) {
     case ZJOLT_VEHICLE_CONTROLLER_KIND_TRACKED: {
       auto *cs = zjolt::New<JPH::TrackedVehicleControllerSettings>();
       if (cs == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
@@ -1035,8 +1097,8 @@ ZJoltResult zjoltVehicleConstraintCreate(ZJoltPhysicsSystem *system,
 
   handle->impl = fresh;
   handle->owner = system;
-  handle->controller_kind = desc->controller_kind;
-  handle->collision_tester_kind = desc->collision_tester.kind;
+  handle->controller_kind = raw_controller_kind;
+  handle->collision_tester_kind = zjolt::RawEnum(desc->collision_tester.kind);
   // A second reference on top of the one SetVehicleCollisionTester took, so
   // the handle can hand out a mutable tester (filters, swapping) for as long
   // as it lives. Dropped in zjoltVehicleConstraintDestroy.
@@ -1069,14 +1131,18 @@ void zjoltVehicleConstraintDestroy(ZJoltVehicleConstraint *constraint) {
 
 ZJoltVehicleControllerKind zjoltVehicleConstraintGetControllerKind(
     const ZJoltVehicleConstraint *constraint) {
-  return constraint != nullptr ? constraint->controller_kind
-                               : ZJOLT_VEHICLE_CONTROLLER_KIND_WHEELED;
+  return constraint != nullptr
+             ? static_cast<ZJoltVehicleControllerKind>(
+                   constraint->controller_kind)
+             : ZJOLT_VEHICLE_CONTROLLER_KIND_WHEELED;
 }
 
 ZJoltVehicleCollisionTesterKind zjoltVehicleConstraintGetCollisionTesterKind(
     const ZJoltVehicleConstraint *constraint) {
-  return constraint != nullptr ? constraint->collision_tester_kind
-                               : ZJOLT_VEHICLE_COLLISION_TESTER_KIND_RAY;
+  return constraint != nullptr
+             ? static_cast<ZJoltVehicleCollisionTesterKind>(
+                   constraint->collision_tester_kind)
+             : ZJOLT_VEHICLE_COLLISION_TESTER_KIND_RAY;
 }
 
 ZJoltBodyId zjoltVehicleConstraintGetBodyId(
@@ -1285,6 +1351,200 @@ ZJoltResult zjoltVehicleConstraintSetGear(ZJoltVehicleConstraint *constraint,
 }
 
 //===----------------------------------------------------------------------===//
+// Engine and transmission — runtime operations
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltVehicleConstraintEngineApplyTorque(
+    ZJoltVehicleConstraint *constraint, float torque, float delta_time) {
+  ZJOLT_ENTER();
+  JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  e->ApplyTorque(torque, delta_time);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltVehicleConstraintEngineApplyDamping(
+    ZJoltVehicleConstraint *constraint, float delta_time) {
+  ZJOLT_ENTER();
+  JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  e->ApplyDamping(delta_time);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltVehicleConstraintEngineClampRPM(ZJoltVehicleConstraint *constraint) {
+  ZJOLT_ENTER();
+  JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  e->ClampRPM();
+  return ZJOLT_RESULT_OK;
+}
+
+bool zjoltVehicleConstraintEngineAllowSleep(const ZJoltVehicleConstraint *constraint) {
+  const JPH::VehicleEngine *e = EngineOf(constraint);
+  return e != nullptr && e->AllowSleep();
+}
+
+bool zjoltVehicleConstraintTransmissionAllowSleep(
+    const ZJoltVehicleConstraint *constraint) {
+  const JPH::VehicleTransmission *t = TransmissionOf(constraint);
+  return t != nullptr && t->AllowSleep();
+}
+
+ZJoltResult zjoltVehicleConstraintEngineConvertRPMToAngle(
+    const ZJoltVehicleConstraint *constraint, float rpm, float *out_angle) {
+  ZJOLT_ENTER(out_angle);
+  if (!zjolt::Present(out_angle)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_DEBUG_RENDERER
+  const JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  *out_angle = e->ConvertRPMToAngle(rpm);
+  return ZJOLT_RESULT_OK;
+#else
+  (void)constraint;
+  (void)rpm;
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltVehicleConstraintEngineDrawRPM(
+    ZJoltVehicleConstraint *constraint, ZJoltDebugRenderer *renderer,
+    const ZJoltRVec3 *position, const ZJoltVec3 *forward, const ZJoltVec3 *up,
+    float size, float shift_down_rpm, float shift_up_rpm) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(renderer, position, forward, up))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_DEBUG_RENDERER
+  JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  // Reinterpreted, not dereferenced through a concrete sink: the same
+  // ZJoltDebugRenderer-as-JPH::DebugRenderer view ffi/zjolt_debug.cpp itself
+  // uses (its local ToBase), so a recorder view works here too.
+  e->DrawRPM(reinterpret_cast<JPH::DebugRenderer *>(renderer),
+            zjolt::ToJoltR(*position), zjolt::ToJolt(*forward),
+            zjolt::ToJolt(*up), size, shift_down_rpm, shift_up_rpm);
+  return ZJOLT_RESULT_OK;
+#else
+  (void)size;
+  (void)shift_down_rpm;
+  (void)shift_up_rpm;
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltVehicleConstraintGetEngineDesc(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleEngineDesc *out) {
+  ZJOLT_ENTER(out);
+  const JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  out->max_torque = e->mMaxTorque;
+  out->min_rpm = e->mMinRPM;
+  out->max_rpm = e->mMaxRPM;
+  out->normalized_torque = ToCurveDesc(e->mNormalizedTorque);
+  out->inertia = e->mInertia;
+  out->angular_damping = e->mAngularDamping;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltVehicleConstraintGetTransmissionDesc(
+    const ZJoltVehicleConstraint *constraint,
+    ZJoltVehicleTransmissionDesc *out) {
+  ZJOLT_ENTER(out);
+  const JPH::VehicleTransmission *t = TransmissionOf(constraint);
+  if (t == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  out->mode = t->mMode == JPH::ETransmissionMode::Manual
+                  ? ZJOLT_VEHICLE_TRANSMISSION_MODE_MANUAL
+                  : ZJOLT_VEHICLE_TRANSMISSION_MODE_AUTO;
+  out->forward_gear_ratios = nullptr;
+  out->forward_gear_ratio_count = 0;
+  out->reverse_gear_ratios = nullptr;
+  out->reverse_gear_ratio_count = 0;
+  out->switch_time = t->mSwitchTime;
+  out->clutch_release_time = t->mClutchReleaseTime;
+  out->switch_latency = t->mSwitchLatency;
+  out->shift_up_rpm = t->mShiftUpRPM;
+  out->shift_down_rpm = t->mShiftDownRPM;
+  out->clutch_strength = t->mClutchStrength;
+  return ZJOLT_RESULT_OK;
+}
+
+namespace {
+
+ZJoltResult FillGearRatios(const JPH::Array<float> &ratios, float *out,
+                           uint32_t capacity, uint32_t *out_count) {
+  *out_count = static_cast<uint32_t>(ratios.size());
+  if (out == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < ratios.size()) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  for (size_t i = 0; i < ratios.size(); ++i) out[i] = ratios[i];
+  return ZJOLT_RESULT_OK;
+}
+
+}  // namespace
+
+ZJoltResult zjoltVehicleConstraintGetGearRatios(
+    const ZJoltVehicleConstraint *constraint, float *out_forward,
+    uint32_t forward_capacity, uint32_t *out_forward_count, float *out_reverse,
+    uint32_t reverse_capacity, uint32_t *out_reverse_count) {
+  ZJOLT_ENTER(out_forward_count, out_reverse_count);
+  if (!zjolt::Present(out_forward_count, out_reverse_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::VehicleTransmission *t = TransmissionOf(constraint);
+  if (t == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const ZJoltResult forward_result =
+      FillGearRatios(t->mGearRatios, out_forward, forward_capacity, out_forward_count);
+  const ZJoltResult reverse_result = FillGearRatios(
+      t->mReverseGearRatios, out_reverse, reverse_capacity, out_reverse_count);
+  return forward_result != ZJOLT_RESULT_OK ? forward_result : reverse_result;
+}
+
+ZJoltResult zjoltVehicleConstraintCalculateDifferentialTorqueRatio(
+    const ZJoltVehicleConstraint *constraint, uint32_t differential_index,
+    float left_angular_velocity, float right_angular_velocity,
+    float *out_left_torque_fraction, float *out_right_torque_fraction) {
+  ZJOLT_ENTER(out_left_torque_fraction, out_right_torque_fraction);
+  if (!zjolt::Present(out_left_torque_fraction, out_right_torque_fraction))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::WheeledVehicleController *wc = WheeledController(constraint);
+  if (wc == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::WheeledVehicleController::Differentials &differentials =
+      wc->GetDifferentials();
+  if (differential_index >= differentials.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "differential_index: out of range");
+  }
+  float left = 0.0f;
+  float right = 0.0f;
+  differentials[differential_index].CalculateTorqueRatio(
+      left_angular_velocity, right_angular_velocity, left, right);
+  *out_left_torque_fraction = left;
+  *out_right_torque_fraction = right;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltVehicleConstraintCalculateTrackedWheelAngularVelocity(
+    ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  ZJOLT_ENTER();
+  const JPH::VehicleConstraint *impl = Impl(constraint);
+  if (TrackedController(constraint) == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  if (w == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::WheelTV *wtv = static_cast<JPH::WheelTV *>(w);
+  // mTrackIndex stays -1 until TrackedVehicleController::PreCollide first
+  // assigns it, which happens only as part of a physics step on this
+  // constraint. Reading GetTracks()[-1] before that is what the wheel_index
+  // bounds check above cannot catch: a different index, assigned by Jolt
+  // itself rather than taken from the caller.
+  if (wtv->mTrackIndex < 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "wheel_index: this vehicle has not been stepped yet, so Jolt has "
+        "not assigned it to a track");
+  }
+  wtv->CalculateAngularVelocity(*impl);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
 // Wheeled and motorcycle controller
 //===----------------------------------------------------------------------===//
 
@@ -1472,6 +1732,16 @@ float zjoltVehicleConstraintGetWheelLateralLambda(
   return w != nullptr ? w->GetLateralLambda() : 0.0f;
 }
 
+float zjoltVehicleConstraintGetWheelBrakeImpulse(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  // WheelWV only exists behind a wheeled/motorcycle controller
+  // (WheeledVehicleController::ConstructWheel); this also excludes a tracked
+  // constraint's WheelTV, whose own mBrakeImpulse means something else.
+  if (WheeledController(constraint) == nullptr) return 0.0f;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  return w != nullptr ? static_cast<const JPH::WheelWV *>(w)->mBrakeImpulse : 0.0f;
+}
+
 void zjoltVehicleConstraintGetWheelLocalBasis(
     const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
     ZJoltVec3 *out_forward, ZJoltVec3 *out_up, ZJoltVec3 *out_right) {
@@ -1522,6 +1792,80 @@ void zjoltVehicleConstraintGetWheelWorldTransform(
       wheel_index, zjolt::ToJolt(*wheel_right), zjolt::ToJolt(*wheel_up));
   zjolt::WriteRVec3(out_position, transform.GetTranslation());
   zjolt::WriteQuat(out_rotation, transform.GetQuaternion());
+}
+
+//===----------------------------------------------------------------------===//
+// Tracked wheels — WheelTV-only state
+//===----------------------------------------------------------------------===//
+
+float zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  // WheelTV only exists behind a tracked controller.
+  if (TrackedController(constraint) == nullptr) return 0.0f;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  return w != nullptr ? static_cast<const JPH::WheelTV *>(w)->mBrakeImpulse : 0.0f;
+}
+
+float zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  if (TrackedController(constraint) == nullptr) return 0.0f;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  return w != nullptr
+             ? static_cast<const JPH::WheelTV *>(w)->mCombinedLongitudinalFriction
+             : 0.0f;
+}
+
+float zjoltVehicleConstraintGetWheelCombinedLateralFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  if (TrackedController(constraint) == nullptr) return 0.0f;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  return w != nullptr ? static_cast<const JPH::WheelTV *>(w)->mCombinedLateralFriction
+                      : 0.0f;
+}
+
+int32_t zjoltVehicleConstraintGetWheelTrackIndex(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  if (TrackedController(constraint) == nullptr) return -1;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  return w != nullptr ? static_cast<const JPH::WheelTV *>(w)->mTrackIndex : -1;
+}
+
+//===----------------------------------------------------------------------===//
+// Wheel and engine curves — read-back
+//===----------------------------------------------------------------------===//
+
+bool zjoltVehicleConstraintGetWheelLongitudinalFrictionCurve(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    ZJoltVehicleCurveDesc *out) {
+  if (out != nullptr) *out = ZJoltVehicleCurveDesc{};
+  if (out == nullptr || WheeledController(constraint) == nullptr) return false;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  if (w == nullptr) return false;
+  *out = ToCurveDesc(
+      static_cast<const JPH::WheelWV *>(w)->GetSettings()->mLongitudinalFriction);
+  return true;
+}
+
+bool zjoltVehicleConstraintGetWheelLateralFrictionCurve(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    ZJoltVehicleCurveDesc *out) {
+  if (out != nullptr) *out = ZJoltVehicleCurveDesc{};
+  if (out == nullptr || WheeledController(constraint) == nullptr) return false;
+  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
+  if (w == nullptr) return false;
+  *out = ToCurveDesc(
+      static_cast<const JPH::WheelWV *>(w)->GetSettings()->mLateralFriction);
+  return true;
+}
+
+bool zjoltVehicleConstraintGetEngineNormalizedTorqueCurve(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleCurveDesc *out) {
+  if (out != nullptr) *out = ZJoltVehicleCurveDesc{};
+  if (out == nullptr) return false;
+  const JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return false;
+  *out = ToCurveDesc(e->mNormalizedTorque);
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1668,9 +2012,12 @@ ZJoltResult zjoltVehicleConstraintSetDifferentialLimitedSlipRatio(
 
 float zjoltVehicleConstraintGetTrackAngularVelocity(
     const ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_side = zjolt::RawEnum(side);
   const JPH::TrackedVehicleController *tc = TrackedController(constraint);
   if (tc == nullptr) return 0.0f;
-  const int index = side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
+  const int index = raw_side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
   return tc->GetTracks()[index].mAngularVelocity;
 }
 
@@ -1678,13 +2025,77 @@ ZJoltResult zjoltVehicleConstraintSetTrackAngularVelocity(
     ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side,
     float angular_velocity) {
   ZJOLT_ENTER();
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_side = zjolt::RawEnum(side);
   JPH::TrackedVehicleController *tc = TrackedController(constraint);
   if (tc == nullptr) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "tracks need a tracked controller");
   }
-  const int index = side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
+  const int index = raw_side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
   tc->GetTracks()[index].mAngularVelocity = angular_velocity;
+  return ZJOLT_RESULT_OK;
+}
+
+/// TrackedVehicleController.cpp:157-160 — asserted per track there, on the
+/// same four fields, when a fresh controller copies its settings in.
+ZJoltResult ValidateTrackDesc(const ZJoltVehicleTrackDesc &t) {
+  if (!(t.inertia >= 0.0f))
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "track inertia must be >= 0");
+  if (!(t.angular_damping >= 0.0f))
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "track angular_damping must be >= 0");
+  if (!(t.max_brake_torque >= 0.0f))
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "track max_brake_torque must be >= 0");
+  if (!(t.differential_ratio > 0.0f))
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "track differential_ratio must be > 0");
+  return ZJOLT_RESULT_OK;
+}
+
+bool zjoltVehicleConstraintGetTrack(const ZJoltVehicleConstraint *constraint,
+                                    ZJoltVehicleTrackSide side,
+                                    ZJoltVehicleTrackDesc *out) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_side = zjolt::RawEnum(side);
+  if (out != nullptr) *out = ZJoltVehicleTrackDesc{};
+  const JPH::TrackedVehicleController *tc = TrackedController(constraint);
+  if (tc == nullptr || out == nullptr) return false;
+  const int index = raw_side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
+  const JPH::VehicleTrack &t = tc->GetTracks()[index];
+  out->inertia = t.mInertia;
+  out->angular_damping = t.mAngularDamping;
+  out->max_brake_torque = t.mMaxBrakeTorque;
+  out->differential_ratio = t.mDifferentialRatio;
+  return true;
+}
+
+ZJoltResult zjoltVehicleConstraintSetTrack(ZJoltVehicleConstraint *constraint,
+                                           ZJoltVehicleTrackSide side,
+                                           const ZJoltVehicleTrackDesc *desc) {
+  ZJOLT_ENTER();
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_side = zjolt::RawEnum(side);
+  if (!zjolt::Present(desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::TrackedVehicleController *tc = TrackedController(constraint);
+  if (tc == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "tracks need a tracked controller");
+  }
+  const ZJoltResult r = ValidateTrackDesc(*desc);
+  if (r != ZJOLT_RESULT_OK) return r;
+
+  const int index = raw_side == ZJOLT_VEHICLE_TRACK_SIDE_RIGHT ? 1 : 0;
+  JPH::VehicleTrack &t = tc->GetTracks()[index];
+  t.mInertia = desc->inertia;
+  t.mAngularDamping = desc->angular_damping;
+  t.mMaxBrakeTorque = desc->max_brake_torque;
+  t.mDifferentialRatio = desc->differential_ratio;
   return ZJOLT_RESULT_OK;
 }
 
@@ -1830,9 +2241,52 @@ ZJoltResult zjoltVehicleConstraintSetCollisionTester(
   // exactly once.
   constraint->tester = fresh;
   impl->SetVehicleCollisionTester(fresh);
-  constraint->collision_tester_kind = desc->kind;
+  // Converted here, at the read of a field the host filled in — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  constraint->collision_tester_kind = zjolt::RawEnum(desc->kind);
+  constraint->collision_tester_callback = ZJoltVehicleCollisionTesterCallback{};
   ApplyFilters(constraint);
   return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltVehicleConstraintSetCollisionTesterCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleCollisionTesterCallback *callback) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(constraint, callback)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleConstraint *impl = Impl(constraint);
+  if (impl == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint must not be null");
+  }
+  if (callback->collide == nullptr || callback->predict_contact_properties == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "collision tester callback needs both collide and "
+        "predict_contact_properties");
+  }
+
+  auto *fresh = zjolt::New<VehicleCollisionTesterCallbackAdapter>();
+  if (fresh == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+  fresh->table = *callback;
+
+  // Same reference-counting shape as zjoltVehicleConstraintSetCollisionTester
+  // above: the handle's reference first, then the constraint's, which drops
+  // the old tester's.
+  constraint->tester = fresh;
+  impl->SetVehicleCollisionTester(fresh);
+  constraint->collision_tester_kind = ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CALLBACK;
+  constraint->collision_tester_callback = *callback;
+  ApplyFilters(constraint);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltVehicleConstraintGetCollisionTesterCallback(
+    const ZJoltVehicleConstraint *constraint,
+    ZJoltVehicleCollisionTesterCallback *out) {
+  if (out == nullptr) return;
+  *out = constraint != nullptr ? constraint->collision_tester_callback
+                               : ZJoltVehicleCollisionTesterCallback{};
 }
 
 //===----------------------------------------------------------------------===//

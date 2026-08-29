@@ -15,9 +15,7 @@ const zjolt = @import("zjolt.zig");
 //=============================================================================
 // A minimal layer map
 //
-// Two object layers and two broad-phase layers: the smallest configuration
-// that still exercises filtering, because static-vs-static pairs must be
-// rejected and moving-vs-anything accepted.
+// Two object layers and two broad-phase layers: the smallest configuration that still exercises filtering — static-vs-static must be rejected, moving-vs-anything accepted.
 //=============================================================================
 
 pub const Layers = struct {
@@ -431,8 +429,8 @@ test "a shape survives a save and restore, and refuses damaged input" {
     try std.testing.expectError(zjolt.Error.BadFormat, zjolt.Shape.restore(flipped));
 
     // Truncation, trailing bytes and outright garbage are all BadFormat. The
-    // last of these is the case that used to reach Jolt's parser and index its
-    // shape-type table with whatever byte happened to be there.
+    // last of these is the case that would otherwise reach Jolt's parser and
+    // index its shape-type table with whatever byte happened to be there.
     try std.testing.expectError(
         zjolt.Error.BadFormat,
         zjolt.Shape.restore(saved[0 .. saved.len / 2]),
@@ -447,6 +445,38 @@ test "a shape survives a save and restore, and refuses damaged input" {
     const garbage = "this is definitely not a jolt shape" ** 4;
     try std.testing.expectError(zjolt.Error.BadFormat, zjolt.Shape.restore(garbage));
     try std.testing.expectError(zjolt.Error.BadFormat, zjolt.Shape.restore("short"));
+}
+
+test "a shape saved through a host stream round-trips, and matches the buffer form's payload byte for byte" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const sphere = try zjolt.Shape.initSphere(1.25, .{});
+    defer sphere.release();
+
+    const via_buffer = try sphere.saveAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(via_buffer);
+
+    var stream_buffer: [4096]u8 = undefined;
+    var writer: zjolt.StreamBufferWriter = .{ .buffer = &stream_buffer };
+    try sphere.saveStream(zjolt.hostStream(zjolt.StreamBufferWriter, &writer));
+    const via_stream = writer.slice();
+
+    // The two forms carry different framing on purpose — @see zjolt.Stream —
+    // but underneath, Jolt's own payload has to be the exact same bytes.
+    const buffer_payload = via_buffer[zjolt.c.shape.shape_header_size..];
+    const stream_payload = via_stream[zjolt.c.shape.shape_stream_header_size..];
+    try std.testing.expectEqualSlices(u8, buffer_payload, stream_payload);
+
+    var reader: zjolt.StreamBufferReader = .{ .buffer = via_stream };
+    const restored = try zjolt.Shape.restoreStream(zjolt.hostStream(zjolt.StreamBufferReader, &reader));
+    defer restored.release();
+
+    try std.testing.expectEqual(sphere.subType(), restored.subType());
+    const before = sphere.localBounds();
+    const after = restored.localBounds();
+    try std.testing.expectApproxEqAbs(before.min.x, after.min.x, 1e-5);
+    try std.testing.expectApproxEqAbs(before.max.x, after.max.x, 1e-5);
 }
 
 test "a truncated payload inside a well-formed container is still refused" {
@@ -506,16 +536,12 @@ test "one save/load pair's buffer is refused by another's, on the tag" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
-    // Four save/load pairs share one framing, and each keeps a magic tag of
-    // its own. That is what the tag is for: the fields behind it line up
-    // between the pairs, so without it a scene buffer would clear a shape's
-    // header checks and hand Jolt a payload it has no business reading —
-    // which is a parse of the wrong thing, not a refusal.
-    //
-    // Every case below is asserted on the MESSAGE rather than only on
-    // `BadFormat`, because the length check and the checksum would also
-    // report `BadFormat`, and a container that refused on either of those
-    // would be refusing for a reason that does not generalise.
+    // Four save/load pairs share one framing, each with its own magic
+    // tag: the fields behind it line up between pairs, so without it a
+    // scene buffer would clear a shape's header checks and hand Jolt a
+    // payload it has no business reading — a parse of the wrong thing,
+    // not a refusal. Asserted on the MESSAGE, not just `BadFormat`: the
+    // length/checksum checks also report `BadFormat`, which would not generalise as a reason to refuse.
     const box = try zjolt.Shape.initBox(zjolt.vec3(0.25, 0.5, 0.75), .{});
     defer box.release();
 
@@ -546,7 +572,7 @@ test "one save/load pair's buffer is refused by another's, on the tag" {
     defer std.testing.allocator.free(scene_blob);
 
     const state = world.system.state();
-    const state_blob = try state.saveAlloc(std.testing.allocator, .all);
+    const state_blob = try state.saveAlloc(std.testing.allocator, .{});
     defer std.testing.allocator.free(state_blob);
 
     const body_blob = blk: {
@@ -589,7 +615,7 @@ test "one save/load pair's buffer is refused by another's, on the tag" {
 
     try std.testing.expectError(
         zjolt.Error.BadFormat,
-        state.restore(body_blob),
+        state.restore(body_blob, .{}),
     );
     try expectRefusedOnTag("not a state saved by zjoltPhysicsSystemSaveState");
 
@@ -603,7 +629,7 @@ test "one save/load pair's buffer is refused by another's, on the tag" {
     shape_again.release();
     const scene_again = try zjolt.Scene.restore(scene_blob);
     scene_again.release();
-    try state.restore(state_blob);
+    try state.restore(state_blob, .{});
     {
         var lock = world.system.lockWrite(ball);
         defer lock.release();
@@ -671,7 +697,7 @@ test "the transform matrices place the body, its centre of mass, and its inertia
     defer offset.release();
 
     const bodies = world.system.bodies();
-    const quarter_turn = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 2.0);
+    const quarter_turn = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 2.0);
     const ball = try bodies.createAndAdd(.{
         .shape = offset,
         .object_layer = Layers.moving,
@@ -753,7 +779,7 @@ test "the same inputs step to the same state twice" {
                 .shape = shape,
                 .object_layer = Layers.moving,
                 .position = zjolt.rvec3(0.1, 4, -0.2),
-                .rotation = try zjolt.quatFromAxisAngle(normalize(zjolt.vec3(1, 1, 1)), 0.7),
+                .rotation = try zjolt.Quat.fromAxisAngle(normalize(zjolt.vec3(1, 1, 1)), 0.7),
                 .linear_velocity = zjolt.vec3(1.5, 0, -0.75),
                 .angular_velocity = zjolt.vec3(0.3, 1.1, -0.2),
                 .restitution = 0.4,
@@ -1194,8 +1220,8 @@ test "a step reports which limit it ran out of" {
     }
 
     // The step never fails; it drops contacts and reports which cache filled.
-    // A host that ignores this gets bodies sinking into each other with
-    // nothing to explain it, which is why it is returned rather than traced.
+    // A host that ignores the returned flags gets bodies sinking into each
+    // other with no diagnostic.
     try std.testing.expect(seen.any());
     try std.testing.expect(seen.body_pair_cache_full or seen.contact_constraints_full);
     try std.testing.expect(!zjolt.UpdateError.none.any());
@@ -1332,8 +1358,8 @@ test "contact and activation listeners fire with the right bodies" {
     try std.testing.expect(activations.activated > 0);
     // The sleeper reached the floor and stopped.
     try std.testing.expect(activations.deactivated > 0);
-    // ...and its contacts were retired when it did, which is why the
-    // destroy-while-awake case below needs the restless ball.
+    // Its contacts were retired when it slept, so the destroy-while-awake
+    // case below needs the restless ball instead.
     try std.testing.expect(contacts.removed > 0);
 
     const removed_before = contacts.removed;
@@ -1390,8 +1416,8 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
     )) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(ball, hit.body);
     try std.testing.expect(hit.fraction > 0 and hit.fraction < 1);
-    // The normal is resolved for us; the top of a sphere hit from above points
-    // back up the ray.
+    // The normal comes back resolved: the top of a sphere hit from above
+    // points back up the ray.
     try std.testing.expect(hit.normal.y > 0.9);
 
     const total = try queries.countRayHits(
@@ -1478,9 +1504,7 @@ test "ray, shape cast and overlap find what is there and miss what is not" {
 //=============================================================================
 // Streaming queries
 //
-// A fixture with several things in a line, because everything below is about
-// what happens BETWEEN hits: the order they arrive in, stopping part way, and
-// what a failing callback leaves behind.
+// A fixture with several things in a line: everything below is about what happens BETWEEN hits — the order they arrive in, stopping part way, what a failing callback leaves behind.
 //=============================================================================
 
 /// Four static spheres up the Y axis at y = 2, 4, 6, 8, above the fixture's
@@ -1551,14 +1575,12 @@ fn containsBody(haystack: []const zjolt.BodyId, needle: zjolt.BodyId) bool {
 }
 
 test "a sweep starting inside a mesh reports a hit only when back faces count" {
-    // What the settings parameter is for. A mesh triangle met from the inside
-    // is a back face, and Jolt's default is to ignore those — so a sweep that
-    // begins inside geometry reports NOTHING, which reads exactly like a clear
-    // placement and is the opposite of one. The two casts below differ in one
-    // field, and that field is the whole answer.
-    //
-    // Both the system-level query and the per-shape one are checked, because
-    // they translate the same settings struct through separate code.
+    // What the settings parameter is for. A mesh triangle met from the
+    // inside is a back face, and Jolt's default ignores those — so a
+    // sweep beginning inside geometry reports NOTHING, reading exactly
+    // like a clear placement, the opposite of one. The two casts below
+    // differ in one field, and that field is the whole answer. Both the
+    // system-level query and the per-shape one are checked, since they translate the same settings struct through separate code.
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
@@ -1725,16 +1747,12 @@ test "narrowing on every hit puts the hits in order, best last" {
         &narrowed,
     );
 
-    // Narrowing tells Jolt not to bother with anything worse than the hit it
-    // has just been given. Two things follow, and only one of them is about
-    // order: every further hit is strictly nearer than the last, and hits that
-    // are therefore uninteresting are never computed at all.
-    //
-    // The second effect mostly swallows the first, which is worth knowing
-    // before reaching for this: the broad phase already walks roughly front to
-    // back, so on this fixture the same ray that reports five hits unnarrowed
-    // reports ONE narrowed. Narrowing is a way to do less work, and only
-    // incidentally a way to get an order.
+    // Narrowing tells Jolt not to bother with anything worse than the
+    // hit it has just been given: every further hit is strictly nearer
+    // than the last, and uninteresting ones are never computed at all.
+    // The pruning effect mostly swallows the ordering one, worth
+    // knowing before reaching for this — the broad phase already walks
+    // roughly front to back, so this fixture's five unnarrowed hits become ONE narrowed.
     try std.testing.expect(narrowed.count >= 1);
     try std.testing.expect(narrowed.count < Stack.total_hits);
     for (1..narrowed.count) |i| {
@@ -2525,10 +2543,7 @@ test "a mutable compound reflects a runtime edit on the next step" {
 //=============================================================================
 // Materials
 //
-// A material is an identity and nothing else — no friction, no restitution, no
-// user data. What these assert is the only thing it is for: telling one
-// surface apart from another inside a single shape, through the sub-shape id a
-// hit carries.
+// A material is an identity and nothing else — no friction, no restitution, no user data. What these assert is the only thing it is for: telling one surface apart from another inside a single shape, through the sub-shape id a hit carries.
 //=============================================================================
 
 test "a convex shape reports the material it was built with, at the empty sub-shape id" {

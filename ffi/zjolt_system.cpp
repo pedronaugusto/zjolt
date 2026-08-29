@@ -3,14 +3,38 @@
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
+#include "zjolt_query_internal.h"
 
 #include <Jolt/Core/Mutex.h>
 #include <Jolt/Physics/Body/BodyManager.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/NarrowPhaseStats.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeIDPair.h>
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
+#include <Jolt/Physics/IslandBuilder.h>
 #include <Jolt/Physics/PhysicsSettings.h>
 #include <Jolt/Physics/PhysicsStepListener.h>
+
+/// A standalone JPH::IslandBuilder a host drives itself; see the section
+/// comment in zjolt_system.h. `initialized`/`finalized` track what Jolt's own
+/// asserts would otherwise require silently: Init before any other call, and
+/// ResetIslands between one Finalize and the next Prepare*/Link*/Finalize.
+struct ZJoltIslandBuilder {
+  JPH::IslandBuilder impl;
+  uint32_t max_active_bodies = 0;
+  uint32_t max_contacts = 0;
+  uint32_t num_constraints = 0;
+  bool initialized = false;
+  bool finalized = false;
+  bool contact_constraints_prepared = false;
+  bool non_contact_constraints_prepared = false;
+
+  /// The temp allocator most recently given to a Prepare*/Finalize call,
+  /// copied by value (@see ZJoltTempAllocator's own by-value-copy
+  /// convention). Destroy() reads through it, via `user`, to reset islands
+  /// the host never explicitly did — see zjolt_system.h.
+  ZJoltTempAllocator last_temp_allocator{};
+};
 
 namespace {
 
@@ -21,19 +45,37 @@ constexpr uint32_t kMaxContactPoints = 64;
 static_assert(JPH::ContactPoints::Capacity >= kMaxContactPoints,
               "Jolt's contact point capacity shrank below what zjolt copies");
 
-/// Copies Jolt's SIMD contact points into caller-visible 12-byte vectors.
+/// Largest face OnContactValidate's CollideShapeResult::Face will ever carry.
+/// Same reasoning as kMaxContactPoints, against Jolt's own bound.
+constexpr uint32_t kMaxFaceVertices = 32;
+static_assert(JPH::CollideShapeResult::Face::Capacity >= kMaxFaceVertices,
+              "Jolt's collide-shape face capacity shrank below what zjolt copies");
+
+/// What lets zjoltPhysicsSystemGetActiveBodiesUnsafe reinterpret_cast a whole
+/// JPH::BodyID array as a ZJoltBodyId array rather than copying element by
+/// element — the one thing a "zero-copy" accessor cannot do is copy. BodyID
+/// is a single uint32 with no virtuals, so the two are the same size and
+/// alignment; zjolt::ToC(const JPH::BodyID&) makes the same claim one id at a
+/// time; this is that claim, but for the whole array at once.
+static_assert(sizeof(JPH::BodyID) == sizeof(ZJoltBodyId) &&
+                  alignof(JPH::BodyID) == alignof(ZJoltBodyId),
+              "JPH::BodyID no longer matches ZJoltBodyId's layout");
+
+/// Copies as many of `in`'s SIMD Vec3s into caller-visible 12-byte
+/// vectors as fit in `out_capacity`, returning how many that was.
 ///
-/// The copy is unavoidable: Jolt's ContactPoints holds 16-byte Vec3s with a
-/// padding lane, and the ABI's ZJoltVec3 is three floats. Doing it on the
-/// stack keeps a contact callback allocation-free, which matters because these
-/// run on Jolt's job threads inside the step.
-uint32_t CopyContactPoints(const JPH::ContactPoints &in, ZJoltVec3 *out) {
-  const uint32_t count =
-      static_cast<uint32_t>(in.size()) < kMaxContactPoints
-          ? static_cast<uint32_t>(in.size())
-          : kMaxContactPoints;
+/// Unavoidable: Jolt's arrays here (ContactPoints, CollideShapeResult::Face) hold 16-byte Vec3s with a padding lane, ABI's ZJoltVec3 is three floats. On the stack, keeping a contact callback allocation-free — it runs on Jolt's job threads inside the step.
+template <typename Points>
+uint32_t CopyPoints(const Points &in, ZJoltVec3 *out, uint32_t out_capacity) {
+  const uint32_t count = static_cast<uint32_t>(in.size()) < out_capacity
+                             ? static_cast<uint32_t>(in.size())
+                             : out_capacity;
   for (uint32_t i = 0; i < count; ++i) out[i] = zjolt::ToC(in[i]);
   return count;
+}
+
+uint32_t CopyContactPoints(const JPH::ContactPoints &in, ZJoltVec3 *out) {
+  return CopyPoints(in, out, kMaxContactPoints);
 }
 
 void FillContactInfo(ZJoltContactInfo *info, const JPH::Body &body1,
@@ -44,6 +86,8 @@ void FillContactInfo(ZJoltContactInfo *info, const JPH::Body &body1,
   info->body2 = zjolt::ToC(body2.GetID());
   info->user_data1 = body1.GetUserData();
   info->user_data2 = body2.GetUserData();
+  info->live_body1 = zjolt::ToC(&body1);
+  info->live_body2 = zjolt::ToC(&body2);
 
   ZJoltContactManifold &out = info->manifold;
   out.base_offset = zjolt::ToCR(manifold.mBaseOffset);
@@ -115,11 +159,16 @@ JPH::ValidateResult ZJoltContactListenerAdapter::OnContactValidate(
   if (listener_.on_contact_validate == nullptr)
     return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
 
+  ZJoltVec3 face1[kMaxFaceVertices];
+  ZJoltVec3 face2[kMaxFaceVertices];
+
   ZJoltContactValidateInfo info;
   info.body1 = zjolt::ToC(inBody1.GetID());
   info.body2 = zjolt::ToC(inBody2.GetID());
   info.user_data1 = inBody1.GetUserData();
   info.user_data2 = inBody2.GetUserData();
+  info.live_body1 = zjolt::ToC(&inBody1);
+  info.live_body2 = zjolt::ToC(&inBody2);
   info.base_offset = zjolt::ToCR(inBaseOffset);
   info.contact_point_on_1 = zjolt::ToC(inCollisionResult.mContactPointOn1);
   info.contact_point_on_2 = zjolt::ToC(inCollisionResult.mContactPointOn2);
@@ -127,6 +176,12 @@ JPH::ValidateResult ZJoltContactListenerAdapter::OnContactValidate(
   info.penetration_depth = inCollisionResult.mPenetrationDepth;
   info.sub_shape_id1 = zjolt::ToC(inCollisionResult.mSubShapeID1);
   info.sub_shape_id2 = zjolt::ToC(inCollisionResult.mSubShapeID2);
+  info.num_shape1_face_vertices =
+      CopyPoints(inCollisionResult.mShape1Face, face1, kMaxFaceVertices);
+  info.num_shape2_face_vertices =
+      CopyPoints(inCollisionResult.mShape2Face, face2, kMaxFaceVertices);
+  info.shape1_face = face1;
+  info.shape2_face = face2;
 
   switch (listener_.on_contact_validate(listener_.user, &info)) {
     case ZJOLT_VALIDATE_RESULT_ACCEPT_CONTACT:
@@ -219,18 +274,8 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Combine callbacks
 //
-// Jolt's hook is `float (*)(const Body &, const SubShapeID &, const Body &,
-// const SubShapeID &)` — a bare function pointer with NO user parameter. There
-// is nothing in its arguments that leads back to the physics system either, so
-// a single shared trampoline could not tell which system it was called for.
-//
-// The only thing left to distinguish two systems by is WHICH function pointer
-// they installed. So there is a fixed table of slots and one trampoline
-// instantiated per slot; a system takes a slot the first time it installs a
-// combine callback and gives it back when it is destroyed.
-//
-// The alternative would be a global pair of callbacks shared by every system,
-// which is not a binding of a per-system setting.
+// Jolt's hook is a bare function pointer with NO user parameter and nothing that leads back to the physics system, so a shared trampoline could not tell which system called it — only WHICH pointer was installed distinguishes two systems.
+// So: a fixed table of slots and one trampoline per slot; a system takes a slot on first install and gives it back when destroyed (a global shared pair would not bind a per-system setting).
 //===----------------------------------------------------------------------===//
 
 struct CombineSlot {
@@ -245,11 +290,10 @@ CombineSlot g_combine_slots[ZJOLT_COMBINE_SLOT_COUNT];
 
 /// Guards which slots are taken, and nothing else.
 ///
-/// The callback fields are read on Jolt's job threads during a step and
-/// written only by an install, which the ABI already says must not run
-/// concurrently with a step on the same system. What this protects is the
-/// table itself, which is process-wide: two threads creating two unrelated
-/// systems would otherwise be able to claim the same slot.
+/// Callback fields are read on Jolt's job threads during a step and
+/// written only by an install, which the ABI already forbids running
+/// concurrently with a step on the same system. This protects the
+/// process-wide table itself: two threads creating two unrelated systems could otherwise claim the same slot.
 JPH::Mutex g_combine_mutex;
 
 void FillCombineInfo(ZJoltCombineInfo *info, const JPH::Body &body1,
@@ -418,12 +462,10 @@ void ToJoltSettings(const ZJoltPhysicsSettings &in, JPH::PhysicsSettings &out) {
 
 /// The settings Jolt would divide by, loop on, or index with.
 ///
-/// None of these is asserted upstream, and each one fails somewhere other than
-/// here: a zero batch size makes the step-listener job loop spin forever
-/// because `fetch_add(0)` never advances the read index
-/// (`PhysicsSystem.cpp:702`), a zero batches-per-job is an integer division
-/// (`PhysicsSystem.cpp:243`), and a non-positive in-flight pair count is a
-/// buffer length passed to the temp allocator (`PhysicsSystem.cpp:232`).
+/// None of these is asserted upstream, and each fails somewhere else: a
+/// zero batch size spins the step-listener job loop forever
+/// (`fetch_add(0)` never advances), a zero batches-per-job is an
+/// integer division, and a non-positive in-flight pair count is a buffer length passed to the temp allocator.
 const char *WhySettingsRefused(const ZJoltPhysicsSettings &settings) {
   if (settings.max_in_flight_body_pairs < 1)
     return "max_in_flight_body_pairs must be at least 1";
@@ -441,6 +483,202 @@ const char *WhySettingsRefused(const ZJoltPhysicsSettings &settings) {
   if (!(settings.time_before_sleep >= 0.0f))
     return "time_before_sleep must not be negative";
   return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// The step's scratch allocator
+//
+// PhysicsSystem::Update takes a plain JPH::TempAllocator&, so any of the three kinds below can back it interchangeably.
+// They do NOT share introspection uniformly: TempAllocatorImpl has GetSize/GetUsage/CanAllocate natively, TempAllocatorImplWithMallocFallback keeps them private with no accessor. ZJoltTempAllocatorAdapter reimplements that class's strategy (same fixed block, malloc fallback, LIFO assumption) rather than composing it, since reimplementing is what makes the introspection possible.
+//===----------------------------------------------------------------------===//
+
+/// The default: a fixed block, falling back to malloc once it is exhausted,
+/// with usage and capacity actually readable — unlike the Jolt class this
+/// mirrors. @see the section comment above.
+class ZJoltTempAllocatorAdapter final : public JPH::TempAllocator {
+ public:
+  explicit ZJoltTempAllocatorAdapter(JPH::uint fixed_size) : fixed_(fixed_size) {}
+
+  void *Allocate(JPH::uint inSize) override {
+    if (fixed_.CanAllocate(inSize)) return fixed_.Allocate(inSize);
+    void *block = fallback_.Allocate(inSize);
+    if (block != nullptr) fallback_usage_ += inSize;
+    return block;
+  }
+
+  void Free(void *inAddress, JPH::uint inSize) override {
+    if (inAddress == nullptr) return;
+    if (fixed_.OwnsMemory(inAddress)) {
+      fixed_.Free(inAddress, inSize);
+    } else {
+      fallback_.Free(inAddress, inSize);
+      fallback_usage_ -= inSize;
+    }
+  }
+
+  /// Whether `size` fits the fixed block without spilling into the (slower,
+  /// always-available) malloc fallback — the same thing Jolt's own
+  /// TempAllocatorImpl::CanAllocate answers for the no-fallback kind.
+  bool CanAllocate(uint32_t size) const { return fixed_.CanAllocate(size); }
+  size_t GetSize() const { return fixed_.GetSize(); }
+  size_t GetUsage() const { return fixed_.GetUsage() + fallback_usage_; }
+
+ private:
+  JPH::TempAllocatorImpl fixed_;
+  JPH::TempAllocatorMalloc fallback_;
+  size_t fallback_usage_ = 0;
+};
+
+/// Adapts a host-supplied ZJoltTempAllocator into the JPH::TempAllocator
+/// PhysicsSystem::Update actually calls.
+class ZJoltHostTempAllocatorAdapter final : public JPH::TempAllocator {
+ public:
+  explicit ZJoltHostTempAllocatorAdapter(const ZJoltTempAllocator &host) : host_(host) {}
+
+  void *Allocate(JPH::uint inSize) override {
+    return host_.allocate(host_.user, static_cast<uint32_t>(inSize));
+  }
+
+  void Free(void *inAddress, JPH::uint inSize) override {
+    host_.free(host_.user, inAddress, static_cast<uint32_t>(inSize));
+  }
+
+  bool CanAllocate(uint32_t size) const {
+    return host_.can_allocate != nullptr ? host_.can_allocate(host_.user, size) : true;
+  }
+  size_t GetSize() const {
+    return host_.get_size != nullptr ? host_.get_size(host_.user) : 0;
+  }
+  size_t GetUsage() const {
+    return host_.get_usage != nullptr ? host_.get_usage(host_.user) : 0;
+  }
+
+ private:
+  ZJoltTempAllocator host_;
+};
+
+/// The one check every ZJoltIslandBuilder entry point taking a temp
+/// allocator shares, ahead of wrapping it in ZJoltHostTempAllocatorAdapter.
+ZJoltResult ValidateHostTempAllocator(const ZJoltTempAllocator *temp_allocator) {
+  if (temp_allocator == nullptr || temp_allocator->allocate == nullptr ||
+      temp_allocator->free == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "temp_allocator needs allocate and free");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void DestroyMallocFallbackTemp(JPH::TempAllocator *impl) {
+  zjolt::Delete(static_cast<ZJoltTempAllocatorAdapter *>(impl));
+}
+
+void DestroyFixedTemp(JPH::TempAllocator *impl) {
+  zjolt::Delete(static_cast<JPH::TempAllocatorImpl *>(impl));
+}
+
+void DestroyHostTemp(JPH::TempAllocator *impl) {
+  zjolt::Delete(static_cast<ZJoltHostTempAllocatorAdapter *>(impl));
+}
+
+//===----------------------------------------------------------------------===//
+// Body-vs-body narrow-phase collide hook
+//
+// JPH::PhysicsSystem::SetSimCollideBodyVsBody takes a std::function, not a
+// virtual -- SimCollideThunk is what gets installed. Read-back goes through
+// the entry table below it, not std::function::target<T>(), which this
+// -fno-rtti library cannot use.
+//===----------------------------------------------------------------------===//
+
+ZJoltCollideShapeSettings ToC(const JPH::CollideShapeSettings &in) {
+  ZJoltCollideShapeSettings out{};
+  out.active_edge_mode = in.mActiveEdgeMode == JPH::EActiveEdgeMode::CollideWithAll
+                             ? ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_WITH_ALL
+                             : ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_ONLY_WITH_ACTIVE;
+  out.collect_faces_mode =
+      in.mCollectFacesMode == JPH::ECollectFacesMode::CollectFaces
+          ? ZJOLT_COLLECT_FACES_MODE_COLLECT_FACES
+          : ZJOLT_COLLECT_FACES_MODE_NO_FACES;
+  out.collision_tolerance = in.mCollisionTolerance;
+  out.penetration_tolerance = in.mPenetrationTolerance;
+  out.active_edge_movement_direction = zjolt::ToC(in.mActiveEdgeMovementDirection);
+  out.max_separation_distance = in.mMaxSeparationDistance;
+  out.back_face_mode = in.mBackFaceMode == JPH::EBackFaceMode::CollideWithBackFaces
+                           ? ZJOLT_BACK_FACE_MODE_COLLIDE
+                           : ZJOLT_BACK_FACE_MODE_IGNORE;
+  out.internal_edge_removal_vertex_tolerance_sq =
+      in.mInternalEdgeRemovalVertexToleranceSq;
+  return out;
+}
+
+struct SimCollideThunk {
+  ZJoltSimCollideFn collide;
+  void *user;
+
+  void operator()(const JPH::Body &body1, const JPH::Body &body2,
+                  JPH::Mat44Arg transform1, JPH::Mat44Arg transform2,
+                  JPH::CollideShapeSettings &settings,
+                  JPH::CollideShapeCollector &collector,
+                  const JPH::ShapeFilter &shape_filter) const {
+    ZJoltCollideShapeSettings c_settings = ToC(settings);
+    const ZJoltMat44 t1 = zjolt::ToC(transform1);
+    const ZJoltMat44 t2 = zjolt::ToC(transform2);
+    collide(user, zjolt::ToC(&body1), zjolt::ToC(&body2), &t1, &t2, &c_settings,
+           reinterpret_cast<const ZJoltSimCollideShapeFilter *>(&shape_filter),
+           reinterpret_cast<ZJoltSimCollideCollector *>(&collector));
+  }
+};
+
+/// What zjoltPhysicsSystemGetSimCollideBodyVsBody reads back, keyed by system
+/// pointer rather than a field on ZJoltPhysicsSystem: this library builds
+/// with -fno-rtti, ruling out std::function::target<T>() to recover the
+/// installed lambda. Fixed-size, not growable, so nothing here allocates
+/// through Jolt's own allocator outside the create/destroy window it is
+/// valid for.
+constexpr size_t kMaxSimCollideEntries = 64;
+
+struct SimCollideEntry {
+  const ZJoltPhysicsSystem *system = nullptr;
+  ZJoltSimCollideFn collide = nullptr;
+  void *user = nullptr;
+};
+
+SimCollideEntry g_sim_collide_entries[kMaxSimCollideEntries];
+JPH::Mutex g_sim_collide_mutex;
+
+/// Records what `system` installed, reusing its existing entry if it has
+/// one. False when the table is full and `system` has no entry yet.
+bool SetSimCollideEntry(const ZJoltPhysicsSystem *system,
+                        const ZJoltSimCollideBodyVsBody &hook) {
+  JPH::lock_guard<JPH::Mutex> lock(g_sim_collide_mutex);
+  SimCollideEntry *free_slot = nullptr;
+  for (SimCollideEntry &entry : g_sim_collide_entries) {
+    if (entry.system == system) {
+      entry.collide = hook.collide;
+      entry.user = hook.user;
+      return true;
+    }
+    if (entry.system == nullptr && free_slot == nullptr) free_slot = &entry;
+  }
+  if (free_slot == nullptr) return false;
+  *free_slot = SimCollideEntry{system, hook.collide, hook.user};
+  return true;
+}
+
+void ClearSimCollideEntry(const ZJoltPhysicsSystem *system) {
+  JPH::lock_guard<JPH::Mutex> lock(g_sim_collide_mutex);
+  for (SimCollideEntry &entry : g_sim_collide_entries) {
+    if (entry.system != system) continue;
+    entry = SimCollideEntry{};
+    return;
+  }
+}
+
+ZJoltSimCollideBodyVsBody GetSimCollideEntry(const ZJoltPhysicsSystem *system) {
+  JPH::lock_guard<JPH::Mutex> lock(g_sim_collide_mutex);
+  for (const SimCollideEntry &entry : g_sim_collide_entries) {
+    if (entry.system == system) return ZJoltSimCollideBodyVsBody{entry.collide, entry.user};
+  }
+  return ZJoltSimCollideBodyVsBody{};
 }
 
 }  // namespace
@@ -495,15 +733,40 @@ ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
         "broad_phase_layer_for_object_layer");
   }
 
+  if (desc->temp_allocator_kind == ZJOLT_TEMP_ALLOCATOR_KIND_HOST &&
+      (desc->temp_allocator == nullptr ||
+       desc->temp_allocator->allocate == nullptr ||
+       desc->temp_allocator->free == nullptr)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "ZJOLT_TEMP_ALLOCATOR_KIND_HOST needs "
+                           "temp_allocator with allocate and free");
+  }
+
   ZJoltPhysicsSystem *system = zjolt::New<ZJoltPhysicsSystem>(*desc);
   if (system == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   const size_t temp_size = desc->temp_allocator_size != 0
                                ? desc->temp_allocator_size
                                : 10 * 1024 * 1024;
-  system->temp_allocator =
-      zjolt::New<JPH::TempAllocatorImplWithMallocFallback>(
-          static_cast<JPH::uint>(temp_size));
+  switch (desc->temp_allocator_kind) {
+    case ZJOLT_TEMP_ALLOCATOR_KIND_HOST:
+      system->temp_allocator =
+          zjolt::New<ZJoltHostTempAllocatorAdapter>(*desc->temp_allocator);
+      system->destroy_temp_allocator = DestroyHostTemp;
+      break;
+    case ZJOLT_TEMP_ALLOCATOR_KIND_FIXED:
+      system->temp_allocator =
+          zjolt::New<JPH::TempAllocatorImpl>(static_cast<JPH::uint>(temp_size));
+      system->destroy_temp_allocator = DestroyFixedTemp;
+      break;
+    case ZJOLT_TEMP_ALLOCATOR_KIND_MALLOC_FALLBACK:
+    default:
+      system->temp_allocator =
+          zjolt::New<ZJoltTempAllocatorAdapter>(static_cast<JPH::uint>(temp_size));
+      system->destroy_temp_allocator = DestroyMallocFallbackTemp;
+      break;
+  }
+  system->temp_allocator_kind = desc->temp_allocator_kind;
   if (system->temp_allocator == nullptr) {
     zjolt::Delete(system);
     return ZJOLT_RESULT_OUT_OF_MEMORY;
@@ -527,6 +790,27 @@ ZJoltResult zjoltPhysicsSystemCreate(const ZJoltPhysicsSystemDesc *desc,
   return ZJOLT_RESULT_OK;
 }
 
+void zjoltPhysicsSystemGetBroadPhaseLayerInterface(
+    const ZJoltPhysicsSystem *system, ZJoltBroadPhaseLayerInterface *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr ? system->broad_phase_layers.Raw()
+                           : ZJoltBroadPhaseLayerInterface{};
+}
+
+void zjoltPhysicsSystemGetObjectVsBroadPhaseLayerFilter(
+    const ZJoltPhysicsSystem *system, ZJoltObjectVsBroadPhaseLayerFilter *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr ? system->object_vs_broad_phase_filter.Raw()
+                           : ZJoltObjectVsBroadPhaseLayerFilter{};
+}
+
+void zjoltPhysicsSystemGetObjectLayerPairFilter(
+    const ZJoltPhysicsSystem *system, ZJoltObjectLayerPairFilter *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr ? system->object_layer_pair_filter.Raw()
+                           : ZJoltObjectLayerPairFilter{};
+}
+
 void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
   if (system == nullptr) return;
 
@@ -541,9 +825,11 @@ void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
   system->system.SetContactListener(nullptr);
   system->system.SetBodyActivationListener(nullptr);
   system->system.SetSoftBodyContactListener(nullptr);
+  system->system.SetSimShapeFilter(nullptr);
   zjolt::Delete(system->contact_listener);
   zjolt::Delete(system->activation_listener);
   zjolt::Delete(system->soft_body_contact_listener);
+  zjolt::Delete(system->sim_shape_filter);
 
   for (ZJoltStepListener *listener : system->step_listeners) {
     system->system.RemoveStepListener(listener);
@@ -556,13 +842,72 @@ void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
   // next system to ask for one must not inherit this one's callbacks.
   ReleaseCombineSlot(system);
 
-  // The temp allocator outlives the system's own teardown by a line, because
-  // the order the other way round would be a use-after-free the day
-  // PhysicsSystem's destructor starts wanting scratch space.
-  JPH::TempAllocatorImplWithMallocFallback *temp = system->temp_allocator;
+  // Same reasoning as the combine slot: the entry table is process-wide,
+  // so a system's slot in it must not survive the system.
+  system->system.SetSimCollideBodyVsBody(&JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody);
+  ClearSimCollideEntry(system);
+
+  // The temp allocator outlives the system's own teardown by a line —
+  // the other order would be a use-after-free the day PhysicsSystem's
+  // destructor starts wanting scratch space. Destroyed through the
+  // thunk recorded at create, since `temp_allocator` is only ever held
+  // as the JPH::TempAllocator base pointer here — zjolt::Delete needs the exact allocated type to free correctly (@see ZJoltJobSystem::destroy).
+  JPH::TempAllocator *temp = system->temp_allocator;
+  void (*destroy_temp)(JPH::TempAllocator *) = system->destroy_temp_allocator;
   zjolt::Delete(system);
-  zjolt::Delete(temp);
+  destroy_temp(temp);
   zjolt::HandleDestroyed();
+}
+
+//===----------------------------------------------------------------------===//
+// The step's scratch allocator
+//===----------------------------------------------------------------------===//
+
+void zjoltPhysicsSystemGetTempAllocatorStats(const ZJoltPhysicsSystem *system,
+                                             ZJoltTempAllocatorStats *out) {
+  if (out == nullptr) return;
+  if (system == nullptr) {
+    *out = ZJoltTempAllocatorStats{};
+    return;
+  }
+  switch (system->temp_allocator_kind) {
+    case ZJOLT_TEMP_ALLOCATOR_KIND_FIXED: {
+      const auto *impl = static_cast<const JPH::TempAllocatorImpl *>(system->temp_allocator);
+      out->capacity = impl->GetSize();
+      out->usage = impl->GetUsage();
+      return;
+    }
+    case ZJOLT_TEMP_ALLOCATOR_KIND_HOST: {
+      const auto *impl = static_cast<const ZJoltHostTempAllocatorAdapter *>(system->temp_allocator);
+      out->capacity = impl->GetSize();
+      out->usage = impl->GetUsage();
+      return;
+    }
+    case ZJOLT_TEMP_ALLOCATOR_KIND_MALLOC_FALLBACK:
+    default: {
+      const auto *impl = static_cast<const ZJoltTempAllocatorAdapter *>(system->temp_allocator);
+      out->capacity = impl->GetSize();
+      out->usage = impl->GetUsage();
+      return;
+    }
+  }
+}
+
+bool zjoltPhysicsSystemTempAllocatorCanAllocate(const ZJoltPhysicsSystem *system,
+                                                uint32_t size) {
+  if (system == nullptr) return false;
+  switch (system->temp_allocator_kind) {
+    case ZJOLT_TEMP_ALLOCATOR_KIND_FIXED:
+      return static_cast<const JPH::TempAllocatorImpl *>(system->temp_allocator)
+          ->CanAllocate(size);
+    case ZJOLT_TEMP_ALLOCATOR_KIND_HOST:
+      return static_cast<const ZJoltHostTempAllocatorAdapter *>(system->temp_allocator)
+          ->CanAllocate(size);
+    case ZJOLT_TEMP_ALLOCATOR_KIND_MALLOC_FALLBACK:
+    default:
+      return static_cast<const ZJoltTempAllocatorAdapter *>(system->temp_allocator)
+          ->CanAllocate(size);
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -654,6 +999,153 @@ ZJoltResult zjoltPhysicsSystemSetBodyActivationListener(
   return ZJOLT_RESULT_OK;
 }
 
+void zjoltPhysicsSystemGetContactListener(const ZJoltPhysicsSystem *system,
+                                          ZJoltContactListener *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr && system->contact_listener != nullptr
+             ? system->contact_listener->Raw()
+             : ZJoltContactListener{};
+}
+
+void zjoltPhysicsSystemGetBodyActivationListener(
+    const ZJoltPhysicsSystem *system, ZJoltBodyActivationListener *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr && system->activation_listener != nullptr
+             ? system->activation_listener->Raw()
+             : ZJoltBodyActivationListener{};
+}
+
+void zjoltPhysicsSystemGetSoftBodyContactListener(
+    const ZJoltPhysicsSystem *system, ZJoltSoftBodyContactListener *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr && system->soft_body_contact_listener != nullptr
+             ? system->soft_body_contact_listener->Raw()
+             : ZJoltSoftBodyContactListener{};
+}
+
+//===----------------------------------------------------------------------===//
+// Simulation shape filter
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltPhysicsSystemSetSimShapeFilter(
+    ZJoltPhysicsSystem *system, const ZJoltSimShapeFilter *filter) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (filter == nullptr) {
+    system->system.SetSimShapeFilter(nullptr);
+    zjolt::Delete(system->sim_shape_filter);
+    system->sim_shape_filter = nullptr;
+    return ZJOLT_RESULT_OK;
+  }
+
+  ZJoltSimShapeFilterAdapter *adapter =
+      zjolt::New<ZJoltSimShapeFilterAdapter>(*filter);
+  if (adapter == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  // Install first, then free the old one: the system must never point at a
+  // freed adapter, even for an instant — the same rule zjoltPhysicsSystem
+  // SetContactListener follows.
+  system->system.SetSimShapeFilter(adapter);
+  zjolt::Delete(system->sim_shape_filter);
+  system->sim_shape_filter = adapter;
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltPhysicsSystemGetSimShapeFilter(const ZJoltPhysicsSystem *system,
+                                         ZJoltSimShapeFilter *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr && system->sim_shape_filter != nullptr
+             ? system->sim_shape_filter->Raw()
+             : ZJoltSimShapeFilter{};
+}
+
+//===----------------------------------------------------------------------===//
+// Body-vs-body narrow-phase collide hook
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltPhysicsSystemSetSimCollideBodyVsBody(
+    ZJoltPhysicsSystem *system, const ZJoltSimCollideBodyVsBody *hook) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (hook == nullptr || hook->collide == nullptr) {
+    ClearSimCollideEntry(system);
+    system->system.SetSimCollideBodyVsBody(
+        &JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody);
+    return ZJOLT_RESULT_OK;
+  }
+
+  // Recorded before installing: a table that is full must leave the
+  // previous hook (default or otherwise) running, not a hook Get can never
+  // report back correctly.
+  if (!SetSimCollideEntry(system, *hook)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_OUT_OF_MEMORY,
+        "no room to track a sim-collide hook for another physics system; "
+        "at most 64 systems may have one installed at a time");
+  }
+  system->system.SetSimCollideBodyVsBody(SimCollideThunk{hook->collide, hook->user});
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltPhysicsSystemGetSimCollideBodyVsBody(const ZJoltPhysicsSystem *system,
+                                               ZJoltSimCollideBodyVsBody *out) {
+  if (out == nullptr) return;
+  *out = system != nullptr ? GetSimCollideEntry(system) : ZJoltSimCollideBodyVsBody{};
+}
+
+void zjoltSimCollideAddHit(ZJoltSimCollideCollector *collector, ZJoltBodyId body2,
+                           const ZJoltSimCollideHit *hit) {
+  if (collector == nullptr || hit == nullptr) return;
+
+  auto *jolt_collector = reinterpret_cast<JPH::CollideShapeCollector *>(collector);
+  // A pair a contact-validate listener already rejected outright has forced
+  // this collector's early-out; AddHit asserts that never happens twice.
+  if (jolt_collector->ShouldEarlyOut()) return;
+
+  JPH::CollideShapeResult result;
+  result.mContactPointOn1 = zjolt::ToJolt(hit->contact_point_on_1);
+  result.mContactPointOn2 = zjolt::ToJolt(hit->contact_point_on_2);
+  result.mPenetrationAxis = zjolt::ToJolt(hit->penetration_axis);
+  result.mPenetrationDepth = hit->penetration_depth;
+  result.mSubShapeID1 = zjolt::ToJoltSubShapeId(hit->sub_shape_id1);
+  result.mSubShapeID2 = zjolt::ToJoltSubShapeId(hit->sub_shape_id2);
+  result.mBodyID2 = zjolt::ToJolt(body2);
+  jolt_collector->AddHit(result);
+}
+
+void zjoltSimCollideDefault(const ZJoltBody *live_body1, const ZJoltBody *live_body2,
+                            const ZJoltMat44 *center_of_mass_transform1,
+                            const ZJoltMat44 *center_of_mass_transform2,
+                            const ZJoltCollideShapeSettings *settings,
+                            const ZJoltSimCollideShapeFilter *shape_filter,
+                            ZJoltSimCollideCollector *collector) {
+  if (!zjolt::Present(live_body1, live_body2, center_of_mass_transform1,
+                      center_of_mass_transform2, collector)) {
+    return;
+  }
+
+  auto *jolt_collector = reinterpret_cast<JPH::CollideShapeCollector *>(collector);
+  if (jolt_collector->ShouldEarlyOut()) return;
+
+  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  // Per-call, not shared: JPH::ShapeFilter::mBodyID2 is mutable and Jolt's
+  // own dispatch writes through it, so a filter two worker threads could
+  // reach at once would race.
+  JPH::ShapeFilter default_filter;
+  const JPH::ShapeFilter &filter =
+      shape_filter != nullptr
+          ? *reinterpret_cast<const JPH::ShapeFilter *>(shape_filter)
+          : default_filter;
+
+  JPH::PhysicsSystem::sDefaultSimCollideBodyVsBody(
+      *zjolt::ToJolt(live_body1), *zjolt::ToJolt(live_body2),
+      zjolt::ToJolt(*center_of_mass_transform1),
+      zjolt::ToJolt(*center_of_mass_transform2), jolt_settings, *jolt_collector,
+      filter);
+}
+
 //===----------------------------------------------------------------------===//
 // The step
 //===----------------------------------------------------------------------===//
@@ -727,6 +1219,27 @@ void zjoltPhysicsSystemGetBodyStats(const ZJoltPhysicsSystem *system,
   out->num_active_soft_bodies = stats.mNumActiveSoftBodies;
 }
 
+ZJoltResult zjoltPhysicsSystemReportBroadphaseStats(ZJoltPhysicsSystem *system) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_TRACK_BROADPHASE_STATS
+  system->system.ReportBroadphaseStats();
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltReportNarrowPhaseStats(void) {
+  ZJOLT_ENTER();
+#ifdef JPH_TRACK_NARROWPHASE_STATS
+  JPH::NarrowPhaseStat::sReportStats();
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
 //===----------------------------------------------------------------------===//
 // World queries that are not queries
 //===----------------------------------------------------------------------===//
@@ -746,6 +1259,28 @@ bool zjoltPhysicsSystemWereBodiesInContact(const ZJoltPhysicsSystem *system,
   if (!system->has_stepped) return false;
   return system->system.WereBodiesInContact(zjolt::ToJolt(body1),
                                             zjolt::ToJolt(body2));
+}
+
+const ZJoltBody *zjoltPhysicsSystemTryGetBodyNoLock(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body) {
+  if (system == nullptr) return nullptr;
+  return zjolt::ToC(
+      system->system.GetBodyLockInterfaceNoLock().TryGetBody(zjolt::ToJolt(body)));
+}
+
+void zjoltPhysicsSystemGetActiveBodiesUnsafe(const ZJoltPhysicsSystem *system,
+                                             const ZJoltBodyId **out_ids,
+                                             uint32_t *out_count) {
+  if (out_ids != nullptr) *out_ids = nullptr;
+  if (out_count != nullptr) *out_count = 0;
+  if (system == nullptr) return;
+
+  const JPH::BodyID *ids =
+      system->system.GetActiveBodiesUnsafe(JPH::EBodyType::RigidBody);
+  const uint32_t count =
+      system->system.GetNumActiveBodies(JPH::EBodyType::RigidBody);
+  if (out_ids != nullptr) *out_ids = reinterpret_cast<const ZJoltBodyId *>(ids);
+  if (out_count != nullptr) *out_count = count;
 }
 
 //===----------------------------------------------------------------------===//
@@ -848,6 +1383,18 @@ ZJoltResult zjoltPhysicsSystemSetCombineRestitution(ZJoltPhysicsSystem *system,
   return ZJOLT_RESULT_OK;
 }
 
+void zjoltPhysicsSystemGetCombineRestitution(const ZJoltPhysicsSystem *system,
+                                             ZJoltCombineFn *out_combine,
+                                             void **out_user) {
+  if (out_combine != nullptr) *out_combine = nullptr;
+  if (out_user != nullptr) *out_user = nullptr;
+  if (system == nullptr || system->combine_slot < 0) return;
+
+  const CombineSlot &slot = g_combine_slots[system->combine_slot];
+  if (out_combine != nullptr) *out_combine = slot.restitution;
+  if (out_user != nullptr) *out_user = slot.restitution_user;
+}
+
 //===----------------------------------------------------------------------===//
 // Step listeners
 //===----------------------------------------------------------------------===//
@@ -882,9 +1429,9 @@ ZJoltResult zjoltPhysicsSystemRemoveStepListener(ZJoltPhysicsSystem *system,
   ZJOLT_ENTER();
   if (!zjolt::Present(system, listener)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  // Jolt asserts that the listener is in its list (`PhysicsSystem.cpp:127`),
-  // which a caller reaches by removing twice or by removing a handle from
-  // another system. Checking our own list first turns both into an error.
+  // Jolt asserts that the listener is in its list, which a caller
+  // reaches by removing twice or by removing a handle from another
+  // system. Checking the tracked list first turns both into an error.
   for (size_t i = 0; i < system->step_listeners.size(); ++i) {
     if (system->step_listeners[i] != listener) continue;
     system->system.RemoveStepListener(listener);
@@ -897,6 +1444,368 @@ ZJoltResult zjoltPhysicsSystemRemoveStepListener(ZJoltPhysicsSystem *system,
   return zjolt::SetError(
       ZJOLT_RESULT_INVALID_ARGUMENT,
       "that step listener is not attached to this physics system");
+}
+
+//===----------------------------------------------------------------------===//
+// Islands
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltIslandBuilderCreate(ZJoltIslandBuilder **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  ZJoltIslandBuilder *builder = zjolt::New<ZJoltIslandBuilder>();
+  if (builder == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  zjolt::HandleCreated();
+  *out = builder;
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltIslandBuilderDestroy(ZJoltIslandBuilder *builder) {
+  if (builder == nullptr) return;
+
+  // JPH::IslandBuilder's own destructor asserts every island-data pointer is
+  // null; a host that never called ResetIslands after its last Prepare*/
+  // Finalize would otherwise abort here instead of merely leaking.
+  if (builder->finalized || builder->contact_constraints_prepared ||
+      builder->non_contact_constraints_prepared) {
+    ZJoltHostTempAllocatorAdapter adapter(builder->last_temp_allocator);
+    builder->impl.ResetIslands(&adapter);
+  }
+  zjolt::Delete(builder);
+  zjolt::HandleDestroyed();
+}
+
+ZJoltResult zjoltIslandBuilderInit(ZJoltIslandBuilder *builder,
+                                   uint32_t max_active_bodies) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (builder->initialized) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this island builder has already been initialized");
+  }
+
+  builder->impl.Init(max_active_bodies);
+  builder->max_active_bodies = max_active_bodies;
+  builder->initialized = true;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderLinkBodies(ZJoltIslandBuilder *builder,
+                                         uint32_t first, uint32_t second) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->initialized) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "zjoltIslandBuilderInit must run first");
+  }
+  if (builder->finalized) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "call zjoltIslandBuilderResetIslands before linking again");
+  }
+
+  builder->impl.LinkBodies(first, second);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderPrepareContactConstraints(
+    ZJoltIslandBuilder *builder, uint32_t max_contacts,
+    const ZJoltTempAllocator *temp_allocator) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->initialized) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "zjoltIslandBuilderInit must run first");
+  }
+  if (builder->finalized || builder->contact_constraints_prepared) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "call zjoltIslandBuilderResetIslands before preparing again");
+  }
+  const ZJoltResult checked = ValidateHostTempAllocator(temp_allocator);
+  if (checked != ZJOLT_RESULT_OK) return checked;
+
+  builder->last_temp_allocator = *temp_allocator;
+  ZJoltHostTempAllocatorAdapter adapter(*temp_allocator);
+  builder->impl.PrepareContactConstraints(max_contacts, &adapter);
+  builder->max_contacts = max_contacts;
+  builder->contact_constraints_prepared = true;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderPrepareNonContactConstraints(
+    ZJoltIslandBuilder *builder, uint32_t num_constraints,
+    const ZJoltTempAllocator *temp_allocator) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->initialized) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "zjoltIslandBuilderInit must run first");
+  }
+  if (builder->finalized || builder->non_contact_constraints_prepared) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "call zjoltIslandBuilderResetIslands before preparing again");
+  }
+  const ZJoltResult checked = ValidateHostTempAllocator(temp_allocator);
+  if (checked != ZJOLT_RESULT_OK) return checked;
+
+  builder->last_temp_allocator = *temp_allocator;
+  ZJoltHostTempAllocatorAdapter adapter(*temp_allocator);
+  builder->impl.PrepareNonContactConstraints(num_constraints, &adapter);
+  builder->num_constraints = num_constraints;
+  builder->non_contact_constraints_prepared = true;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderLinkConstraint(ZJoltIslandBuilder *builder,
+                                             uint32_t constraint_index,
+                                             uint32_t index_in_active_body_list) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->non_contact_constraints_prepared) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "zjoltIslandBuilderPrepareNonContactConstraints must run first");
+  }
+  if (constraint_index >= builder->num_constraints) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint_index is out of range");
+  }
+  if (index_in_active_body_list >= builder->max_active_bodies) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "index_in_active_body_list is out of range");
+  }
+
+  builder->impl.LinkConstraint(constraint_index, index_in_active_body_list);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderLinkContact(ZJoltIslandBuilder *builder,
+                                          uint32_t contact_index,
+                                          uint32_t index_in_active_body_list) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->contact_constraints_prepared) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "zjoltIslandBuilderPrepareContactConstraints must run first");
+  }
+  if (contact_index >= builder->max_contacts) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "contact_index is out of range");
+  }
+  if (index_in_active_body_list >= builder->max_active_bodies) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "index_in_active_body_list is out of range");
+  }
+
+  builder->impl.LinkContact(contact_index, index_in_active_body_list);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderFinalize(ZJoltIslandBuilder *builder,
+                                       const ZJoltBodyId *active_bodies,
+                                       uint32_t num_active_bodies,
+                                       uint32_t num_contacts,
+                                       const ZJoltTempAllocator *temp_allocator) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->initialized) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "zjoltIslandBuilderInit must run first");
+  }
+  if (builder->finalized) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "call zjoltIslandBuilderResetIslands before finalizing again");
+  }
+  if (num_active_bodies > builder->max_active_bodies) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "num_active_bodies exceeds max_active_bodies");
+  }
+  if (num_active_bodies > 0 && active_bodies == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "active_bodies is required when num_active_bodies is nonzero");
+  }
+  if (builder->contact_constraints_prepared) {
+    if (num_contacts > builder->max_contacts) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "num_contacts exceeds the count given to PrepareContactConstraints");
+    }
+  } else if (num_contacts != 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "num_contacts must be 0 when PrepareContactConstraints was not called");
+  }
+  const ZJoltResult checked = ValidateHostTempAllocator(temp_allocator);
+  if (checked != ZJOLT_RESULT_OK) return checked;
+
+  builder->last_temp_allocator = *temp_allocator;
+  // JPH::BodyID and ZJoltBodyId share layout (static_assert above, in this
+  // same file), so the caller's array is read in place rather than copied.
+  ZJoltHostTempAllocatorAdapter adapter(*temp_allocator);
+  builder->impl.Finalize(reinterpret_cast<const JPH::BodyID *>(active_bodies),
+                         num_active_bodies, num_contacts, &adapter);
+  builder->finalized = true;
+  return ZJOLT_RESULT_OK;
+}
+
+uint32_t zjoltIslandBuilderGetNumIslands(const ZJoltIslandBuilder *builder) {
+  if (builder == nullptr) return 0;
+  return builder->impl.GetNumIslands();
+}
+
+ZJoltResult zjoltIslandBuilderGetBodiesInIsland(const ZJoltIslandBuilder *builder,
+                                                uint32_t island_index,
+                                                ZJoltBodyId *out_bodies,
+                                                uint32_t capacity,
+                                                uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(builder, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (island_index >= builder->impl.GetNumIslands()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "island_index is at or past GetNumIslands");
+  }
+
+  JPH::BodyID *begin = nullptr;
+  JPH::BodyID *end = nullptr;
+  builder->impl.GetBodiesInIsland(island_index, begin, end);
+  const uint32_t count = static_cast<uint32_t>(end - begin);
+  *out_count = count;
+  if (out_bodies == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  for (uint32_t i = 0; i < count; ++i) out_bodies[i] = zjolt::ToC(begin[i]);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderGetConstraintsInIsland(
+    const ZJoltIslandBuilder *builder, uint32_t island_index,
+    uint32_t *out_constraints, uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(builder, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (island_index >= builder->impl.GetNumIslands()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "island_index is at or past GetNumIslands");
+  }
+
+  uint32_t *begin = nullptr;
+  uint32_t *end = nullptr;
+  builder->impl.GetConstraintsInIsland(island_index, begin, end);
+  const uint32_t count =
+      begin != nullptr ? static_cast<uint32_t>(end - begin) : 0;
+  *out_count = count;
+  if (out_constraints == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  if (count > 0) std::memcpy(out_constraints, begin, count * sizeof(uint32_t));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderGetContactsInIsland(
+    const ZJoltIslandBuilder *builder, uint32_t island_index,
+    uint32_t *out_contacts, uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(builder, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (island_index >= builder->impl.GetNumIslands()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "island_index is at or past GetNumIslands");
+  }
+
+  uint32_t *begin = nullptr;
+  uint32_t *end = nullptr;
+  builder->impl.GetContactsInIsland(island_index, begin, end);
+  const uint32_t count =
+      begin != nullptr ? static_cast<uint32_t>(end - begin) : 0;
+  *out_count = count;
+  if (out_contacts == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  if (count > 0) std::memcpy(out_contacts, begin, count * sizeof(uint32_t));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderGetNumPositionSteps(
+    const ZJoltIslandBuilder *builder, uint32_t island_index,
+    uint32_t *out_num_position_steps) {
+  ZJOLT_ENTER(out_num_position_steps);
+  if (!zjolt::Present(builder, out_num_position_steps))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (island_index >= builder->impl.GetNumIslands()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "island_index is at or past GetNumIslands");
+  }
+
+  *out_num_position_steps = builder->impl.GetNumPositionSteps(island_index);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderGetStats(const ZJoltIslandBuilder *builder,
+                                       uint32_t island_index,
+                                       ZJoltIslandStats *out_stats) {
+  ZJOLT_ENTER(out_stats);
+  if (!zjolt::Present(builder, out_stats)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (island_index >= builder->impl.GetNumIslands()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "island_index is at or past GetNumIslands");
+  }
+#ifdef JPH_TRACK_SIMULATION_STATS
+  const JPH::IslandBuilder::IslandStats &stats =
+      const_cast<ZJoltIslandBuilder *>(builder)->impl.GetIslandStats(island_index);
+  out_stats->velocity_constraint_ticks = stats.mVelocityConstraintTicks.load();
+  out_stats->position_constraint_ticks = stats.mPositionConstraintTicks.load();
+  out_stats->update_bounds_ticks = stats.mUpdateBoundsTicks.load();
+  out_stats->num_velocity_steps = stats.mNumVelocitySteps;
+  out_stats->num_position_steps = stats.mNumPositionSteps;
+  out_stats->is_large_island = stats.mIsLargeIsland;
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltIslandBuilderSetNumPositionSteps(ZJoltIslandBuilder *builder,
+                                                  uint32_t island_index,
+                                                  uint32_t num_position_steps) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (island_index >= builder->impl.GetNumIslands()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "island_index is at or past GetNumIslands");
+  }
+  if (num_position_steps >= 256) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "num_position_steps must be below 256");
+  }
+
+  builder->impl.SetNumPositionSteps(island_index, num_position_steps);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltIslandBuilderResetIslands(
+    ZJoltIslandBuilder *builder, const ZJoltTempAllocator *temp_allocator) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(builder)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!builder->finalized) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "zjoltIslandBuilderFinalize must run first");
+  }
+  const ZJoltResult checked = ValidateHostTempAllocator(temp_allocator);
+  if (checked != ZJOLT_RESULT_OK) return checked;
+
+  ZJoltHostTempAllocatorAdapter adapter(*temp_allocator);
+  builder->impl.ResetIslands(&adapter);
+  builder->finalized = false;
+  builder->contact_constraints_prepared = false;
+  builder->non_contact_constraints_prepared = false;
+  builder->max_contacts = 0;
+  builder->num_constraints = 0;
+  return ZJOLT_RESULT_OK;
 }
 
 }  // extern "C"

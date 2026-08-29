@@ -1,0 +1,26 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Renderer	BatchImpl	BOUND	zjoltDebugRendererCreate zjoltDebugRendererGetTriangles
+Renderer	CreateTriangleBatch	EXTENSION	ZJoltDebugBatchCallbacks zjoltDebugRendererSetBatchCallbacks
+Renderer	CreateTriangleBatchForConvex	BOUND	zjoltDebugRendererCreate zjoltDebugRendererDrawSphere
+Renderer	CreateTriangleGeometryForConvex	BOUND	zjoltPhysicsSystemDrawBodies
+Renderer	DebugRendererPlayback	BOUND	zjoltDebugPlaybackCreate zjoltDebugRecorderGetData ZJoltDebugRenderer
+Renderer	DebugRendererRecorder	BOUND	zjoltDebugRecorderCreate zjoltDebugRecorderAsRenderer
+Renderer	DebugRendererSimple	BOUND	zjolt zjoltDebugRendererCreate zjoltDebugRendererGetLines zjoltDebugRendererGetTriangles zjoltDebugRendererGetTexts
+Renderer	DrawGeometry	EXTENSION	ZJoltDebugBatchCallbacks zjoltDebugRendererSetBatchCallbacks
+Renderer	DrawOpenCone	BOUND	zjolt zjoltPhysicsSystemDrawConstraintLimits
+Renderer	DrawSwingConeLimits	BOUND	zjoltPhysicsSystemDrawConstraintLimits
+Renderer	DrawSwingPyramidLimits	BOUND	zjoltPhysicsSystemDrawConstraintLimits zjoltDebugRendererGetLines
+Renderer	Geometry	BOUND	ZJoltDebugGeometry zjoltDebugRendererSetBatchCallbacks
+Renderer	GetLOD	BOUND	ZJoltDebugGeometry zjoltDebugRendererSetBatchCallbacks
+Renderer	SetCameraPos	BOUND	zjoltDebugRendererSetCameraPosition
+Renderer	TextBlob	BOUND	zjoltDebugRendererDrawText3D zjoltDebugRecorderAsRenderer zjoltDebugPlaybackDrawFrame zjoltDebugRendererGetTexts

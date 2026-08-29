@@ -11,10 +11,12 @@ const err = @import("error.zig");
 const material_mod = @import("material.zig");
 const math = @import("math.zig");
 const transformed_mod = @import("transformed.zig");
+const stream_mod = @import("stream.zig");
 
 pub const SubType = c.ShapeSubType;
 pub const PhysicsMaterial = material_mod.PhysicsMaterial;
 pub const TransformedShape = transformed_mod.TransformedShape;
+pub const MeshBuildQuality = c.MeshBuildQuality;
 
 /// Vertices `Shape.supportingFace` can report in one call. Jolt's own
 /// `Shape::SupportingFace` capacity.
@@ -22,6 +24,14 @@ pub const max_supporting_face_vertices: u32 = c.shape_max_supporting_face_vertic
 
 /// Fewest triangles `TriangleWalk.next` accepts a request for.
 pub const min_triangles_requested: u32 = c.shape_min_triangles_requested;
+
+/// Cosine of Jolt's default active-edge threshold angle (5 degrees),
+/// shared by `initMesh`, `initHeightField` and `Shape.heightFieldSetHeights`.
+/// Not a "leave at zero" default: zero and negative values are themselves
+/// meaningful settings, so matching Jolt's default means naming this
+/// constant explicitly. Pinned behaviourally, not by the ABI cross-check
+/// (which cannot compare floats).
+pub const default_active_edge_cos_threshold_angle: f32 = 0.996195;
 
 fn optionalPtr(comptime T: type, value: *const ?T) ?*const T {
     return if (value.*) |*payload| payload else null;
@@ -35,12 +45,37 @@ fn optionalPtr(comptime T: type, value: *const ?T) ?*const T {
 /// hole and missing.
 pub const height_field_no_collision: f32 = std.math.floatMax(f32);
 
+/// Passed as `min_height_value`/`max_height_value` together (the default)
+/// to derive `initHeightField`'s quantisation range from the samples
+/// rather than reserving a wider one. Jolt's own sentinel
+/// (`HeightFieldShape.h`'s `cLargeFloat`), pinned behaviourally: a field
+/// built with these accepts a `heightFieldSetHeights` only within the
+/// samples' own spread; an explicit wider pair accepts one further out.
+pub const auto_min_height_value: f32 = 1.0e15;
+pub const auto_max_height_value: f32 = -1.0e15;
+
 /// The sub-shape id meaning "the shape itself, no leaf below it".
 ///
 /// Required rather than convenient: Jolt asserts on any other value for a
 /// shape that has no leaves, so `sphere.material(0)` aborts a build with
 /// asserts on. @see `Shape.material`.
 pub const sub_shape_id_empty: c.SubShapeId = c.sub_shape_id_empty;
+
+/// Pops `bits` bits off the front of `id`, parents before children -- the
+/// decode direction of `SubShapeIdCreator.push`. Returns the popped value
+/// and what remains of `id`; feed the remainder back in to decode the next
+/// level of a nested compound, mesh, or height field by hand.
+///
+/// `error.InvalidArgument` for `bits` above 32.
+pub fn popSubShapeId(
+    id: c.SubShapeId,
+    bits: u32,
+) err.Error!struct { value: u32, remainder: c.SubShapeId } {
+    var value: u32 = 0;
+    var remainder: c.SubShapeId = 0;
+    try err.check(c.zjoltSubShapeIdPopID(id, bits, &value, &remainder));
+    return .{ .value = value, .remainder = remainder };
+}
 
 /// One child of a compound shape, in the parent's local space.
 ///
@@ -56,6 +91,37 @@ pub const CompoundChild = c.CompoundChild;
 /// shape's own equation) and `Shape.planes` (a convex hull's face planes) —
 /// distinct queries, `Shape.subType` says which applies.
 pub const Plane = c.Plane;
+
+/// How `Shape.supportFunction` folds in a convex primitive's rounding
+/// radius. `.exclude_convex_radius` caps the radius it removes at Jolt's
+/// own 0.05, regardless of the shape's own convex radius.
+pub const SupportMode = c.ShapeSupportMode;
+
+/// Scratch space `Shape.supportFunction` places its support object into.
+/// Must stay alive and untouched for as long as the result is used --
+/// there is nothing to release.
+pub const SupportBuffer = c.ShapeSupportBuffer;
+
+/// A convex shape's support function, for GJK/EPA (`geometry.zig`).
+/// Borrowed from the `SupportBuffer` it was placed in by
+/// `Shape.supportFunction`.
+pub const SupportFunction = struct {
+    handle: *const c.ShapeSupportFunction,
+
+    /// The support point along `direction`, relative to the shape's own
+    /// centre of mass.
+    pub fn support(self: SupportFunction, direction: math.Vec3) math.Vec3 {
+        var out: math.Vec3 = undefined;
+        c.zjoltShapeSupportFunctionGetSupport(self.handle, &direction, &out);
+        return out;
+    }
+
+    /// The convex radius this support function folds in -- 0 in
+    /// `.include_convex_radius` mode.
+    pub fn convexRadius(self: SupportFunction) f32 {
+        return c.zjoltShapeSupportFunctionGetConvexRadius(self.handle);
+    }
+};
 
 /// A compound child, positioned and oriented in its parent.
 ///
@@ -76,10 +142,12 @@ pub fn compoundChild(shape: Shape, opts: struct {
 }
 
 pub const Shape = struct {
-    /// Const because every C entry point that READS a shape takes it as
-    /// `const ZJoltShape *`. The one exception is a mutable compound, and that
-    /// is reached through `MutableCompound` below, which holds a mutable
-    /// handle of its own — so this stays const and no cast appears anywhere.
+    /// Const because every C entry point that READS a shape, and every
+    /// one that mutates a COMPOUND's structure, takes it as `const
+    /// ZJoltShape *` or reaches it through `MutableCompound` below.
+    /// `setUserData`/`setDensity` are the two exceptions — plain
+    /// non-const setters on every shape kind — so those two `@constCast`
+    /// at the call site rather than widen this field.
     handle: *const c.Shape,
 
     //=========================================================================
@@ -184,13 +252,12 @@ pub const Shape = struct {
         return .{ .handle = handle };
     }
 
-    /// A capsule whose caps have different radii, with the `top_radius` cap at
-    /// `(0, half_height_of_tapered_cylinder, 0)`.
+    /// A capsule whose caps have different radii, with the `top_radius`
+    /// cap at `(0, half_height_of_tapered_cylinder, 0)`.
     ///
-    /// Jolt SIMPLIFIES this one as it builds: when either sphere fully
-    /// contains the other the result is a sphere, or a rotated-translated
-    /// sphere. So `subType()` is not necessarily `.tapered_capsule` for a
-    /// shape built here.
+    /// Jolt simplifies a degenerate case (one cap fully containing the
+    /// other) to a sphere or rotated-translated sphere: `subType()` may
+    /// then not be `.tapered_capsule` for a shape built here.
     pub fn initTaperedCapsule(
         half_height_of_tapered_cylinder: f32,
         top_radius: f32,
@@ -236,6 +303,10 @@ pub const Shape = struct {
         /// How far a point may sit outside the hull; larger yields fewer
         /// vertices. Zero keeps Jolt's default.
         hull_tolerance: f32 = 0,
+        /// How far the shrunk hull plus `max_convex_radius` may sit from the
+        /// actual hull; the radius is lowered automatically if it would
+        /// exceed this. Zero keeps Jolt's default of 0.05.
+        max_error_convex_radius: f32 = 0,
         density: f32 = 0,
         material: ?PhysicsMaterial = null,
     };
@@ -249,6 +320,7 @@ pub const Shape = struct {
             @intCast(points.len),
             opts.max_convex_radius,
             opts.hull_tolerance,
+            opts.max_error_convex_radius,
             opts.density,
             materialHandle(opts.material),
             &handle,
@@ -268,14 +340,12 @@ pub const Shape = struct {
         material: ?PhysicsMaterial = null,
     };
 
-    /// A half space: everything on the negative side of
-    /// `dot(x, normal) + constant = 0` is solid.
+    /// A half space: the negative side of `dot(x, normal) + constant = 0`
+    /// is solid. `normal` must be unit length; a non-unit one is
+    /// `error.InvalidArgument` rather than quietly normalised (a rescaled
+    /// normal would move the surface from where `constant` says it is).
     ///
-    /// Static or kinematic only — a half space has no volume to give a dynamic
-    /// body mass. `normal` must be unit length; one that is not is
-    /// `error.InvalidArgument` rather than quietly normalised, because a
-    /// rescaled normal moves the surface away from where `constant` says it
-    /// is.
+    /// Static or kinematic only — a half space has no volume for dynamic-body mass.
     pub fn initPlane(normal: math.Vec3, constant: f32, opts: PlaneOptions) err.Error!Shape {
         var handle: *c.Shape = undefined;
         try err.check(c.zjoltShapeCreatePlane(
@@ -315,19 +385,20 @@ pub const Shape = struct {
         /// gives them. Empty means the mesh has no materials of its own and
         /// every triangle reports the shared default.
         triangle_materials: []const u32 = &.{},
+        /// One host-chosen value per triangle, read back later with
+        /// `Shape.meshTriangleUserData`. Empty keeps Jolt's default (the
+        /// triangle's own pre-reorder index) and costs roughly 25% less
+        /// memory.
+        triangle_user_data: []const u32 = &.{},
+        active_edge_cos_threshold_angle: f32 = default_active_edge_cos_threshold_angle,
+        build_quality: MeshBuildQuality = .favor_runtime_performance,
     };
 
-    /// A static triangle mesh. `indices` must be a multiple of three, and
-    /// every index must be in range for `vertices` — both are checked here
-    /// rather than left to fault inside Jolt's tree builder.
-    ///
-    /// A mesh shape may only be used by a static or kinematic body. Building
-    /// it is the expensive part of collision cooking, which is why `save` and
-    /// `restore` exist.
-    ///
-    /// A sub-shape id from a hit on this mesh names the triangle AFTER Jolt's
-    /// own spatial reordering, so it is meaningful to `material` and to
-    /// nothing else — in particular it is not an index into `indices`.
+    /// A static triangle mesh, usable only by a static or kinematic body.
+    /// `indices` must be a multiple of three, in range for `vertices` —
+    /// checked here, not left to fault inside Jolt's tree builder. A
+    /// hit's sub-shape id names the triangle AFTER Jolt's own reordering,
+    /// meaningful to `material` only, not an index into `indices`.
     pub fn initMesh(
         vertices: []const math.Vec3,
         indices: []const u32,
@@ -337,6 +408,11 @@ pub const Shape = struct {
         const num_triangles = indices.len / 3;
         if (opts.triangle_materials.len != 0 and
             opts.triangle_materials.len != num_triangles)
+        {
+            return err.Error.InvalidArgument;
+        }
+        if (opts.triangle_user_data.len != 0 and
+            opts.triangle_user_data.len != num_triangles)
         {
             return err.Error.InvalidArgument;
         }
@@ -357,9 +433,12 @@ pub const Shape = struct {
             indices.ptr,
             @intCast(num_triangles),
             if (opts.triangle_materials.len != 0) opts.triangle_materials.ptr else null,
+            if (opts.triangle_user_data.len != 0) opts.triangle_user_data.ptr else null,
             if (opts.materials.len != 0) &handles else null,
             @intCast(opts.materials.len),
             opts.max_triangles_per_leaf,
+            opts.active_edge_cos_threshold_angle,
+            opts.build_quality,
             &handle,
         ));
         return .{ .handle = handle };
@@ -383,16 +462,21 @@ pub const Shape = struct {
         /// One index into `materials` per QUAD — `(sample_count - 1)^2` of
         /// them, not one per sample.
         quad_materials: []const u8 = &.{},
+        /// The range `samples` is quantised into, to 16 bits, fixed for
+        /// the shape's life. Defaults derive the tightest range that fits
+        /// `samples`. Widen the pair to reserve headroom
+        /// `heightFieldSetHeights` can move a sample into later without
+        /// being clamped back; narrower than `samples` needs has no effect.
+        min_height_value: f32 = auto_min_height_value,
+        max_height_value: f32 = auto_max_height_value,
+        active_edge_cos_threshold_angle: f32 = default_active_edge_cos_threshold_angle,
     };
 
-    /// A static height field of `sample_count` x `sample_count` samples, laid
-    /// out row major so `(x, y)` is `samples[y * sample_count + x]`.
-    ///
-    /// A sample of `height_field_no_collision` punches a hole. `sample_count`
-    /// need not be a multiple of `opts.block_size` — Jolt rounds it up and
-    /// pads the difference with holes — but the rounded count divided by the
-    /// block size must be at least 2, which makes 4 the smallest useful
-    /// `sample_count` at the default block size.
+    /// A static height field of `sample_count` x `sample_count` samples,
+    /// row major: `(x, y)` is `samples[y * sample_count + x]`. A sample
+    /// of `height_field_no_collision` punches a hole. `sample_count` need
+    /// not be a multiple of `opts.block_size` (Jolt rounds up and pads
+    /// with holes), but the rounded count / block size must be at least 2.
     pub fn initHeightField(
         samples: []const f32,
         sample_count: u32,
@@ -423,6 +507,9 @@ pub const Shape = struct {
             @intCast(opts.materials.len),
             opts.block_size,
             opts.bits_per_sample,
+            opts.min_height_value,
+            opts.max_height_value,
+            opts.active_edge_cos_threshold_angle,
             &handle,
         ));
         return .{ .handle = handle };
@@ -433,12 +520,11 @@ pub const Shape = struct {
     //=========================================================================
 
     /// A compound whose children are fixed once built, stored in a tree.
+    /// An empty `children` is `error.InvalidArgument`.
     ///
-    /// Jolt SIMPLIFIES the one-child case: a single child at the origin with
-    /// no rotation comes back as that child itself, and one that is moved or
-    /// rotated comes back as a rotated-translated shape. So `subType()` is not
-    /// necessarily `.static_compound` for a shape built here. An empty
-    /// `children` is `error.InvalidArgument`.
+    /// Jolt simplifies a single unmoved, unrotated child to that child
+    /// itself, and a single moved/rotated one to a rotated-translated
+    /// shape: `subType()` may then not be `.static_compound`.
     pub fn initStaticCompound(children: []const CompoundChild) err.Error!Shape {
         var handle: *c.Shape = undefined;
         try err.check(c.zjoltShapeCreateStaticCompound(
@@ -457,6 +543,91 @@ pub const Shape = struct {
     /// The user data a child was added with, or 0 if `index` is out of range.
     pub fn compoundChildUserData(self: Shape, index: u32) u32 {
         return c.zjoltShapeCompoundGetChildUserData(self.handle, index);
+    }
+
+    /// Changes the user data a child was added with — a plain data field,
+    /// independent of the structural obligations `MutableCompound`'s
+    /// mutating methods carry. Works on a STATIC compound too. `error.
+    /// InvalidArgument` if this is not a compound, or `index` is at or
+    /// beyond `compoundChildCount`.
+    pub fn setCompoundChildUserData(self: Shape, index: u32, user_data: u32) err.Error!void {
+        try err.check(
+            c.zjoltShapeCompoundSetChildUserData(@constCast(self.handle), index, user_data),
+        );
+    }
+
+    /// The sub-shape id addressing this compound's direct child `index`,
+    /// from this shape's own root. Inverse of `subShapeIndexFromID`; for
+    /// a grandchild (or deeper), chain `subShapeIDFromIndexInto` with a
+    /// `SubShapeIdCreator` instead. `error.InvalidArgument` if this is
+    /// not a compound, or `index` is at or beyond `compoundChildCount`.
+    pub fn subShapeIDFromIndex(self: Shape, index: u32) err.Error!c.SubShapeId {
+        var out: c.SubShapeId = 0;
+        try err.check(c.zjoltShapeGetSubShapeIDFromIndex(self.handle, index, &out));
+        return out;
+    }
+
+    /// As `subShapeIDFromIndex`, but composing onto `creator` in place instead
+    /// of always starting at the root -- the level-by-level way to address a
+    /// grandchild (or deeper): call once per level, from the outermost
+    /// compound down, passing the same `creator` through each call.
+    pub fn subShapeIDFromIndexInto(self: Shape, creator: SubShapeIdCreator, index: u32) err.Error!void {
+        try err.check(c.zjoltShapeGetSubShapeIDFromIndexInto(self.handle, index, creator.handle));
+    }
+
+    /// The inverse of `subShapeIDFromIndex`: which direct child
+    /// `sub_shape_id` names, and what is left of the id after removing the
+    /// path to it — meaningful when that child is itself a compound or a
+    /// mesh. `error.InvalidArgument` if this is not a compound, or
+    /// `sub_shape_id` does not name one of its direct children.
+    pub fn subShapeIndexFromID(
+        self: Shape,
+        sub_shape_id: c.SubShapeId,
+    ) err.Error!struct { index: u32, remainder: c.SubShapeId } {
+        var index: u32 = 0;
+        var remainder: c.SubShapeId = 0;
+        try err.check(c.zjoltShapeGetSubShapeIndexFromID(
+            self.handle,
+            sub_shape_id,
+            &index,
+            &remainder,
+        ));
+        return .{ .index = index, .remainder = remainder };
+    }
+
+    /// Which of this compound's direct children have a bounding box
+    /// overlapping `box`, both in this shape's own local space.
+    /// `error.InvalidArgument` if this is not a compound.
+    pub fn intersectingSubShapes(
+        self: Shape,
+        box: math.AABox,
+        allocator: std.mem.Allocator,
+    ) err.Error![]u32 {
+        var count: u32 = 0;
+        try err.check(
+            c.zjoltShapeGetIntersectingSubShapes(self.handle, &box, null, 0, &count),
+        );
+
+        // `count` is the number of CHILDREN, an upper bound on how many
+        // actually intersect — not the exact answer the way most two-call
+        // protocols in this package report. So the exact result is copied
+        // into its own exactly-sized allocation rather than handed back as
+        // a sub-slice of the scratch buffer: a slice shorter than what it
+        // was allocated with is not a valid argument to `allocator.free`.
+        const scratch = try allocator.alloc(u32, count);
+        defer allocator.free(scratch);
+        var actual: u32 = 0;
+        try err.check(c.zjoltShapeGetIntersectingSubShapes(
+            self.handle,
+            &box,
+            scratch.ptr,
+            @intCast(scratch.len),
+            &actual,
+        ));
+
+        const result = try allocator.alloc(u32, actual);
+        @memcpy(result, scratch[0..actual]);
+        return result;
     }
 
     //=========================================================================
@@ -496,6 +667,17 @@ pub const Shape = struct {
         return .{ .handle = handle };
     }
 
+    /// The shape immediately inside a scaled, rotated-translated, or
+    /// offset-center-of-mass wrapper, exactly one level — unlike `leafShape`,
+    /// which keeps drilling until it reaches a non-decorated leaf. Borrowed:
+    /// owned by this shape, valid exactly as long as it is. `error.
+    /// InvalidArgument` if this is not decorated.
+    pub fn innerShape(self: Shape) err.Error!Shape {
+        var handle: *const c.Shape = undefined;
+        try err.check(c.zjoltShapeGetInnerShape(self.handle, &handle));
+        return .{ .handle = handle };
+    }
+
     //=========================================================================
     // Lifetime
     //=========================================================================
@@ -513,6 +695,18 @@ pub const Shape = struct {
         return c.zjoltShapeGetRefCount(self.handle);
     }
 
+    /// Opaque to the library, and 0 until set with `setUserData`. Every
+    /// `init*` here builds its settings on the stack without crossing the
+    /// settings object itself, so this is the only way to reach the user
+    /// data every Jolt `*ShapeSettings` inherits, uniformly across shape kinds.
+    pub fn userData(self: Shape) u64 {
+        return c.zjoltShapeGetUserData(self.handle);
+    }
+
+    pub fn setUserData(self: Shape, user_data: u64) void {
+        c.zjoltShapeSetUserData(@constCast(self.handle), user_data);
+    }
+
     //=========================================================================
     // Introspection
     //=========================================================================
@@ -521,24 +715,28 @@ pub const Shape = struct {
         return c.zjoltShapeGetSubType(self.handle);
     }
 
-    /// The material of one leaf of this shape. Never null for a valid shape.
-    ///
-    /// `sub_shape_id` comes from a hit — `RayCastHit.sub_shape_id` and its
-    /// friends — or from a contact manifold. For a shape with no leaves, which
-    /// is every convex primitive and a plane, pass `sub_shape_id_empty`: Jolt
-    /// ASSERTS the id is empty there, so passing 0 aborts a build with asserts
-    /// on rather than returning anything. An id naming a child a compound does
-    /// not have asserts the same way, so this is for ids Jolt handed you, not
-    /// ids you composed.
-    ///
-    /// A shape built without a material answers with the shared default rather
-    /// than null; compare against `PhysicsMaterial.default()` to tell them
-    /// apart. The material is borrowed from the shape — `addRef` it to outlive
-    /// one.
+    /// The material of one leaf of this shape. Never null for a valid
+    /// shape; one built without a material answers with the shared
+    /// default — compare `PhysicsMaterial.default()` to tell apart.
+    /// `sub_shape_id` comes from a hit or contact manifold, not one
+    /// composed by hand; pass `sub_shape_id_empty` for a shape with no
+    /// leaves. Borrowed, `addRef` to outlive this shape.
     pub fn material(self: Shape, sub_shape_id: c.SubShapeId) ?PhysicsMaterial {
         const handle = c.zjoltShapeGetMaterial(self.handle, sub_shape_id) orelse
             return null;
         return .{ .handle = handle };
+    }
+
+    /// Replaces a convex primitive's material. `null` installs Jolt's
+    /// shared default. Live edit to shared state: every body using
+    /// `self` sees the change immediately (a shape is shared, not
+    /// copied). Drops the old material reference and adds one to
+    /// `new_material`; `error.InvalidArgument` for a non-convex shape.
+    pub fn setMaterial(self: Shape, new_material: ?PhysicsMaterial) err.Error!void {
+        try err.check(c.zjoltShapeSetMaterial(
+            @constCast(self.handle),
+            if (new_material) |m| m.handle else null,
+        ));
     }
 
     pub fn volume(self: Shape) f32 {
@@ -575,16 +773,8 @@ pub const Shape = struct {
     //=========================================================================
     // Convex-primitive dimension introspection
     //
-    // `subType` says WHICH kind of shape a handle names; these are the other
-    // half — the dimensions it was built with. Every one of them except
-    // `innerRadius` (a plain virtual every shape kind implements) checks the
-    // subtype itself and returns `error.InvalidArgument` for a shape it does
-    // not apply to, because Jolt names each with a plain, non-virtual method
-    // on the concrete subtype rather than something dispatchable generically.
-    //
-    // A shape Jolt SIMPLIFIED at construction — `initTaperedCapsule` and its
-    // neighbours document when — answers these in terms of what it actually
-    // is now, which may not be the constructor that built it.
+    // Each getter below returns `error.InvalidArgument` for a shape kind
+    // it does not apply to, except `innerRadius` (implemented by every kind).
     //=========================================================================
 
     /// The radius of the largest sphere that fits inside this shape, Jolt's
@@ -593,6 +783,48 @@ pub const Shape = struct {
     /// so unlike the rest of this section it cannot fail.
     pub fn innerRadius(self: Shape) f32 {
         return c.zjoltShapeGetInnerRadius(self.handle);
+    }
+
+    /// A convex shape's density in kg/m^3, as it stands right now — distinct
+    /// from `ConvexOptions.density`'s creation-time role. `error.
+    /// InvalidArgument` for a shape that is not a convex primitive (sphere,
+    /// box, capsule, cylinder, convex hull, triangle, tapered capsule,
+    /// tapered cylinder) — a mesh, height field, plane, compound or
+    /// decorated shape has no density of its own.
+    pub fn density(self: Shape) err.Error!f32 {
+        var out: f32 = undefined;
+        try err.check(c.zjoltShapeGetDensity(self.handle, &out));
+        return out;
+    }
+
+    /// Changing this does not retroactively rescale a body already built
+    /// from this shape: Jolt bakes mass properties in at body creation, so a
+    /// later `massProperties` reflects the new density but an existing body
+    /// does not until it is rebuilt or given a mass override. Same
+    /// `error.InvalidArgument` restriction as `density`.
+    pub fn setDensity(self: Shape, new_density: f32) err.Error!void {
+        try err.check(c.zjoltShapeSetDensity(@constCast(self.handle), new_density));
+    }
+
+    /// This shape's support function for GJK/EPA (`geometry.zig`), placed
+    /// inside `buffer`. `buffer` must stay alive and untouched for as long
+    /// as the result is used. `scale` null keeps (1, 1, 1).
+    /// `error.InvalidArgument` for a shape that is not a convex primitive.
+    pub fn supportFunction(
+        self: Shape,
+        mode: SupportMode,
+        buffer: *SupportBuffer,
+        scale: ?math.Vec3,
+    ) err.Error!SupportFunction {
+        var handle: *const c.ShapeSupportFunction = undefined;
+        try err.check(c.zjoltShapeGetSupportFunction(
+            self.handle,
+            mode,
+            buffer,
+            optionalPtr(math.Vec3, &scale),
+            &handle,
+        ));
+        return .{ .handle = handle };
     }
 
     /// Sphere, capsule or cylinder radius. `error.InvalidArgument` for any
@@ -731,10 +963,9 @@ pub const Shape = struct {
     /// A plane shape's own plane equation and bounding half extent — both
     /// values `initPlane` took. `error.InvalidArgument` for any other kind.
     ///
-    /// There is no separate vertex read-back: Jolt keeps the four corners of
-    /// the bounded quad this describes as a PRIVATE helper with no accessor,
-    /// so reconstruct them from the returned plane and half extent directly —
-    /// the same two values Jolt's own private helper starts from.
+    /// No separate vertex read-back: Jolt keeps the four corners as a
+    /// PRIVATE helper with no accessor — reconstruct them from the
+    /// returned plane and half extent directly.
     pub fn plane(self: Shape) err.Error!struct { plane: Plane, half_extent: f32 } {
         var out_plane: Plane = undefined;
         var out_half_extent: f32 = undefined;
@@ -744,12 +975,46 @@ pub const Shape = struct {
         return .{ .plane = out_plane, .half_extent = out_half_extent };
     }
 
+    /// The total and submerged volume of this shape — placed by
+    /// `transform` and `scale` (null for (1, 1, 1)) — below `surface`,
+    /// and the world-space centre of mass of the submerged part.
+    ///
+    /// `error.InvalidArgument` if this shape or anything beneath it is a
+    /// mesh, height field, or plane — Jolt 5.6.0 leaves those uninitialised.
+    pub fn submergedVolume(
+        self: Shape,
+        transform: math.Mat44,
+        scale: ?math.Vec3,
+        surface: Plane,
+    ) err.Error!struct {
+        total_volume: f32,
+        submerged_volume: f32,
+        center_of_buoyancy: math.Vec3,
+    } {
+        var total_volume: f32 = undefined;
+        var submerged_volume: f32 = undefined;
+        var center_of_buoyancy: math.Vec3 = undefined;
+        try err.check(c.zjoltShapeGetSubmergedVolume(
+            self.handle,
+            &transform,
+            optionalPtr(math.Vec3, &scale),
+            &surface,
+            &total_volume,
+            &submerged_volume,
+            &center_of_buoyancy,
+        ));
+        return .{
+            .total_volume = total_volume,
+            .submerged_volume = submerged_volume,
+            .center_of_buoyancy = center_of_buoyancy,
+        };
+    }
+
     //=========================================================================
     // Serialisation
     //
-    // The format is Jolt's own binary shape state. It is tied to the vendored
-    // Jolt version and to the double-precision setting — it is a cooking
-    // cache, not an interchange format. See UPSTREAM.md.
+    // Jolt's own binary shape state, tied to the vendored Jolt version and double-precision setting — a
+    // cooking cache, not an interchange format. See UPSTREAM.md.
     //=========================================================================
 
     /// Bytes `save` will need. Cheap enough to call before every save; it runs
@@ -776,12 +1041,30 @@ pub const Shape = struct {
         return try self.save(buffer);
     }
 
+    /// `save`, through `stream` instead of a resident buffer — for a large
+    /// cook a caller would rather stream than size and hold whole. @see
+    /// `zjolt.hostStream`. Less corruption margin than `restore`: the
+    /// header carries a magic tag and build identity, but no length or
+    /// checksum. `error.IoError` if `stream` reports failure.
+    pub fn saveStream(self: Shape, stream: stream_mod.Stream) err.Error!void {
+        try err.check(c.zjoltShapeSaveStream(self.handle, &stream));
+    }
+
     /// Rebuilds a shape from `save` output. A truncated buffer, or one with
     /// trailing bytes, is `error.BadFormat` rather than a partially parsed
     /// shape.
     pub fn restore(data: []const u8) err.Error!Shape {
         var handle: *c.Shape = undefined;
         try err.check(c.zjoltShapeRestore(data.ptr, data.len, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// Rebuilds a shape written by `saveStream`. @see `restore` for what
+    /// `error.BadFormat` covers; a stream form has no length or checksum to
+    /// check first.
+    pub fn restoreStream(stream: stream_mod.Stream) err.Error!Shape {
+        var handle: *c.Shape = undefined;
+        try err.check(c.zjoltShapeRestoreStream(&stream, &handle));
         return .{ .handle = handle };
     }
 
@@ -794,13 +1077,22 @@ pub const Shape = struct {
         return c.zjoltShapeGetSubShapeIDBits(self.handle);
     }
 
+    /// Whether `sub_shape_id` names something in this shape that
+    /// `material` and friends could safely be given — every shape kind
+    /// but a compound just asserts on a bad id instead of reporting it.
+    /// For a shape with no leaves, valid means exactly
+    /// `sub_shape_id_empty`. A mesh/height field checks only structural
+    /// well-formedness, not that the id names a real triangle or quad.
+    pub fn isSubShapeIDValid(self: Shape, sub_shape_id: c.SubShapeId) bool {
+        return c.zjoltShapeIsSubShapeIDValid(self.handle, sub_shape_id);
+    }
+
     /// The FACE normal at `local_surface_position` on the leaf named by
     /// `sub_shape_id`, both relative to this shape's own center of mass.
-    ///
-    /// A face normal, not a vertex or edge one — for a hit's contact normal
-    /// use `-penetration_axis` from the hit itself, already the case for
-    /// every hit this package reports. `sub_shape_id` follows `material`'s
-    /// rule: pass `sub_shape_id_empty` for a shape with no leaves.
+    /// A face normal, not a vertex or edge one — for a hit's contact
+    /// normal use `-penetration_axis` from the hit itself. `sub_shape_id`
+    /// follows `material`'s rule: pass `sub_shape_id_empty` for a shape
+    /// with no leaves.
     pub fn surfaceNormal(
         self: Shape,
         sub_shape_id: c.SubShapeId,
@@ -884,6 +1176,22 @@ pub const Shape = struct {
             &handle,
             &remainder,
         ));
+        return .{ .shape = .{ .handle = handle }, .remainder = remainder };
+    }
+
+    /// The innermost real shape at `sub_shape_id`, drilling through every
+    /// compound and decoration — the identity-transform counterpart of
+    /// `subShapeTransformedShape`.
+    ///
+    /// Borrowed: valid as long as this shape is — `addRef` to outlive it.
+    /// Null if `sub_shape_id` did not resolve to a leaf, rather than an assert.
+    pub fn leafShape(
+        self: Shape,
+        sub_shape_id: c.SubShapeId,
+    ) ?struct { shape: Shape, remainder: c.SubShapeId } {
+        var remainder: c.SubShapeId = 0;
+        const handle = c.zjoltShapeGetLeafShape(self.handle, sub_shape_id, &remainder) orelse
+            return null;
         return .{ .shape = .{ .handle = handle }, .remainder = remainder };
     }
 
@@ -997,9 +1305,8 @@ pub const Shape = struct {
     //=========================================================================
     // Height field specifics
     //
-    // Addressed by (x, y) sample coordinates, not by sub-shape id, except
-    // `heightFieldSubShapeCoordinates` — the bridge from a hit's sub-shape id
-    // back to (x, y).
+    // Addressed by (x, y) sample coordinates, except
+    // `heightFieldSubShapeCoordinates` (a hit's sub-shape id -> (x, y)).
     //=========================================================================
 
     /// Samples per side, after Jolt rounds the construction-time count up to
@@ -1077,15 +1384,12 @@ pub const Shape = struct {
         return .{ .x = x, .y = y, .triangle_index = triangle_index };
     }
 
-    /// Reads back a `size_x` by `size_y` block of height samples starting at
-    /// (x, y), row major into `out_heights` — `out_heights[row * size_x +
-    /// col]`. A hole reads back as `height_field_no_collision`.
-    ///
-    /// `x` and `y` must each be a multiple of `heightFieldBlockSize`, and the
-    /// requested block must fit within the sample grid — Jolt asserts on
-    /// both rather than clamping, which this package turns into
-    /// `error.InvalidArgument`. `out_heights` must hold `size_x * size_y`
-    /// entries.
+    /// Reads a `size_x` by `size_y` block of height samples starting at
+    /// (x, y), row major into `out_heights[row * size_x + col]` (must hold
+    /// `size_x * size_y` entries); a hole reads back as
+    /// `height_field_no_collision`. `x`/`y` must be multiples of
+    /// `heightFieldBlockSize` and the block must fit the grid, or
+    /// `error.InvalidArgument`.
     pub fn heightFieldHeights(
         self: Shape,
         x: u32,
@@ -1106,7 +1410,220 @@ pub const Shape = struct {
             size_x,
         ));
     }
+
+    /// Repaints height-field samples in place — craters, terrain
+    /// deformation, without rebuilding the shape. Same bounds as
+    /// `heightFieldHeights`; values clamp into
+    /// [`heightFieldMinHeightValue`, `heightFieldMaxHeightValue`].
+    ///
+    /// NOT thread safe against a query or step; needs `notifyShapeChanged` after.
+    pub fn heightFieldSetHeights(
+        self: Shape,
+        x: u32,
+        y: u32,
+        size_x: u32,
+        size_y: u32,
+        heights: []const f32,
+        active_edge_cos_threshold_angle: f32,
+    ) err.Error!void {
+        if (heights.len < @as(usize, size_x) * size_y)
+            return err.Error.InvalidArgument;
+        try err.check(c.zjoltShapeHeightFieldSetHeights(
+            @constCast(self.handle),
+            x,
+            y,
+            size_x,
+            size_y,
+            heights.ptr,
+            size_x,
+            active_edge_cos_threshold_angle,
+        ));
+    }
 };
+
+/// A running SubShapeIDCreator -- composes a multi-level sub-shape id one
+/// level at a time, for addressing a nested compound's grandchild (or
+/// deeper). Owned outright, not reference counted: `deinit` it.
+pub const SubShapeIdCreator = struct {
+    handle: *c.SubShapeIdCreator,
+
+    /// The root of the chain -- no bits written yet.
+    pub fn init() err.Error!SubShapeIdCreator {
+        var handle: *c.SubShapeIdCreator = undefined;
+        try err.check(c.zjoltSubShapeIdCreatorCreate(&handle));
+        return .{ .handle = handle };
+    }
+
+    pub fn deinit(self: SubShapeIdCreator) void {
+        c.zjoltSubShapeIdCreatorDestroy(self.handle);
+    }
+
+    /// Direct bind of SubShapeIDCreator::PushID -- advances `self` in place.
+    /// `value` must fit in `bits` bits, and the running total must not
+    /// exceed 32; both are `error.InvalidArgument` rather than Jolt's
+    /// asserts.
+    pub fn push(self: SubShapeIdCreator, value: u32, bits: u32) err.Error!void {
+        try err.check(c.zjoltSubShapeIdCreatorPushID(self.handle, value, bits));
+    }
+
+    pub fn id(self: SubShapeIdCreator) c.SubShapeId {
+        return c.zjoltSubShapeIdCreatorGetID(self.handle);
+    }
+
+    pub fn numBitsWritten(self: SubShapeIdCreator) u32 {
+        return c.zjoltSubShapeIdCreatorGetNumBitsWritten(self.handle);
+    }
+};
+
+/// Submerged-volume accumulator for an arbitrary convex polyhedron -- what
+/// `Shape.submergedVolume` runs internally for a shape already built,
+/// exposed over a caller's own point cloud and face list. Owned outright,
+/// not reference counted: `deinit`.
+pub const PolyhedronSubmergedVolumeCalculator = struct {
+    handle: *c.PolyhedronSubmergedVolumeCalculator,
+
+    /// Transforms `points` by `transform` and classifies each against
+    /// `surface` (normal pointing up).
+    pub fn init(
+        transform: math.Mat44,
+        points: []const math.Vec3,
+        surface: Plane,
+    ) err.Error!PolyhedronSubmergedVolumeCalculator {
+        var handle: *c.PolyhedronSubmergedVolumeCalculator = undefined;
+        try err.check(c.zjoltPolyhedronSubmergedVolumeCalculatorCreate(
+            &transform,
+            points.ptr,
+            @intCast(points.len),
+            &surface,
+            &handle,
+        ));
+        return .{ .handle = handle };
+    }
+
+    pub fn deinit(self: PolyhedronSubmergedVolumeCalculator) void {
+        c.zjoltPolyhedronSubmergedVolumeCalculatorDestroy(self.handle);
+    }
+
+    /// True once every point sits above `surface` -- the submerged volume
+    /// is zero without adding any faces.
+    pub fn areAllAbove(self: PolyhedronSubmergedVolumeCalculator) bool {
+        return c.zjoltPolyhedronSubmergedVolumeCalculatorAreAllAbove(self.handle);
+    }
+
+    /// True once every point sits below `surface` -- the submerged volume
+    /// is the whole polyhedron's.
+    pub fn areAllBelow(self: PolyhedronSubmergedVolumeCalculator) bool {
+        return c.zjoltPolyhedronSubmergedVolumeCalculatorAreAllBelow(self.handle);
+    }
+
+    /// Index into `points` (as given to `init`) of the point deepest below
+    /// `surface`. `addFace` refuses a face that uses it.
+    pub fn referencePointIdx(self: PolyhedronSubmergedVolumeCalculator) u32 {
+        return c.zjoltPolyhedronSubmergedVolumeCalculatorGetReferencePointIdx(self.handle);
+    }
+
+    /// Accumulates one triangular face, wound counter-clockwise, naming
+    /// indices into `points` (as given to `init`). `error.InvalidArgument`
+    /// for an out-of-range index or one equal to `referencePointIdx` --
+    /// skip that face instead, its contribution is always zero.
+    pub fn addFace(
+        self: PolyhedronSubmergedVolumeCalculator,
+        idx1: u32,
+        idx2: u32,
+        idx3: u32,
+    ) err.Error!void {
+        try err.check(c.zjoltPolyhedronSubmergedVolumeCalculatorAddFace(
+            self.handle,
+            idx1,
+            idx2,
+            idx3,
+        ));
+    }
+
+    /// The accumulated submerged volume and its centre, after every face
+    /// has been added.
+    pub fn result(self: PolyhedronSubmergedVolumeCalculator) struct {
+        submerged_volume: f32,
+        center_of_buoyancy: math.Vec3,
+    } {
+        var submerged_volume: f32 = undefined;
+        var center_of_buoyancy: math.Vec3 = undefined;
+        c.zjoltPolyhedronSubmergedVolumeCalculatorGetResult(
+            self.handle,
+            &submerged_volume,
+            &center_of_buoyancy,
+        );
+        return .{
+            .submerged_volume = submerged_volume,
+            .center_of_buoyancy = center_of_buoyancy,
+        };
+    }
+};
+
+//=============================================================================
+// SIMD batch helpers Jolt's own compound and tree traversal build on
+//
+// Pure value math over a fixed 4-wide batch -- ports of
+// Jolt/Physics/Collision/SortReverseAndStore.h, needing no shape or Jolt
+// object to call.
+//=============================================================================
+
+/// Sorts `values` descending and keeps the entries below `max_value`,
+/// permuting `identifiers` the same way -- `JPH::SortReverseAndStore` for a
+/// 4-wide batch. `out_values` holds the kept entries at `[0, count)`, high
+/// to low; trailing entries of both `out_values` and `identifiers` are
+/// zeroed, not meaningful. Returns `count`.
+pub fn sortReverseAndStore(
+    in_values: [4]f32,
+    max_value: f32,
+    identifiers: *[4]u32,
+    out_values: *[4]f32,
+) usize {
+    var values = in_values;
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        var j: usize = 0;
+        while (j < 3 - i) : (j += 1) {
+            if (values[j] < values[j + 1]) {
+                std.mem.swap(f32, &values[j], &values[j + 1]);
+                std.mem.swap(u32, &identifiers[j], &identifiers[j + 1]);
+            }
+        }
+    }
+
+    // Sorted descending, so the entries below `max_value` form a suffix:
+    // count the trailing run rather than a full scan.
+    var count: usize = 0;
+    while (count < 4 and values[3 - count] < max_value) : (count += 1) {}
+
+    var shifted_values: [4]f32 = .{ 0, 0, 0, 0 };
+    var shifted_ids: [4]u32 = .{ 0, 0, 0, 0 };
+    var k: usize = 0;
+    while (k < count) : (k += 1) {
+        shifted_values[k] = values[k + 4 - count];
+        shifted_ids[k] = identifiers[k + 4 - count];
+    }
+    out_values.* = shifted_values;
+    identifiers.* = shifted_ids;
+    return count;
+}
+
+/// Shifts `identifiers` so the ones whose flag in `mask` is true come
+/// first, in their original relative order -- `JPH::CountAndSortTrues` for
+/// a 4-wide batch. Trailing entries past the returned count are
+/// unspecified. Returns how many were true.
+pub fn countAndSortTrues(mask: [4]bool, identifiers: *[4]u32) usize {
+    var shifted: [4]u32 = .{ 0, 0, 0, 0 };
+    var count: usize = 0;
+    for (mask, 0..) |m, idx| {
+        if (m) {
+            shifted[count] = identifiers[idx];
+            count += 1;
+        }
+    }
+    identifiers.* = shifted;
+    return count;
+}
 
 /// One `Shape.triangleWalk` in progress. `shape` must outlive it, and it
 /// must not be moved or reused for a second walk once started.
@@ -1116,12 +1633,10 @@ pub const TriangleWalk = struct {
 
     /// Continues the walk into `out_vertices` (three consecutive vertices
     /// per triangle) and, if not null, `out_materials` (one per triangle,
-    /// borrowed from `shape`). Both must hold at least
-    /// `out_vertices.len / 3` triangles' worth — `max_triangles` is taken
-    /// from `out_vertices.len / 3`, and it must be at least
-    /// `min_triangles_requested`. Returns the vertices actually written; an
-    /// empty result means the walk is over, not "call again with a bigger
-    /// buffer".
+    /// borrowed from `shape`). `max_triangles` comes from
+    /// `out_vertices.len / 3`, which must be at least
+    /// `min_triangles_requested`. An empty result means the walk is over,
+    /// not "call again with a bigger buffer".
     pub fn next(
         self: *TriangleWalk,
         out_vertices: []math.Vec3,
@@ -1162,38 +1677,18 @@ pub const TriangleWalk = struct {
     }
 };
 
-/// A compound whose children can be added, removed and moved after the fact.
+/// A compound whose children can be added, removed, and moved after the fact
+/// — a MUTABLE handle, cheaper to edit but costlier to query than static.
 ///
-/// A separate type rather than more methods on `Shape`, because it is the one
-/// shape that is not immutable and the distinction is worth carrying in the
-/// type. It holds a MUTABLE handle, which is what lets `Shape` keep a const
-/// one and lets neither side need a cast: `asShape` widens, and nothing
-/// narrows.
-///
-/// Cheaper to modify and more expensive to query than a static compound; reach
-/// for it when the shape genuinely changes, not merely because it is built at
-/// run time.
-///
-/// **Every mutating method below carries three obligations.** They are not
-/// thread safe against a query, a step, or each other — hold `lockWrite` on
-/// any body using the shape, or better, follow Jolt's own advice and build a
-/// fresh compound to swap in with `setShape`, so a query already running keeps
-/// the old one alive through its own reference. They invalidate every
-/// sub-shape id into the shape, because indices shift. And each body using the
-/// shape needs `BodyInterface.notifyShapeChanged` afterwards, or the broad
-/// phase and the contact cache go on describing the old geometry.
+/// Every mutating method: NOT thread safe against a query, step, or each
+/// other (hold `lockWrite`, or swap in a fresh compound via `setShape`);
+/// invalidates every sub-shape id; needs `notifyShapeChanged` after.
 pub const MutableCompound = struct {
     handle: *c.Shape,
 
-    /// AT LEAST TWO CHILDREN, which is upstream's constraint rather than a
-    /// preference. A compound sizes the index field of its sub-shape ids as
-    /// `32 - CountLeadingZeros(count - 1)`; Jolt's `CountLeadingZeros` guards
-    /// a zero argument on x86 but not on ARM, where it is a bare
-    /// `__builtin_clz` and zero is undefined. One child makes that argument
-    /// zero, and none underflows the subtraction before it. A static compound
-    /// never runs into this because Jolt simplifies one child away; this one
-    /// does not simplify, so the floor is enforced at the boundary. See
-    /// UPSTREAM.md.
+    /// AT LEAST TWO CHILDREN, enforced rather than a preference — one child
+    /// hits undefined behaviour in Jolt's sub-shape id sizing on ARM
+    /// (`CountLeadingZeros(0)`). See UPSTREAM.md.
     pub fn init(children: []const CompoundChild) err.Error!MutableCompound {
         var handle: *c.Shape = undefined;
         try err.check(c.zjoltShapeCreateMutableCompound(
@@ -1248,6 +1743,27 @@ pub const MutableCompound = struct {
         try err.check(c.zjoltShapeMutableCompoundMoveChild(
             self.handle,
             index,
+            &position,
+            &rotation,
+        ));
+    }
+
+    /// Moves, reorients, AND swaps the shape occupying `index` for
+    /// `new_shape` — the one thing `moveChild` cannot do. Prefer this over
+    /// `removeChild` + `addChild`, which shifts every later child's
+    /// sub-shape id; this does not. `new_shape` is borrowed for the call;
+    /// the compound takes its own reference.
+    pub fn replaceChild(
+        self: MutableCompound,
+        index: u32,
+        new_shape: Shape,
+        position: math.Vec3,
+        rotation: math.Quat,
+    ) err.Error!void {
+        try err.check(c.zjoltShapeMutableCompoundReplaceChild(
+            self.handle,
+            index,
+            new_shape.handle,
             &position,
             &rotation,
         ));

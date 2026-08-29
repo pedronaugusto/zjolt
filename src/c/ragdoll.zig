@@ -28,6 +28,8 @@ pub const Skeleton = opaque {};
 
 pub const SkeletonPose = opaque {};
 
+pub const SkeletalAnimation = opaque {};
+
 pub const RagdollSettings = opaque {};
 
 pub const Ragdoll = opaque {};
@@ -94,6 +96,44 @@ pub extern fn zjoltSkeletonPoseCalculateJointMatrices(pose: *SkeletonPose) Resul
 
 pub extern fn zjoltSkeletonPoseCalculateJointStates(pose: *SkeletonPose) Result;
 
+pub extern fn zjoltSkeletalAnimationCreate(out: **SkeletalAnimation) Result;
+
+pub extern fn zjoltSkeletalAnimationAddRef(animation: *const SkeletalAnimation) void;
+
+pub extern fn zjoltSkeletalAnimationRelease(animation: *const SkeletalAnimation) void;
+
+pub extern fn zjoltSkeletalAnimationGetRefCount(animation: *const SkeletalAnimation) u32;
+
+pub extern fn zjoltSkeletalAnimationAddAnimatedJoint(animation: *SkeletalAnimation, name: ?[*:0]const u8, out_index: *u32) Result;
+
+pub extern fn zjoltSkeletalAnimationGetAnimatedJointCount(animation: *const SkeletalAnimation) u32;
+
+pub extern fn zjoltSkeletalAnimationGetAnimatedJointName(animation: *const SkeletalAnimation, joint_index: u32) [*:0]const u8;
+
+pub extern fn zjoltSkeletalAnimationAddKeyframe(animation: *SkeletalAnimation, joint_index: u32, time: f32, rotation: *const Quat, translation: *const Vec3) Result;
+
+pub extern fn zjoltSkeletalAnimationGetKeyframeCount(animation: *const SkeletalAnimation, joint_index: u32) u32;
+
+pub extern fn zjoltSkeletalAnimationGetKeyframe(animation: *const SkeletalAnimation, joint_index: u32, keyframe_index: u32, out_time: *f32, out_rotation: *Quat, out_translation: *Vec3) Result;
+
+pub extern fn zjoltSkeletalAnimationGetDuration(animation: *const SkeletalAnimation) f32;
+
+pub extern fn zjoltSkeletalAnimationScaleJoints(animation: *SkeletalAnimation, scale: f32) void;
+
+pub extern fn zjoltSkeletalAnimationSetIsLooping(animation: *SkeletalAnimation, is_looping: bool) void;
+
+pub extern fn zjoltSkeletalAnimationIsLooping(animation: *const SkeletalAnimation) bool;
+
+pub extern fn zjoltSkeletalAnimationSample(animation: *const SkeletalAnimation, time: f32, pose: *SkeletonPose) Result;
+
+pub extern fn zjoltSkeletalAnimationSaveBinaryState(animation: *const SkeletalAnimation, stream: *const core.Stream) Result;
+
+pub extern fn zjoltSkeletalAnimationRestoreBinaryState(stream: *const core.Stream, out: **SkeletalAnimation) Result;
+
+pub extern fn zjoltSkeletalAnimationJointStateFromMatrix(matrix: *const core.Mat44, out_rotation: *Quat, out_translation: *Vec3) void;
+
+pub extern fn zjoltSkeletalAnimationJointStateToMatrix(rotation: *const Quat, translation: *const Vec3, out: *core.Mat44) void;
+
 pub const SkeletonMapper = opaque {};
 
 pub const SkeletonMapperCanMapJointFn = *const fn (user: ?*anyopaque, skeleton1: *const Skeleton, index1: u32, skeleton2: *const Skeleton, index2: u32) callconv(.c) bool;
@@ -111,6 +151,23 @@ pub extern fn zjoltSkeletonMapperInitialize(mapper: *SkeletonMapper, neutral1: *
 pub extern fn zjoltSkeletonMapperGetMappingCount(mapper: *const SkeletonMapper) u32;
 
 pub extern fn zjoltSkeletonMapperGetMappedJointIndex(mapper: *const SkeletonMapper, joint1_index: u32) i32;
+
+pub extern fn zjoltSkeletonMapperGetChainCount(mapper: *const SkeletonMapper) u32;
+
+pub extern fn zjoltSkeletonMapperGetChainJointCounts(mapper: *const SkeletonMapper, chain_index: u32, out_count1: *u32, out_count2: *u32) void;
+
+pub extern fn zjoltSkeletonMapperGetChainJointIndex1(mapper: *const SkeletonMapper, chain_index: u32, index: u32) i32;
+
+pub extern fn zjoltSkeletonMapperGetChainJointIndex2(mapper: *const SkeletonMapper, chain_index: u32, index: u32) i32;
+
+pub extern fn zjoltSkeletonMapperGetUnmappedCount(mapper: *const SkeletonMapper) u32;
+
+pub const SkeletonMapperUnmapped = extern struct {
+    joint_index: i32,
+    parent_joint_index: i32,
+};
+
+pub extern fn zjoltSkeletonMapperGetUnmapped(mapper: *const SkeletonMapper, index: u32, out: *SkeletonMapperUnmapped) Result;
 
 pub extern fn zjoltSkeletonMapperLockTranslations(mapper: *SkeletonMapper, neutral2: *const SkeletonPose, locked: [*]const bool, count: u32) Result;
 
@@ -130,6 +187,10 @@ pub extern fn zjoltRagdollSettingsRelease(settings: *const RagdollSettings) void
 
 pub extern fn zjoltRagdollSettingsGetRefCount(settings: *const RagdollSettings) u32;
 
+pub extern fn zjoltRagdollSettingsSaveObjectStream(settings: *const RagdollSettings, format: core.ObjectStreamFormat, stream: *const core.Stream) Result;
+
+pub extern fn zjoltRagdollSettingsRestoreObjectStream(stream: *const core.Stream, out: **RagdollSettings) Result;
+
 pub extern fn zjoltRagdollSettingsBuild(settings: *RagdollSettings, skeleton: *const Skeleton, parts: [*]const RagdollPartDesc, part_count: u32) Result;
 
 pub extern fn zjoltRagdollSettingsGetSkeleton(settings: *const RagdollSettings) ?*const Skeleton;
@@ -141,6 +202,21 @@ pub extern fn zjoltRagdollSettingsStabilize(settings: *RagdollSettings) bool;
 pub extern fn zjoltRagdollSettingsDisableParentChildCollisions(settings: *RagdollSettings) void;
 
 pub extern fn zjoltRagdollSettingsCalculateBodyIndexToConstraintIndex(settings: *RagdollSettings) void;
+
+pub extern fn zjoltRagdollSettingsGetConstraintIndexForBodyIndex(settings: *const RagdollSettings, body_index: u32) i32;
+
+pub extern fn zjoltRagdollSettingsGetBodyIndexToConstraintIndex(settings: *const RagdollSettings, out_indices: ?[*]i32, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltRagdollSettingsCalculateConstraintIndexToBodyIdxPair(settings: *RagdollSettings) void;
+
+pub const RagdollBodyIndexPair = extern struct {
+    body_index1: i32,
+    body_index2: i32,
+};
+
+pub extern fn zjoltRagdollSettingsGetBodyIndicesForConstraintIndex(settings: *const RagdollSettings, constraint_index: u32, out: *RagdollBodyIndexPair) Result;
+
+pub extern fn zjoltRagdollSettingsGetConstraintIndexToBodyIdxPair(settings: *const RagdollSettings, out_pairs: ?[*]RagdollBodyIndexPair, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltRagdollSettingsCreateRagdoll(settings: *const RagdollSettings, system: *PhysicsSystem, collision_group: u32, user_data: u64, out: **Ragdoll) Result;
 

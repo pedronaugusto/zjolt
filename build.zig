@@ -12,8 +12,10 @@ const std = @import("std");
 ///   * `Compute/{DX12,VK,MTL}` — GPU compute backends, which need the
 ///     Direct3D 12, Vulkan or Metal SDKs. A host that has one supplies it
 ///     through `ZJoltComputeInterface` instead; see `ffi/zjolt_hair.h`.
-///   * `ObjectStream/*.cpp` — optional upstream (`ENABLE_OBJECT_STREAM`), and
-///     unused here: shape serialisation goes through StreamIn/StreamOut.
+///
+/// `ObjectStream/*.cpp` is compiled separately, under `-Dobject_stream`
+/// (`object_stream_sources`, below) — see the option's own comment for why
+/// it is not unconditional the way the list above is.
 ///
 /// Vehicles, ragdolls and soft bodies ARE compiled. They are part of the
 /// library and `RegisterTypes.cpp` refers to them; they are out of scope for
@@ -170,6 +172,23 @@ const cpu_compute_sources = [_][]const u8{
     "libs/JoltPhysics/Jolt/Shaders/TestComputeWrapper.cpp",
 };
 
+/// Jolt's reflective object stream — the human-readable, diffable scene
+/// format `Jolt/Jolt.cmake` gates on `ENABLE_OBJECT_STREAM`. Eight of the
+/// directory's nine translation units; the ninth, `SerializableObject.cpp`,
+/// is already unconditional in `jolt_sources` above, the same way the
+/// `cpu_compute_sources` translation units compile to nothing without
+/// `JPH_USE_CPU_COMPUTE` rather than needing to be listed twice.
+const object_stream_sources = [_][]const u8{
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStream.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStreamBinaryIn.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStreamBinaryOut.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStreamIn.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStreamOut.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStreamTextIn.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/ObjectStreamTextOut.cpp",
+    "libs/JoltPhysics/Jolt/ObjectStream/TypeDeclarations.cpp",
+};
+
 /// The public headers, installed for consumers. `ffi/zjolt.h` is the umbrella
 /// that includes the rest; `ffi/zjolt_internal.h` is deliberately absent,
 /// being implementation-private.
@@ -177,6 +196,7 @@ const public_headers = [_][]const u8{
     "ffi/zjolt.h",
     "ffi/zjolt_core.h",
     "ffi/zjolt_shape.h",
+    "ffi/zjolt_geometry.h",
     "ffi/zjolt_material.h",
     "ffi/zjolt_system.h",
     "ffi/zjolt_body.h",
@@ -195,6 +215,10 @@ const public_headers = [_][]const u8{
     "ffi/zjolt_transformed.h",
     "ffi/zjolt_scene.h",
     "ffi/zjolt_math.h",
+    "ffi/zjolt_reflect.h",
+    "ffi/zjolt_collision.h",
+    "ffi/zjolt_customshape.h",
+    "ffi/zjolt_tree.h",
 };
 
 /// The zjolt C boundary. One translation unit per concern — deliberately not a
@@ -202,10 +226,13 @@ const public_headers = [_][]const u8{
 const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_core.cpp",
     "ffi/zjolt_shape.cpp",
+    "ffi/zjolt_geometry.cpp",
     "ffi/zjolt_material.cpp",
     "ffi/zjolt_system.cpp",
     "ffi/zjolt_body.cpp",
+    "ffi/zjolt_collision.cpp",
     "ffi/zjolt_constraint.cpp",
+    "ffi/zjolt_customshape.cpp",
     "ffi/zjolt_query.cpp",
     "ffi/zjolt_character.cpp",
     "ffi/zjolt_broadphase.cpp",
@@ -221,6 +248,8 @@ const zjolt_ffi_sources = [_][]const u8{
     "ffi/zjolt_transformed.cpp",
     "ffi/zjolt_scene.cpp",
     "ffi/zjolt_math.cpp",
+    "ffi/zjolt_reflect.cpp",
+    "ffi/zjolt_tree.cpp",
 };
 
 pub fn build(b: *std.Build) void {
@@ -287,6 +316,20 @@ pub fn build(b: *std.Build) void {
             "debug_renderer",
             "Build Jolt's debug-draw geometry collection (JPH_DEBUG_RENDERER)",
         ) orelse false,
+        // Off by default, same reasoning as debug_renderer: JPH_PROFILE_ENABLED
+        // instruments every JPH_PROFILE scope Jolt's own source places, which
+        // is per-step overhead most consumers never asked for.
+        //
+        // The declared surface in ffi/zjolt_reflect.h does not move with this
+        // flag — every zjoltProfiler*/zjoltProfileThread*/zjoltProfileMeasurement*
+        // entry point exists either way and reports ZJOLT_RESULT_UNSUPPORTED
+        // when it is off — so, like debug_renderer, this is not folded into
+        // ZJOLT_CONFIG_ID.
+        .profile = b.option(
+            bool,
+            "profile",
+            "Build Jolt's profiler (JPH_PROFILE_ENABLED)",
+        ) orelse false,
         // On by default, and it costs a graphics SDK exactly nothing: this is
         // Jolt's own CPU implementation of its compute interface, which is what
         // the hair solver runs on when the host has no device to lend. Turning
@@ -298,6 +341,76 @@ pub fn build(b: *std.Build) void {
             "cpu_compute",
             "Compile Jolt's CPU compute backend, which is what runs hair without a GPU",
         ) orelse true,
+        // On by default, like cpu_compute: it costs no SDK, and turning it off
+        // does not remove a declaration — every zjolt*ObjectStream* entry
+        // point still exists and returns ZJOLT_RESULT_UNSUPPORTED — it removes
+        // eight translation units most consumers never call into.
+        //
+        // Not folded into ZJOLT_CONFIG_ID, the way debug_renderer is not:
+        // JPH_OBJECT_STREAM changes two things outside its own directory
+        // (Core/RTTI.h's RTTI::mAttributes, and a friend declaration in
+        // Geometry/Plane.h), and neither is a type this ABI passes across the
+        // boundary — RTTI never crosses it at all, and a friend declaration
+        // changes no class's size. So there is nothing here a consumer
+        // compiled against a different setting could misread.
+        .object_stream = b.option(
+            bool,
+            "object_stream",
+            "Compile Jolt's reflective object stream (JPH_OBJECT_STREAM), for its text and binary editor format",
+        ) orelse true,
+        // Off by default, like debug_renderer: the tracking itself costs
+        // per-step work Jolt does not do otherwise, so a consumer opts in.
+        //
+        // The declared C surface does not move with this flag either --
+        // zjoltBodyGetSimulationStatsLocked and
+        // zjoltPhysicsSystemReportBroadphaseStats both exist either way and
+        // report ZJOLT_RESULT_UNSUPPORTED when it is off -- so, like
+        // debug_renderer, this is not folded into ZJOLT_CONFIG_ID. It changes
+        // JPH::MotionProperties's own C++ layout (adds a SimulationStats
+        // member) but that type never crosses the ABI raw -- every access
+        // goes through a body lock and a projection into ZJoltSimulationStats
+        // -- so a consumer compiled against a different setting can never
+        // misread anything.
+        .track_simulation_stats = b.option(
+            bool,
+            "track_simulation_stats",
+            "Track Jolt's own per-body simulation stats (JPH_TRACK_SIMULATION_STATS)",
+        ) orelse false,
+        // Same shape as track_simulation_stats, for the broad phase's own
+        // query stats instead. Adds a virtual GetDescription() to
+        // ObjectLayerFilter and a ReportStats() to BroadPhase/
+        // BroadPhaseQuadTree -- again nothing a consumer ever instantiates or
+        // sizes across the ABI, since a host never subclasses either type
+        // directly (@see BINDING.md, Callbacks: no mirrored C++ vtables).
+        // Also turns on JPH_PROFILE_ENABLED internally -- see
+        // applyBuildMacros for why.
+        .track_broadphase_stats = b.option(
+            bool,
+            "track_broadphase_stats",
+            "Track Jolt's own broad-phase query stats (JPH_TRACK_BROADPHASE_STATS)",
+        ) orelse false,
+        // Off by default: bridging every JPH_PROFILE scope out to a
+        // host-supplied hook costs a call pair per scope, which most
+        // consumers do not want paid unasked.
+        //
+        // The declared surface in ffi/zjolt_core.h does not move with this
+        // flag — zjoltExternalProfilerSetHooks exists either way and
+        // reports ZJOLT_RESULT_UNSUPPORTED when it is off — so, like
+        // profile, this is not folded into ZJOLT_CONFIG_ID. JPH_EXTERNAL_PROFILE
+        // puts Jolt/Core/Profiler.h into a THIRD state, mutually exclusive
+        // with the plain and JPH_TRACK_BROADPHASE_STATS-driven forms of
+        // JPH_PROFILE_ENABLED — see applyBuildMacros for how the three stay
+        // exclusive.
+        .external_profile = b.option(
+            bool,
+            "external_profile",
+            "Bridge Jolt's profiling scopes to a host-supplied profiler (JPH_EXTERNAL_PROFILE)",
+        ) orelse false,
+        .track_narrowphase_stats = b.option(
+            bool,
+            "track_narrowphase_stats",
+            "Track Jolt's own per-shape-pair narrow-phase timing stats (JPH_TRACK_NARROWPHASE_STATS)",
+        ) orelse false,
     };
 
     if (options.object_layer_bits != 16 and options.object_layer_bits != 32) {
@@ -358,13 +471,36 @@ pub fn build(b: *std.Build) void {
     else
         &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti" };
 
+    // Upstream defect (@see UPSTREAM.md): under JPH_TRACK_BROADPHASE_STATS,
+    // QuadTree.h names UnorderedMap<String, Stat> without ever including its
+    // definition, so every translation unit that pulls the header in fails
+    // to instantiate it. Forced in rather than patched into the vendored,
+    // byte-identical copy; Jolt.h first, since every Jolt header assumes it
+    // already ran.
+    const jolt_cxx_flags: []const []const u8 = if (options.track_broadphase_stats)
+        std.mem.concat(b.allocator, []const u8, &.{
+            cxx_flags,
+            &.{
+                "-include", "libs/JoltPhysics/Jolt/Jolt.h",
+                "-include", "libs/JoltPhysics/Jolt/Core/UnorderedMap.h",
+            },
+        }) catch @panic("OOM")
+    else
+        cxx_flags;
+
     lib.root_module.addCSourceFiles(.{
         .files = &jolt_sources,
-        .flags = cxx_flags,
+        .flags = jolt_cxx_flags,
     });
     if (options.cpu_compute) {
         lib.root_module.addCSourceFiles(.{
             .files = &cpu_compute_sources,
+            .flags = cxx_flags,
+        });
+    }
+    if (options.object_stream) {
+        lib.root_module.addCSourceFiles(.{
+            .files = &object_stream_sources,
             .flags = cxx_flags,
         });
     }
@@ -506,6 +642,14 @@ fn applyBuildMacros(module: *std.Build.Module, options: anytype) void {
     if (options.debug_renderer) {
         module.addCMacro("JPH_DEBUG_RENDERER", "");
     }
+    // Guarded against track_broadphase_stats and external_profile, which each
+    // already put Jolt/Core/Profiler.h into one of its two other mutually
+    // exclusive states (see external_profile's own comment above) — so no
+    // combination of the three options ever passes -DJPH_PROFILE_ENABLED
+    // alongside -DJPH_EXTERNAL_PROFILE.
+    if (options.profile and !options.track_broadphase_stats and !options.external_profile) {
+        module.addCMacro("JPH_PROFILE_ENABLED", "");
+    }
     // Unlike the four above, this one changes no layout and is not folded into
     // ZJOLT_CONFIG_ID — `ffi/zjolt.h` never reads it, because the declared
     // surface does not move with the build. It gates whether Jolt's CPU compute
@@ -514,5 +658,42 @@ fn applyBuildMacros(module: *std.Build.Module, options: anytype) void {
     // that there stays exactly one place where zjolt's macros are decided.
     if (options.cpu_compute) {
         module.addCMacro("JPH_USE_CPU_COMPUTE", "");
+    }
+    // Also unlike the four ABI-affecting ones above: see the option's own
+    // comment for why this is safe to leave out of ZJOLT_CONFIG_ID. Gates
+    // whether the object_stream_sources translation units have any contents,
+    // the same way JPH_USE_CPU_COMPUTE gates cpu_compute_sources.
+    if (options.object_stream) {
+        module.addCMacro("JPH_OBJECT_STREAM", "");
+    }
+    // Neither of these is folded into ZJOLT_CONFIG_ID -- see the options'
+    // own comments in the struct literal above for why.
+    if (options.track_simulation_stats) {
+        module.addCMacro("JPH_TRACK_SIMULATION_STATS", "");
+    }
+    if (options.track_broadphase_stats) {
+        module.addCMacro("JPH_TRACK_BROADPHASE_STATS", "");
+        // Second upstream defect this option works around:
+        // QuadTree::ReportStats (QuadTree.cpp) reads mName unconditionally,
+        // but QuadTree.h only declares that field under
+        // JPH_EXTERNAL_PROFILE/JPH_PROFILE_ENABLED -- an unrelated macro
+        // JPH_TRACK_BROADPHASE_STATS's own code never checks for. Applied
+        // module-wide, like the macro above, so every translation unit
+        // (Jolt's and this ABI's) agrees -- Jolt's own RegisterTypesInternal
+        // aborts on a caller/library mismatch otherwise. Never observable
+        // across the C ABI: no Jolt profiler type crosses it.
+        //
+        // Skipped when external_profile already defines JPH_EXTERNAL_PROFILE,
+        // which satisfies the same QuadTree.h field guard on its own and
+        // must stay the only Profiler.h-selecting macro in that combination.
+        if (!options.external_profile) {
+            module.addCMacro("JPH_PROFILE_ENABLED", "");
+        }
+    }
+    if (options.external_profile) {
+        module.addCMacro("JPH_EXTERNAL_PROFILE", "");
+    }
+    if (options.track_narrowphase_stats) {
+        module.addCMacro("JPH_TRACK_NARROWPHASE_STATS", "");
     }
 }

@@ -11,6 +11,8 @@
 
 const std = @import("std");
 const zjolt = @import("zjolt.zig");
+const state_mod = @import("state.zig");
+const stream_mod = @import("stream.zig");
 const fixture = @import("integration_test.zig");
 
 const Layers = fixture.Layers;
@@ -43,11 +45,11 @@ test "save, step further, then restore reproduces the exact saved positions and 
     }
 
     // Mid-fall/bounce, not yet settled — there is real position and velocity
-    // to lose if the restore below turns out to do nothing.
+    // to lose if the restore below does nothing.
     try world.stepFor(0.8);
 
     const state = world.system.state();
-    const saved = try state.saveAlloc(std.testing.allocator, .all);
+    const saved = try state.saveAlloc(std.testing.allocator, .{ .state = .all });
     defer std.testing.allocator.free(saved);
 
     const Sample = struct { pos: zjolt.RVec3, vel: zjolt.Vec3 };
@@ -67,7 +69,7 @@ test "save, step further, then restore reproduces the exact saved positions and 
     // restoring a state indistinguishable from where it already was.
     try std.testing.expect(moved);
 
-    try state.restore(saved);
+    try state.restore(saved, .{});
 
     for (balls, 0..) |id, i| {
         const pos = bodies.getPosition(id);
@@ -110,14 +112,14 @@ test "restoring into a world whose body set changed is refused, not half-applied
     try world.stepFor(0.5);
 
     const state = world.system.state();
-    const saved = try state.saveAlloc(std.testing.allocator, .all);
+    const saved = try state.saveAlloc(std.testing.allocator, .{ .state = .all });
     defer std.testing.allocator.free(saved);
 
     // The set of bodies the save was taken from no longer exists.
     bodies.destroy(doomed);
 
     const before = bodies.getPosition(keeper);
-    try std.testing.expectError(zjolt.Error.BadFormat, state.restore(saved));
+    try std.testing.expectError(zjolt.Error.BadFormat, state.restore(saved, .{}));
     try std.testing.expect(zjolt.lastError().len > 0);
 
     // Refused, not half-applied: the survivor was not nudged even part way
@@ -135,26 +137,21 @@ test "restoring into a world whose body set changed is refused, not half-applied
 
     // And a save taken now, of the world as it actually is, restores fine —
     // the refusal above did not wound the system for future saves either.
-    const now = try state.saveAlloc(std.testing.allocator, .all);
+    const now = try state.saveAlloc(std.testing.allocator, .{ .state = .all });
     defer std.testing.allocator.free(now);
-    try state.restore(now);
+    try state.restore(now, .{});
 }
 
 //=============================================================================
 // Why CONSTRAINTS is its own bit
 //=============================================================================
 
-/// A single-wheel vehicle constraint's own engine RPM is exactly the kind of
-/// state `ZJOLT_STATE_RECORDER_STATE_CONSTRAINTS` is for and `BODIES` is
-/// not: it belongs to the constraint, not to any body, so nothing about the
-/// wheel spinning up shows up in a body's position or velocity at all — a
+/// A single-wheel vehicle constraint's own engine RPM is exactly the kind
+/// of state `ZJOLT_STATE_RECORDER_STATE_CONSTRAINTS` is for and `BODIES`
+/// is not: it belongs to the constraint, not to any body, so nothing about
+/// the wheel spinning up shows up in a body's position or velocity — a
 /// save that leaves CONSTRAINTS out has no way to carry it, and a restore
-/// from that save cannot put it back. `ffi/zjolt_vehicle.h` needs nothing
-/// beyond `zjoltVehicleConstraintCreate` to make the engine step; see
-/// `vehicle_test.zig`'s module doc comment for why the chassis is created
-/// with `allow_sleeping = false` regardless (not load-bearing here, since
-/// this test never lets the body sit idle long enough to matter, but it is
-/// the standing rule for any vehicle body this suite drives).
+/// from that save cannot put it back. The chassis uses `allow_sleeping = false` per `vehicle_test.zig`'s standing rule for any vehicle body, though not load-bearing here.
 const VehicleConstraintRun = struct {
     const Result = struct {
         rpm_at_save: f32,
@@ -200,13 +197,13 @@ const VehicleConstraintRun = struct {
         try world.stepFor(0.5); // The engine has revved up some by here.
 
         const state = world.system.state();
-        const saved = try state.saveAlloc(std.testing.allocator, save_mask);
+        const saved = try state.saveAlloc(std.testing.allocator, .{ .state = save_mask });
         defer std.testing.allocator.free(saved);
         const rpm_at_save = vehicle.engineRpm();
 
         // Keep revving past the save point before restoring into it.
         try world.stepFor(0.5);
-        try state.restore(saved);
+        try state.restore(saved, .{});
 
         return .{ .rpm_at_save = rpm_at_save, .rpm_after_restore = vehicle.engineRpm() };
     }
@@ -231,4 +228,226 @@ test "excluding CONSTRAINTS from a save loses state BODIES never carried, and re
     try std.testing.expect(
         @abs(without_constraints.rpm_at_save - without_constraints.rpm_after_restore) > 50,
     );
+}
+
+//=============================================================================
+// Selective save and restore (ZJoltStateFilter)
+//=============================================================================
+
+test "a partial save filtered to one body restores only that body, leaving the other untouched" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.4, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const kept = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(-1, 5, 0),
+        .restitution = 0.6,
+    }, .activate);
+    const excluded = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(1, 5, 0),
+        .restitution = 0.6,
+    }, .activate);
+
+    try world.stepFor(0.8);
+
+    const state = world.system.state();
+
+    const Filter = struct {
+        keep: zjolt.BodyId,
+
+        pub fn shouldSaveBody(self: *@This(), body: zjolt.BodyId) bool {
+            return body == self.keep;
+        }
+    };
+    var filter_ctx = Filter{ .keep = kept };
+    const filter = state_mod.stateFilter(Filter, &filter_ctx);
+
+    const saved = try state.saveAlloc(std.testing.allocator, .{ .state = .all, .filter = &filter });
+    defer std.testing.allocator.free(saved);
+    const kept_at_save = bodies.getPosition(kept);
+
+    // Both bodies keep moving after the partial save was taken.
+    try world.stepFor(1.0);
+    const excluded_before_restore = bodies.getPosition(excluded);
+
+    try state.restore(saved, .{ .filter = null, .is_last_part = true });
+
+    // `kept` snapped back to where the (partial) save found it...
+    const kept_after = bodies.getPosition(kept);
+    try std.testing.expectApproxEqAbs(kept_at_save.y, kept_after.y, 1e-4);
+
+    // ...while `excluded` was never in the payload at all, so the restore
+    // left it exactly where it already was — not reset, not disturbed.
+    const excluded_after = bodies.getPosition(excluded);
+    try std.testing.expectEqual(excluded_before_restore.x, excluded_after.x);
+    try std.testing.expectEqual(excluded_before_restore.y, excluded_after.y);
+    try std.testing.expectEqual(excluded_before_restore.z, excluded_after.z);
+}
+
+test "a partial save is exempt from the body-set digest check a full save is not" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.4, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const kept = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+    const doomed = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(3, 5, 0),
+    }, .activate);
+
+    const Filter = struct {
+        keep: zjolt.BodyId,
+
+        pub fn shouldSaveBody(self: *@This(), body: zjolt.BodyId) bool {
+            return body == self.keep;
+        }
+    };
+    var filter_ctx = Filter{ .keep = kept };
+    const filter = state_mod.stateFilter(Filter, &filter_ctx);
+
+    const saved = try world.system.state().saveAlloc(std.testing.allocator, .{ .state = .all, .filter = &filter });
+    defer std.testing.allocator.free(saved);
+
+    // The body set changes after the save — ordinarily refused (see the test
+    // above this file's determinism section), but this save never claimed to
+    // cover the whole world in the first place.
+    bodies.destroy(doomed);
+
+    try world.system.state().restore(saved, .{ .filter = null, .is_last_part = true });
+}
+
+//=============================================================================
+// Host streams (ZJoltStream)
+//=============================================================================
+
+test "a state save through a host stream that cannot accept the bytes fails cleanly, not silently truncated" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.4, .{});
+    defer shape.release();
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    try world.stepFor(0.2);
+
+    // One byte cannot hold even the stream's own header, let alone a body's
+    // state. The writer reports the shortfall through `is_failed` rather than
+    // accepting a prefix of the bytes and calling it done — @see
+    // ZJoltStream.write's contract in zjolt_core.h.
+    var tiny: [1]u8 = undefined;
+    var writer: zjolt.StreamBufferWriter = .{ .buffer = &tiny };
+    try std.testing.expectError(
+        zjolt.Error.IoError,
+        world.system.state().saveStream(zjolt.hostStream(zjolt.StreamBufferWriter, &writer), .{}),
+    );
+
+    // Nothing silently truncated: the writer's own bookkeeping shows exactly
+    // why it failed, not a partial write mistaken for a complete one.
+    try std.testing.expect(writer.overflowed);
+}
+
+//=============================================================================
+// Locating a divergence (zjoltPhysicsSystemCompareState)
+//=============================================================================
+
+test "compareState reports no divergence for a state compared with itself, and finds one after a step" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.4, .{});
+    defer shape.release();
+
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    try world.stepFor(0.5);
+
+    const state = world.system.state();
+    const reference = try state.saveAlloc(std.testing.allocator, .{ .state = .all });
+    defer std.testing.allocator.free(reference);
+
+    const same = try state_mod.compareState(reference, reference);
+    try std.testing.expect(!same.diverged);
+    try std.testing.expectEqual(@as(usize, 0), same.offset);
+
+    try world.stepFor(0.5);
+    const after = try state.saveAlloc(std.testing.allocator, .{ .state = .all });
+    defer std.testing.allocator.free(after);
+
+    const different = try state_mod.compareState(reference, after);
+    try std.testing.expect(different.diverged);
+}
+
+//=============================================================================
+// One buffer, written then rewound for reading (RewindableBuffer)
+//=============================================================================
+
+test "a RewindableBuffer round-trips a save/restore through one buffer object, not a matching pair" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.4, .{});
+    defer shape.release();
+    const ball = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    try world.stepFor(0.5);
+
+    var buffer: [4096]u8 = undefined;
+    var recorder: stream_mod.RewindableBuffer = .{ .buffer = &buffer };
+    try world.system.state().saveStream(stream_mod.hostStream(stream_mod.RewindableBuffer, &recorder), .{});
+    const reference = world.system.bodies().getPosition(ball);
+
+    try world.stepFor(0.5);
+    try std.testing.expect(world.system.bodies().getPosition(ball).y != reference.y);
+
+    // Same object, same bytes, just pointed back at the start — not a
+    // second buffer built from `recorder`'s written slice.
+    recorder.rewind();
+    try world.system.state().restoreStream(stream_mod.hostStream(stream_mod.RewindableBuffer, &recorder), .{});
+
+    const restored = world.system.bodies().getPosition(ball);
+    try std.testing.expectApproxEqAbs(reference.x, restored.x, 1e-4);
+    try std.testing.expectApproxEqAbs(reference.y, restored.y, 1e-4);
+    try std.testing.expectApproxEqAbs(reference.z, restored.z, 1e-4);
 }

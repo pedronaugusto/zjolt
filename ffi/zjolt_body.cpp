@@ -8,15 +8,20 @@
 #include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Body/BodyLockMulti.h>
 
+#include <atomic>
+
 namespace {
 
-JPH::EActivation ToJoltActivation(ZJoltActivation activation) {
+// These take the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Every entry point below converts once, at the boundary,
+// before the value ever reaches here.
+JPH::EActivation ToJoltActivation(int32_t activation) {
   return activation == ZJOLT_ACTIVATION_DONT_ACTIVATE
              ? JPH::EActivation::DontActivate
              : JPH::EActivation::Activate;
 }
 
-JPH::EMotionType ToJoltMotionType(ZJoltMotionType type) {
+JPH::EMotionType ToJoltMotionType(int32_t type) {
   switch (type) {
     case ZJOLT_MOTION_TYPE_STATIC:
       return JPH::EMotionType::Static;
@@ -40,7 +45,7 @@ ZJoltMotionType ToCMotionType(JPH::EMotionType type) {
   return ZJOLT_MOTION_TYPE_DYNAMIC;
 }
 
-JPH::EMotionQuality ToJoltMotionQuality(ZJoltMotionQuality quality) {
+JPH::EMotionQuality ToJoltMotionQuality(int32_t quality) {
   return quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
              ? JPH::EMotionQuality::LinearCast
              : JPH::EMotionQuality::Discrete;
@@ -57,6 +62,23 @@ ZJoltBodyType ToCBodyType(JPH::EBodyType type) {
                                           : ZJOLT_BODY_TYPE_RIGID_BODY;
 }
 
+/// The reverse of zjoltShapeGetMassProperties's row-major unpacking
+/// (zjolt_shape.cpp): row r, column c of `mp.inertia` becomes Mat44 element
+/// (r, c). The fourth row and column stay zero except (3, 3), which Jolt's
+/// own MassProperties always carries as 1 (BodyCreationSettings.cpp:202,209).
+JPH::MassProperties ToJoltMassProperties(const ZJoltMassProperties &mp) {
+  JPH::MassProperties out;
+  out.mMass = mp.mass;
+  out.mInertia = JPH::Mat44::sZero();
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      out.mInertia(row, col) = mp.inertia[row * 3 + col];
+    }
+  }
+  out.mInertia(3, 3) = 1.0f;
+  return out;
+}
+
 JPH::BodyInterface *Interface(ZJoltPhysicsSystem *system) {
   if (system == nullptr) return nullptr;
   return &system->system.GetBodyInterface();
@@ -69,12 +91,10 @@ const JPH::BodyInterface *Interface(const ZJoltPhysicsSystem *system) {
 
 /// How many body ids one bulk read locks at a time.
 ///
-/// BodyLockMultiRead computes a single mutex mask for the whole batch, so the
-/// larger the chunk the fewer lock round trips. It is bounded because the ids
-/// are copied into a stack array first: ZJoltBodyId and JPH::BodyID are the
-/// same width, but reading one array as the other would be type punning, and
-/// a memcpy through a fixed buffer costs less than the class of bug that
-/// invites.
+/// BodyLockMultiRead computes a single mutex mask per batch, so a larger
+/// chunk means fewer lock round trips. Bounded because ids are copied into
+/// a stack array first: ZJoltBodyId and JPH::BodyID are the same width, but
+/// reading one as the other would be type punning a memcpy avoids.
 constexpr uint32_t kBulkChunk = 256;
 
 /// Walks `ids` in chunks, taking one multi-body read lock per chunk, and
@@ -163,23 +183,26 @@ namespace {
 
 ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
                                   JPH::BodyCreationSettings *out) {
-  if (desc.shape == nullptr) {
-    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
-                           "a body needs a shape");
-  }
-
   out->mPosition = zjolt::ToJoltR(desc.position);
   out->mRotation = zjolt::ToJoltRotation(desc.rotation);
   out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
   out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
+  // ConvertShapeSettings resolves whichever of mShapePtr/mShape SetShape
+  // just populated into one Shape, taking the same "no shape" branch for a
+  // NULL desc.shape that a pending ShapeSettings failing to build would.
   out->SetShape(zjolt::ToJolt(desc.shape));
+  if (!out->ConvertShapeSettings().IsValid()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "a body needs a shape");
+  }
   out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
-  out->mMotionType = ToJoltMotionType(desc.motion_type);
-  out->mMotionQuality = desc.motion_quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-                            ? JPH::EMotionQuality::LinearCast
-                            : JPH::EMotionQuality::Discrete;
+  out->mMotionType = ToJoltMotionType(zjolt::RawEnum(desc.motion_type));
+  out->mMotionQuality =
+      zjolt::RawEnum(desc.motion_quality) == ZJOLT_MOTION_QUALITY_LINEAR_CAST
+          ? JPH::EMotionQuality::LinearCast
+          : JPH::EMotionQuality::Discrete;
   out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
   out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
   out->mIsSensor = desc.is_sensor;
@@ -193,7 +216,8 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
   out->mMaxAngularVelocity = desc.max_angular_velocity;
   out->mGravityFactor = desc.gravity_factor;
 
-  if (desc.override_mass_properties == ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
+  if (zjolt::RawEnum(desc.override_mass_properties) ==
+      ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
     if (!(desc.mass > 0.0f)) {
       return zjolt::SetError(
           ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -271,9 +295,12 @@ ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                   const ZJoltBodyDesc *desc,
                                   ZJoltActivation activation,
                                   ZJoltBodyId *out) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   const ZJoltResult created = zjoltBodyCreate(system, desc, out);
   if (created != ZJOLT_RESULT_OK) return created;
-  Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(activation));
+  Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(raw_activation));
   return ZJOLT_RESULT_OK;
 }
 
@@ -282,9 +309,45 @@ ZJoltResult zjoltBodyCreateAndAddWithId(ZJoltPhysicsSystem *system,
                                         ZJoltBodyId id,
                                         ZJoltActivation activation,
                                         ZJoltBodyId *out) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   const ZJoltResult created = zjoltBodyCreateWithId(system, desc, id, out);
   if (created != ZJOLT_RESULT_OK) return created;
-  Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(activation));
+  Interface(system)->AddBody(zjolt::ToJolt(*out), ToJoltActivation(raw_activation));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyApplyBodyCreationSettings(ZJoltPhysicsSystem *system,
+                                               ZJoltBodyId body,
+                                               const ZJoltBodyDesc *desc) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system, desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::BodyCreationSettings settings;
+  const ZJoltResult built = BuildCreationSettings(*desc, &settings);
+  if (built != ZJOLT_RESULT_OK) return built;
+
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsInBroadPhase()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "body: still added to the system; remove it first");
+  }
+  if (settings.HasMassProperties() &&
+      jolt_body.GetMotionPropertiesUnchecked() == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "desc implies motion properties this body was created without: it "
+        "is STATIC with allow_dynamic_or_kinematic false");
+  }
+  jolt_body.ApplyBodyCreationSettings(settings, system->broad_phase_layers);
   return ZJOLT_RESULT_OK;
 }
 
@@ -298,9 +361,12 @@ void zjoltBodyDestroy(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
 
 void zjoltBodyAdd(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                   ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return;
-  iface->AddBody(zjolt::ToJolt(body), ToJoltActivation(activation));
+  iface->AddBody(zjolt::ToJolt(body), ToJoltActivation(raw_activation));
 }
 
 void zjoltBodyRemove(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
@@ -346,16 +412,24 @@ ZJoltBodyType zjoltBodyGetBodyType(const ZJoltPhysicsSystem *system,
   return ToCBodyType(iface->GetBodyType(zjolt::ToJolt(body)));
 }
 
+uint8_t zjoltBodyIdGetSequenceNumber(ZJoltBodyId id) {
+  return static_cast<uint8_t>(id >> JPH::BodyID::cSequenceNumberShift);
+}
+
 //===----------------------------------------------------------------------===//
 // Motion type and transform
 //===----------------------------------------------------------------------===//
 
 void zjoltBodySetMotionType(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                             ZJoltMotionType type, ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_type = zjolt::RawEnum(type);
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return;
-  iface->SetMotionType(zjolt::ToJolt(body), ToJoltMotionType(type),
-                       ToJoltActivation(activation));
+  iface->SetMotionType(zjolt::ToJolt(body), ToJoltMotionType(raw_type),
+                       ToJoltActivation(raw_activation));
 }
 
 ZJoltMotionType zjoltBodyGetMotionType(const ZJoltPhysicsSystem *system,
@@ -367,9 +441,12 @@ ZJoltMotionType zjoltBodyGetMotionType(const ZJoltPhysicsSystem *system,
 
 void zjoltBodySetMotionQuality(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                                ZJoltMotionQuality quality) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_quality = zjolt::RawEnum(quality);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return;
-  iface->SetMotionQuality(zjolt::ToJolt(body), ToJoltMotionQuality(quality));
+  iface->SetMotionQuality(zjolt::ToJolt(body), ToJoltMotionQuality(raw_quality));
 }
 
 ZJoltMotionQuality zjoltBodyGetMotionQuality(const ZJoltPhysicsSystem *system,
@@ -384,13 +461,16 @@ void zjoltBodySetPositionAndRotation(ZJoltPhysicsSystem *system,
                                      const ZJoltRVec3 *position,
                                      const ZJoltQuat *rotation,
                                      ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr || position == nullptr) return;
   const JPH::BodyID id = zjolt::ToJolt(body);
   const JPH::Quat orientation =
       rotation != nullptr ? zjolt::ToJoltRotation(*rotation) : iface->GetRotation(id);
   iface->SetPositionAndRotation(id, zjolt::ToJoltR(*position), orientation,
-                                ToJoltActivation(activation));
+                                ToJoltActivation(raw_activation));
 }
 
 void zjoltBodyGetPositionAndRotation(const ZJoltPhysicsSystem *system,
@@ -466,11 +546,306 @@ ZJoltResult zjoltBodyGetInverseInertia(const ZJoltPhysicsSystem *system,
   return ZJOLT_RESULT_OK;
 }
 
+//===----------------------------------------------------------------------===//
+// Mass and inertia
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltBodyGetLocalSpaceInverseInertia(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsDynamic()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "only a dynamic body has an inverse inertia; a static or kinematic "
+        "one is driven rather than accelerated");
+  }
+  zjolt::WriteMat44(out,
+                    jolt_body.GetMotionProperties()->GetLocalSpaceInverseInertia());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyGetInverseInertiaForRotation(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    const ZJoltMat44 *rotation, ZJoltMat44 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, rotation, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsDynamic()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "only a dynamic body has an inverse inertia; a static or kinematic "
+        "one is driven rather than accelerated");
+  }
+  zjolt::WriteMat44(out, jolt_body.GetMotionProperties()->GetInverseInertiaForRotation(
+                             zjolt::ToJolt(*rotation)));
+  return ZJOLT_RESULT_OK;
+}
+
+float zjoltBodyGetInverseMassUnchecked(const ZJoltPhysicsSystem *system,
+                                       ZJoltBodyId body) {
+  if (system == nullptr) return 0.0f;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return 0.0f;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return 0.0f;
+  return jolt_body.GetMotionProperties()->GetInverseMassUnchecked();
+}
+
+uint32_t zjoltBodyGetAllowedDOFs(const ZJoltPhysicsSystem *system,
+                                 ZJoltBodyId body) {
+  if (system == nullptr) return ZJOLT_ALLOWED_DOFS_ALL;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return ZJOLT_ALLOWED_DOFS_ALL;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return ZJOLT_ALLOWED_DOFS_ALL;
+  return static_cast<uint32_t>(jolt_body.GetMotionProperties()->GetAllowedDOFs());
+}
+
+bool zjoltBodyHasMotionProperties(const ZJoltPhysicsSystem *system,
+                                  ZJoltBodyId body) {
+  if (system == nullptr) return false;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return false;
+  return lock.GetBody().GetMotionPropertiesUnchecked() != nullptr;
+}
+
+ZJoltResult zjoltBodySetInverseMass(ZJoltPhysicsSystem *system,
+                                    ZJoltBodyId body, float inverse_mass) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return ZJOLT_RESULT_OK;
+  jolt_body.GetMotionProperties()->SetInverseMass(inverse_mass);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodySetInverseInertia(ZJoltPhysicsSystem *system,
+                                       ZJoltBodyId body,
+                                       const ZJoltVec3 *diagonal,
+                                       const ZJoltQuat *rotation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system, diagonal, rotation))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return ZJOLT_RESULT_OK;
+  jolt_body.GetMotionProperties()->SetInverseInertia(
+      zjolt::ToJolt(*diagonal), zjolt::ToJoltRotation(*rotation));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyScaleToMass(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                                 float mass) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!(mass > 0.0f)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "mass: must be positive");
+  }
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return ZJOLT_RESULT_OK;
+  JPH::MotionProperties *mp = jolt_body.GetMotionProperties();
+  if (!(mp->GetInverseMassUnchecked() > 0.0f)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "this body has no finite mass to scale -- every translation degree "
+        "of freedom is locked, or it is kinematic and was never given one");
+  }
+  mp->ScaleToMass(mass);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodySetMassProperties(ZJoltPhysicsSystem *system,
+                                       ZJoltBodyId body, uint32_t allowed_dofs,
+                                       const ZJoltMassProperties *mass_properties) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system, mass_properties)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (allowed_dofs == 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "allowed_dofs: a body with nothing allowed to move needs a STATIC "
+        "motion type, not an all-zero mask");
+  }
+  if ((allowed_dofs & 0b111u) != 0 && !(mass_properties->mass > 0.0f)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "mass_properties->mass: must be positive when allowed_dofs permits "
+        "any translation");
+  }
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return ZJOLT_RESULT_OK;
+  jolt_body.GetMotionProperties()->SetMassProperties(
+      static_cast<JPH::EAllowedDOFs>(allowed_dofs),
+      ToJoltMassProperties(*mass_properties));
+  return ZJOLT_RESULT_OK;
+}
+
+namespace {
+
+/// Which of MotionProperties' two DOF masks to apply.
+enum class DOFKind { kTranslation, kAngular };
+
+/// Shared by zjoltBodyMaskTranslationDOFs/MaskAngularDOFs: `v` unmasked on a
+/// NULL system, a stale id, or a STATIC body (no motion properties, meaning
+/// every DOF reads as allowed) -- the same default zjoltBodyGetAllowedDOFs
+/// answers in each of those cases.
+void MaskDOFs(const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+             const ZJoltVec3 *v, ZJoltVec3 *out, DOFKind kind) {
+  if (out == nullptr || v == nullptr) return;
+  *out = *v;
+  if (system == nullptr) return;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return;
+  const JPH::MotionProperties &mp = *jolt_body.GetMotionProperties();
+  const JPH::Vec3 in = zjolt::ToJolt(*v);
+  zjolt::WriteVec3(out, kind == DOFKind::kTranslation ? mp.LockTranslation(in)
+                                                      : mp.LockAngular(in));
+}
+
+}  // namespace
+
+void zjoltBodyMaskTranslationDOFs(const ZJoltPhysicsSystem *system,
+                                  ZJoltBodyId body, const ZJoltVec3 *v,
+                                  ZJoltVec3 *out) {
+  MaskDOFs(system, body, v, out, DOFKind::kTranslation);
+}
+
+void zjoltBodyMaskAngularDOFs(const ZJoltPhysicsSystem *system,
+                              ZJoltBodyId body, const ZJoltVec3 *v,
+                              ZJoltVec3 *out) {
+  MaskDOFs(system, body, v, out, DOFKind::kAngular);
+}
+
+ZJoltResult zjoltBodyClampLinearVelocity(ZJoltPhysicsSystem *system,
+                                         ZJoltBodyId body) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsStatic()) jolt_body.GetMotionProperties()->ClampLinearVelocity();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyClampAngularVelocity(ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsStatic()) jolt_body.GetMotionProperties()->ClampAngularVelocity();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyMultiplyWorldSpaceInverseInertiaByVector(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltVec3 *v,
+    ZJoltVec3 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, v, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsDynamic()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "only a dynamic body has an inverse inertia; a static or kinematic "
+        "one is driven rather than accelerated");
+  }
+  zjolt::WriteVec3(out, jolt_body.GetMotionProperties()->MultiplyWorldSpaceInverseInertiaByVector(
+                            jolt_body.GetRotation(), zjolt::ToJolt(*v)));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyGetLocalSpaceInverseInertiaUnchecked(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  const JPH::Body &jolt_body = lock.GetBody();
+  const JPH::MotionProperties *mp = jolt_body.GetMotionPropertiesUnchecked();
+  if (mp == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "this body has no motion properties: it is STATIC and was created "
+        "without allow_dynamic_or_kinematic");
+  }
+  zjolt::WriteMat44(out, mp->GetLocalSpaceInverseInertiaUnchecked());
+  return ZJOLT_RESULT_OK;
+}
+
 void zjoltBodySetPositionAndRotationWhenChanged(ZJoltPhysicsSystem *system,
                                                 ZJoltBodyId body,
                                                 const ZJoltRVec3 *position,
                                                 const ZJoltQuat *rotation,
                                                 ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr || position == nullptr) return;
   const JPH::BodyID id = zjolt::ToJolt(body);
@@ -478,7 +853,7 @@ void zjoltBodySetPositionAndRotationWhenChanged(ZJoltPhysicsSystem *system,
       rotation != nullptr ? zjolt::ToJoltRotation(*rotation) : iface->GetRotation(id);
   iface->SetPositionAndRotationWhenChanged(id, zjolt::ToJoltR(*position),
                                            orientation,
-                                           ToJoltActivation(activation));
+                                           ToJoltActivation(raw_activation));
 }
 
 void zjoltBodyMoveKinematic(ZJoltPhysicsSystem *system, ZJoltBodyId body,
@@ -629,6 +1004,49 @@ void zjoltBodyAddForceAndTorque(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                            zjolt::ToJolt(*torque));
 }
 
+// Neither of these has a BodyInterface wrapper -- Body::GetAccumulatedForce/
+// Torque live on MotionProperties and assert IsDynamic() themselves -- so,
+// like the dampings above, each takes its own body lock rather than going
+// through one.
+
+void zjoltBodyGetAccumulatedForce(const ZJoltPhysicsSystem *system,
+                                  ZJoltBodyId body, ZJoltVec3 *out) {
+  if (out == nullptr) return;
+  *out = ZJoltVec3{0, 0, 0};
+  if (system == nullptr) return;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return;
+  zjolt::WriteVec3(out, lock.GetBody().GetAccumulatedForce());
+}
+
+void zjoltBodyGetAccumulatedTorque(const ZJoltPhysicsSystem *system,
+                                   ZJoltBodyId body, ZJoltVec3 *out) {
+  if (out == nullptr) return;
+  *out = ZJoltVec3{0, 0, 0};
+  if (system == nullptr) return;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return;
+  zjolt::WriteVec3(out, lock.GetBody().GetAccumulatedTorque());
+}
+
+void zjoltBodyResetForce(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
+  if (system == nullptr) return;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return;
+  lock.GetBody().ResetForce();
+}
+
+void zjoltBodyResetTorque(ZJoltPhysicsSystem *system, ZJoltBodyId body) {
+  if (system == nullptr) return;
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded() || !lock.GetBody().IsDynamic()) return;
+  lock.GetBody().ResetTorque();
+}
+
 void zjoltBodyAddImpulse(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                          const ZJoltVec3 *impulse) {
   JPH::BodyInterface *iface = Interface(system);
@@ -680,10 +1098,13 @@ bool zjoltBodyApplyBuoyancyImpulse(ZJoltPhysicsSystem *system,
 void zjoltBodySetShape(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                        const ZJoltShape *shape, bool update_mass_properties,
                        ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr || shape == nullptr) return;
   iface->SetShape(zjolt::ToJolt(body), zjolt::ToJolt(shape),
-                  update_mass_properties, ToJoltActivation(activation));
+                  update_mass_properties, ToJoltActivation(raw_activation));
 }
 
 void zjoltBodySetObjectLayer(ZJoltPhysicsSystem *system, ZJoltBodyId body,
@@ -906,6 +1327,84 @@ bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system, ZJoltBodyId body) {
   return iface->IsSensor(zjolt::ToJolt(body));
 }
 
+// The three flags below live on Body::mFlags rather than MotionProperties, so
+// unlike the accessors around them they read correctly for any body type --
+// a body lock is still taken, the same as every other read in this file that
+// is not mediated by BodyInterface.
+
+bool zjoltBodyGetApplyGyroscopicForce(const ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body) {
+  if (system == nullptr) return false;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return false;
+  return lock.GetBody().GetApplyGyroscopicForce();
+}
+
+bool zjoltBodyGetCollideKinematicVsNonDynamic(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body) {
+  if (system == nullptr) return false;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return false;
+  return lock.GetBody().GetCollideKinematicVsNonDynamic();
+}
+
+bool zjoltBodyGetEnhancedInternalEdgeRemoval(const ZJoltPhysicsSystem *system,
+                                             ZJoltBodyId body) {
+  if (system == nullptr) return false;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return false;
+  return lock.GetBody().GetEnhancedInternalEdgeRemoval();
+}
+
+bool zjoltBodyIsCollisionCacheInvalid(const ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body) {
+  if (system == nullptr) return false;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return false;
+  return lock.GetBody().IsCollisionCacheInvalid();
+}
+
+namespace {
+
+/// Which body-pair flag zjoltBodyGetUseManifoldReductionWithBody/
+/// zjoltBodyGetEnhancedInternalEdgeRemovalWithBody reads.
+enum class BodyPairFlag { kManifoldReduction, kEnhancedInternalEdgeRemoval };
+
+/// Locks `body1` and `body2` under one BodyLockMultiRead -- the same
+/// deadlock-safe pattern zjoltBodyLockMultiRead uses -- and reads `flag` off
+/// the pair, or answers `on_missing` if either lock fails.
+bool WithBodyPair(const ZJoltPhysicsSystem *system, ZJoltBodyId body1,
+                  ZJoltBodyId body2, bool on_missing, BodyPairFlag flag) {
+  if (system == nullptr) return on_missing;
+  const JPH::BodyID ids[2] = {zjolt::ToJolt(body1), zjolt::ToJolt(body2)};
+  JPH::BodyLockMultiRead lock(system->system.GetBodyLockInterface(), ids, 2);
+  const JPH::Body *b1 = lock.GetBody(0);
+  const JPH::Body *b2 = lock.GetBody(1);
+  if (b1 == nullptr || b2 == nullptr) return on_missing;
+  return flag == BodyPairFlag::kManifoldReduction
+             ? b1->GetUseManifoldReductionWithBody(*b2)
+             : b1->GetEnhancedInternalEdgeRemovalWithBody(*b2);
+}
+
+}  // namespace
+
+bool zjoltBodyGetUseManifoldReductionWithBody(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body1,
+                                              ZJoltBodyId body2) {
+  return WithBodyPair(system, body1, body2, /*on_missing=*/true,
+                      BodyPairFlag::kManifoldReduction);
+}
+
+bool zjoltBodyGetEnhancedInternalEdgeRemovalWithBody(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body1, ZJoltBodyId body2) {
+  return WithBodyPair(system, body1, body2, /*on_missing=*/false,
+                      BodyPairFlag::kEnhancedInternalEdgeRemoval);
+}
+
 const ZJoltPhysicsMaterial *zjoltBodyGetMaterial(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltSubShapeId sub_shape_id) {
@@ -923,12 +1422,15 @@ void zjoltBodyNotifyShapeChanged(ZJoltPhysicsSystem *system, ZJoltBodyId body,
                                  const ZJoltVec3 *previous_center_of_mass,
                                  bool update_mass_properties,
                                  ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr || previous_center_of_mass == nullptr) return;
   iface->NotifyShapeChanged(zjolt::ToJolt(body),
                             zjolt::ToJolt(*previous_center_of_mass),
                             update_mass_properties,
-                            ToJoltActivation(activation));
+                            ToJoltActivation(raw_activation));
 }
 
 //===----------------------------------------------------------------------===//
@@ -989,12 +1491,18 @@ ZJoltResult zjoltBodyGetMotions(const ZJoltPhysicsSystem *system,
 }
 
 //===----------------------------------------------------------------------===//
+// A shape query, not a body one
+//===----------------------------------------------------------------------===//
+
+bool zjoltShapeMustBeStatic(const ZJoltShape *shape) {
+  if (shape == nullptr) return false;
+  return zjolt::ToJolt(shape)->MustBeStatic();
+}
+
+//===----------------------------------------------------------------------===//
 // Locks
 //
-// Jolt's locks are RAII; the ABI's are explicit, because a scope is not
-// something a C struct can express. The two _reserved slots hold the mutex and
-// the lock interface, which is what a release needs and what the caller must
-// not touch.
+// Jolt's locks are RAII; the ABI's are explicit, since a scope is not something a C struct can express. The two _reserved slots hold the mutex and lock interface — what a release needs, and what the caller must not touch.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -1054,6 +1562,113 @@ void zjoltBodyLockWrite(ZJoltPhysicsSystem *system, ZJoltBodyId body,
 }
 
 void zjoltBodyLockWriteRelease(ZJoltBodyLock *lock) { DropLock(lock, true); }
+
+//===----------------------------------------------------------------------===//
+// Multi-body locks
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+void ClearMultiLock(ZJoltBodyLockMulti *lock) {
+  lock->_reserved_ids = nullptr;
+  lock->_reserved_count = 0;
+  lock->_reserved_mask = 0;
+  lock->_reserved_interface = nullptr;
+}
+
+/// The mutex mask for every body in `ids`, computed in the same kBulkChunk
+/// pieces VisitBodies uses and for the same reason: aliasing the caller's
+/// ZJoltBodyId array as JPH::BodyID would be type punning, so each chunk
+/// gets its own stack copy. Exact, not approximate: BodyManager::GetMutexMask
+/// assigns each body's bit independently of batch size, so ORing per-chunk
+/// masks equals computing it over the whole array at once.
+JPH::BodyLockInterface::MutexMask ComputeMultiMask(
+    const JPH::BodyLockInterface &iface, const ZJoltBodyId *ids,
+    uint32_t count) {
+  JPH::BodyLockInterface::MutexMask mask = 0;
+  for (uint32_t base = 0; base < count; base += kBulkChunk) {
+    const uint32_t chunk =
+        (count - base) < kBulkChunk ? (count - base) : kBulkChunk;
+    JPH::BodyID chunk_ids[kBulkChunk];
+    for (uint32_t i = 0; i < chunk; ++i)
+      chunk_ids[i] = zjolt::ToJolt(ids[base + i]);
+    mask |= iface.GetMutexMask(chunk_ids, static_cast<int>(chunk));
+  }
+  return mask;
+}
+
+void TakeMultiLock(const ZJoltPhysicsSystem *system, const ZJoltBodyId *ids,
+                   uint32_t count, ZJoltBodyLockMulti *out_lock, bool write) {
+  if (out_lock == nullptr) return;
+  ClearMultiLock(out_lock);
+  if (system == nullptr) return;
+  if (ids == nullptr) count = 0;
+  if (count == 0) return;
+
+  const JPH::BodyLockInterface &iface = system->system.GetBodyLockInterface();
+  const JPH::BodyLockInterface::MutexMask mask =
+      ComputeMultiMask(iface, ids, count);
+  if (mask != 0) {
+    if (write)
+      iface.LockWrite(mask);
+    else
+      iface.LockRead(mask);
+  }
+
+  // The ids pointer itself is kept, not copied -- zjoltBodyLockMultiGet reads
+  // it again by index, exactly as BodyLockMultiBase::GetBody reads its own
+  // borrowed mBodyIDs.
+  out_lock->_reserved_ids = ids;
+  out_lock->_reserved_count = count;
+  out_lock->_reserved_mask = mask;
+  out_lock->_reserved_interface = const_cast<JPH::BodyLockInterface *>(&iface);
+}
+
+void DropMultiLock(ZJoltBodyLockMulti *lock, bool write) {
+  if (lock == nullptr || lock->_reserved_interface == nullptr) return;
+  auto *iface =
+      static_cast<JPH::BodyLockInterface *>(lock->_reserved_interface);
+  if (lock->_reserved_mask != 0) {
+    if (write)
+      iface->UnlockWrite(lock->_reserved_mask);
+    else
+      iface->UnlockRead(lock->_reserved_mask);
+  }
+  ClearMultiLock(lock);
+}
+
+}  // namespace
+
+void zjoltBodyLockMultiRead(const ZJoltPhysicsSystem *system,
+                            const ZJoltBodyId *ids, uint32_t count,
+                            ZJoltBodyLockMulti *out_lock) {
+  TakeMultiLock(system, ids, count, out_lock, false);
+}
+
+void zjoltBodyLockMultiReadRelease(ZJoltBodyLockMulti *lock) {
+  DropMultiLock(lock, false);
+}
+
+void zjoltBodyLockMultiWrite(ZJoltPhysicsSystem *system,
+                             const ZJoltBodyId *ids, uint32_t count,
+                             ZJoltBodyLockMulti *out_lock) {
+  TakeMultiLock(system, ids, count, out_lock, true);
+}
+
+void zjoltBodyLockMultiWriteRelease(ZJoltBodyLockMulti *lock) {
+  DropMultiLock(lock, true);
+}
+
+ZJoltBody *zjoltBodyLockMultiGet(const ZJoltBodyLockMulti *lock,
+                                 uint32_t index) {
+  if (lock == nullptr || lock->_reserved_interface == nullptr) return nullptr;
+  if (index >= lock->_reserved_count) return nullptr;
+  const JPH::BodyID id = zjolt::ToJolt(lock->_reserved_ids[index]);
+  if (id.IsInvalid()) return nullptr;
+  auto *iface =
+      static_cast<JPH::BodyLockInterface *>(lock->_reserved_interface);
+  return zjolt::ToC(iface->TryGetBody(id));
+}
 
 //===----------------------------------------------------------------------===//
 // Locked accessors
@@ -1135,6 +1750,57 @@ void zjoltBodyGetWorldBounds(const ZJoltBody *body, ZJoltAABox *out) {
   out->max = zjolt::ToC(bounds.mMax);
 }
 
+ZJoltResult zjoltBodyGetSimulationStatsLocked(const ZJoltBody *body,
+                                              ZJoltSimulationStats *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(body, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_TRACK_SIMULATION_STATS
+  const JPH::MotionProperties *motion_properties =
+      zjolt::ToJolt(body)->GetMotionPropertiesUnchecked();
+  if (motion_properties == nullptr) return ZJOLT_RESULT_OK;  // static: no stats
+
+  const JPH::MotionProperties::SimulationStats &stats =
+      motion_properties->GetSimulationStats();
+  out->broad_phase_ticks = stats.mBroadPhaseTicks;
+  out->narrow_phase_ticks = stats.mNarrowPhaseTicks.load(std::memory_order_relaxed);
+  out->velocity_constraint_ticks = stats.mVelocityConstraintTicks;
+  out->position_constraint_ticks = stats.mPositionConstraintTicks;
+  out->update_bounds_ticks = stats.mUpdateBoundsTicks;
+  out->ccd_ticks = stats.mCCDTicks.load(std::memory_order_relaxed);
+  out->num_contact_constraints =
+      stats.mNumContactConstraints.load(std::memory_order_relaxed);
+  out->num_collision_steps = stats.mNumCollisionSteps;
+  out->num_velocity_steps = stats.mNumVelocitySteps;
+  out->num_position_steps = stats.mNumPositionSteps;
+  out->is_large_island = stats.mIsLargeIsland;
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltBodyValidateCachedBoundsLocked(const ZJoltBody *body) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(body)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_ENABLE_ASSERTS
+  zjolt::ToJolt(body)->ValidateCachedBounds();
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltBodyValidateMotionLocked(const ZJoltBody *body) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(body)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+#ifdef JPH_ENABLE_ASSERTS
+  zjolt::ToJolt(body)->ValidateMotion();
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
 //===----------------------------------------------------------------------===//
 // Locked mutators
 //
@@ -1177,6 +1843,105 @@ void zjoltBodyAddImpulseLocked(ZJoltBody *body, const ZJoltVec3 *impulse) {
   JPH::Body *impl = zjolt::ToJolt(body);
   if (impl->IsStatic() || impl->IsKinematic()) return;
   impl->AddImpulse(zjolt::ToJolt(*impulse));
+}
+
+//===----------------------------------------------------------------------===//
+// Detaching a body from its id
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltBodyUnassignId(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                                ZJoltUnassignedBody **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::BodyID id = zjolt::ToJolt(body);
+
+  // BodyManager::RemoveBodies (which UnassignBodyID calls) indexes its body
+  // table directly rather than through a lock-checked lookup -- the same
+  // hazard zjolt_batch.cpp documents for its own plural calls -- so liveness
+  // is confirmed under an ordinary body lock, which IS bounds- and
+  // generation-checked, before anything reaches that path.
+  {
+    JPH::BodyLockRead lock(system->system.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) {
+      return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                             "body id does not name a live body in this system");
+    }
+  }
+
+  ZJoltUnassignedBody *handle = zjolt::New<ZJoltUnassignedBody>();
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  JPH::BodyInterface &iface = system->system.GetBodyInterface();
+  if (iface.IsAdded(id)) iface.RemoveBody(id);
+  JPH::Body *unassigned = iface.UnassignBodyID(id);
+  if (unassigned == nullptr) {
+    // Lost a race with a concurrent destroy between the check above and here.
+    zjolt::Delete(handle);
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+
+  handle->body = unassigned;
+  handle->owner = system;
+  zjolt::HandleCreated();
+  *out = handle;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltUnassignedBodyAssignId(ZJoltPhysicsSystem *system,
+                                        ZJoltUnassignedBody *unassigned,
+                                        ZJoltBodyId id, ZJoltBodyId *out) {
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out, (ZJoltBodyId)ZJOLT_BODY_ID_INVALID));
+  if (!zjolt::Present(system, unassigned, out))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (unassigned->owner != system) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "unassigned: came from a different physics system");
+  }
+  if (id == JPH::BodyID::cInvalidBodyID) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "id: ZJOLT_BODY_ID_INVALID does not name a body");
+  }
+  // See zjoltBodyCreateWithId for why this is checked ahead of ever
+  // constructing a JPH::BodyID from it.
+  if ((id & JPH::BodyID::cBroadPhaseBit) != 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "id: bit 31 is reserved for the broad phase and cannot be set in a "
+        "custom body id");
+  }
+
+  const bool assigned = system->system.GetBodyInterface().AssignBodyID(
+      unassigned->body, zjolt::ToJolt(id));
+  if (!assigned) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "id: already names a live body, or its index is beyond max_bodies");
+  }
+
+  *out = id;
+  zjolt::HandleDestroyed();
+  zjolt::Delete(unassigned);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltUnassignedBodyDestroy(ZJoltPhysicsSystem *system,
+                                       ZJoltUnassignedBody *unassigned) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (unassigned == nullptr) return ZJOLT_RESULT_OK;
+  if (unassigned->owner != system) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "unassigned: came from a different physics system");
+  }
+
+  system->system.GetBodyInterface().DestroyBodyWithoutID(unassigned->body);
+  zjolt::HandleDestroyed();
+  zjolt::Delete(unassigned);
+  return ZJOLT_RESULT_OK;
 }
 
 }  // extern "C"

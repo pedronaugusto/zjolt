@@ -40,11 +40,10 @@ pub const CollisionGroup = struct {
 
     /// The one `@constCast` in this module, and it is here on purpose.
     ///
-    /// Jolt stores a body's filter as a `RefConst`, so the C getter hands back
-    /// a `const` pointer. `GroupFilter` is a mutable handle because two of its
-    /// methods mutate the table, and casting once here is better than casting
-    /// at both of those. Mutating a filter you got out of a body is legal —
-    /// it is the same object the owner of the reference holds.
+    /// Jolt stores a body's filter as a `RefConst`, so the C getter hands
+    /// back a `const` pointer. `GroupFilter` is a mutable handle since two
+    /// of its methods mutate the table; mutating a filter you got out of a
+    /// body is legal — it is the same object the owner of the reference holds.
     fn fromC(raw: c.CollisionGroup) CollisionGroup {
         return .{
             .filter = if (raw.filter) |handle|
@@ -57,24 +56,12 @@ pub const CollisionGroup = struct {
     }
 };
 
-/// A table of one bit per unordered pair of sub-groups, all set — everything
-/// collides — until you clear one.
-///
-/// Reference counted like a `Shape`: `initTable` hands back one reference and
-/// a body takes its own when the group is set on it, so the usual pattern is
-/// create the filter, set it on every body in the object, release.
-///
-/// The rules the table applies are worth reading in full, because two of them
-/// are easy to trip:
-///
-///   * a body whose `group_id` is `invalid` collides with everything;
-///   * bodies with DIFFERENT group ids always collide — the table only ever
-///     suppresses within one group;
-///   * bodies in the same group carrying DIFFERENT filter objects never
-///     collide, which catches people out: two ragdolls with a filter each pass
-///     through one another if you gave them the same group id;
-///   * bodies in the same group with the same sub-group id never collide;
-///   * otherwise the table's bit for the pair decides.
+/// A table of one bit per unordered pair of sub-groups, all set until
+/// cleared; reference counted like a `Shape` (create, set on each body,
+/// release). Rules, in order: `group_id == invalid` always collides;
+/// DIFFERENT group ids always collide (within-group only suppression);
+/// DIFFERENT filter objects in the same group never collide (trap: two
+/// ragdolls with separate filters, same group id, pass through each other); same sub-group id never collides; else the table decides.
 pub const GroupFilter = struct {
     handle: *c.GroupFilter,
 
@@ -105,11 +92,10 @@ pub const GroupFilter = struct {
 
     /// Stops two sub-groups colliding.
     ///
-    /// Both ids must be below `numSubGroups` and must differ; both are
-    /// `error.InvalidArgument` rather than an assertion, and equal ids are a
-    /// mistake rather than a no-op because a sub-group never collides with
-    /// itself whatever the table says. The table is symmetric, so the order of
-    /// the two ids does not matter.
+    /// Both ids must be below `numSubGroups` and must differ —
+    /// `error.InvalidArgument`, not an assertion. Equal ids are a mistake,
+    /// not a no-op: a sub-group never collides with itself regardless of
+    /// the table. Symmetric, so id order does not matter.
     pub fn disableCollision(self: GroupFilter, sub_group1: u32, sub_group2: u32) err.Error!void {
         try err.check(c.zjoltGroupFilterTableDisableCollision(
             self.handle,

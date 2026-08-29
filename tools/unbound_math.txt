@@ -1,0 +1,174 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+AABBTree	AlignUp	LANGUAGE	std.math and @Vector arithmetic
+AABBTree	DecodingContext	BOUND	zjoltShapeGetTrianglesStart zjoltShapeGetTrianglesNext
+AABBTree	EncodingContext	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	FinalizePreparePack	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	GetBuffer	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+AABBTree	GetLeafNodeCount	BOUND	zjoltAABBTreeBuilderBuild ZJoltAABBTreeBuilderStats
+AABBTree	GetMaxDepth	BOUND	zjoltAABBTreeBuilderBuild ZJoltAABBTreeBuilderStats
+AABBTree	GetMinDepth	BOUND	zjoltAABBTreeBuilderBuild ZJoltAABBTreeBuilderStats
+AABBTree	GetNodeCount	BOUND	zjoltAABBTreeBuilderBuild ZJoltAABBTreeBuilderStats
+AABBTree	GetTriangleBlock	BOUND	zjoltShapeGetTrianglesNext
+AABBTree	GetTriangleCountPerNode	BOUND	zjoltAABBTreeBuilderBuild ZJoltAABBTreeBuilderStats
+AABBTree	GetVertexData	BOUND	zjoltShapeGetTrianglesNext
+AABBTree	IsDegenerate	ZIG	src/math.zig:IndexedTriangle.isDegenerate
+AABBTree	IsDoneWalking	BOUND	zjoltShapeGetTrianglesStart zjoltShapeGetTrianglesNext
+AABBTree	NodeAllocate	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	NodeFinalize	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	Pack	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	PrepareNodeAllocate	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	PreparePack	BOUND	zjoltAABBTreeBufferCreate
+AABBTree	RayTriangle4	ZIG	src/math.zig:ray.triangle4
+AABBTree	TestRay	BOUND	zjoltCastRayClosest zjoltCastRayAll zjoltCastRayEach
+AABBTree	Unpack	BOUND	zjoltShapeGetTrianglesStart zjoltShapeGetTrianglesNext
+AABBTree	ValidationContext	BOUND	zjoltShapeCreateMesh
+AABBTree	WalkTree	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
+Math	Adjointed3x3	BOUND	zjoltMat44Inverse
+Math	AlignUp	LANGUAGE	std.math and @Vector arithmetic
+Math	ArithmeticShiftRight	LANGUAGE	the << and >> operators on @Vector(4, u32)
+Math	BVec16	LANGUAGE	@Vector(4, f32) and @Vector(4, u32) are the same registers
+Math	BitCast	LANGUAGE	@bitCast between a float and its bits
+Math	CheckW	INTERNAL	upstream libs/JoltPhysics/Jolt/Math/DVec3.h:270 (decl)
+Math	CompressUnitQuat	ZIG	src/c/core.zig:Quat.compressUnitQuat
+Math	CompressUnitVector	ZIG	src/c/core.zig:Vec3.compressUnitVector
+Math	Conjugated	ZIG	src/c/core.zig:Quat.conjugate
+Math	CopyPart	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	CountBits	LANGUAGE	@popCount
+Math	CountLeadingZeros	LANGUAGE	@clz and @ctz
+Math	CountTrailingZeros	LANGUAGE	@clz and @ctz
+Math	CountTrues	LANGUAGE	@reduce on @Vector(4, bool)
+Math	Cross	LANGUAGE	std.math and @Vector arithmetic
+Math	CrossPrecise	LANGUAGE	@mulAdd for the fused difference of products
+Math	Cubed	LANGUAGE	std.math and @Vector arithmetic
+Math	DegreesToRadians	LANGUAGE	std.math and @Vector arithmetic
+Math	DifferenceOfProducts	LANGUAGE	@mulAdd for the fused difference of products
+Math	DotV	LANGUAGE	std.math and @Vector arithmetic
+Math	DotV4	LANGUAGE	std.math and @Vector arithmetic
+Math	DynMatrix	LANGUAGE	@Vector(4, f32) and @Vector(4, u32) are the same registers
+Math	EigenValueSymmetric	BOUND	zjoltMassPropertiesDecomposePrincipalMomentsOfInertia ZJoltMat44 ZJoltVec3 ZJoltMassProperties
+Math	EnsureWPositive	LANGUAGE	std.math and @Vector arithmetic
+Math	Expand4Byte0	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Expand4Byte12	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Expand4Byte4	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Expand4Byte8	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Expand4Uint16Hi	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Expand4Uint16Lo	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	FlipSign	LANGUAGE	@bitCast between @Vector(4, f32) and @Vector(4, u32)
+Math	Float2	LANGUAGE	@Vector(4, f32) and @Vector(4, u32) are the same registers
+Math	GaussianElimination	BOUND	zjoltMatrix2Solve zjoltMatrix3Solve
+Math	GetAxisX	ZIG	src/c/core.zig:Mat44.axisX
+Math	GetAxisY	ZIG	src/c/core.zig:Mat44.axisY
+Math	GetAxisZ	ZIG	src/c/core.zig:Mat44.axisZ
+Math	GetDeterminant3x3	ZIG	src/c/core.zig:Mat44.determinant3x3
+Math	GetDiagonal3	ZIG	src/c/core.zig:Mat44.diagonal3
+Math	GetDiagonal4	ZIG	src/c/core.zig:Mat44.diagonal4
+Math	GetDirectionPreservingMatrix	BOUND	zjoltMat44Inverse
+Math	GetHighestComponentIndex	LANGUAGE	std.math and @Vector arithmetic
+Math	GetLowestComponentIndex	LANGUAGE	std.math and @Vector arithmetic
+Math	GetNextPowerOf2	LANGUAGE	std.math and @Vector arithmetic
+Math	GetNormalizedPerpendicular	ZIG	src/c/core.zig:Vec3.normalizedPerpendicular
+Math	GetRotationSafe	ZIG	src/c/core.zig:Mat44.rotationSafe
+Math	GetSign	LANGUAGE	std.math and @Vector arithmetic
+Math	GetSignBits	LANGUAGE	@bitCast between @Vector(4, f32) and @Vector(4, u32)
+Math	GetTrues	LANGUAGE	@reduce on @Vector(4, bool)
+Math	GetW	LANGUAGE	element access on @Vector(4, f32)
+Math	GetX	LANGUAGE	element access on @Vector(4, f32)
+Math	GetXYZ	LANGUAGE	element access on @Vector(4, f32)
+Math	GetXYZW	LANGUAGE	element access on @Vector(4, f32)
+Math	InverseRotate	BOUND	zjoltQuatInverse zjoltQuatRotateVector
+Math	Inversed3x3	BOUND	zjoltMat44Inverse
+Math	InversedRotationTranslation	BOUND	zjoltMat44InverseRotationTranslation zjoltRMat44InverseRotationTranslation
+Math	IsAligned	LANGUAGE	std.mem.isAligned
+Math	IsNaN	LANGUAGE	std.math and @Vector arithmetic
+Math	IsNearZero	LANGUAGE	std.math and @Vector arithmetic
+Math	IsPowerOf2	LANGUAGE	std.math.isPowerOfTwo
+Math	IsZero	LANGUAGE	element access on @Vector(4, f32)
+Math	LengthSq	LANGUAGE	std.math and @Vector arithmetic
+Math	LogicalShiftLeft	LANGUAGE	the << and >> operators on @Vector(4, u32)
+Math	LogicalShiftRight	LANGUAGE	the << and >> operators on @Vector(4, u32)
+Math	Multiply3x3	ZIG	src/c/core.zig:Mat44.multiply3x3
+Math	Multiply3x3LeftTransposed	BOUND	zjoltMat44Multiply
+Math	Multiply3x3RightTransposed	ZIG	src/c/core.zig:Mat44.multiply3x3RightTransposed
+Math	Multiply3x3Transposed	BOUND	zjoltMat44TransformDirection
+Math	NormalizedOr	LANGUAGE	std.math and @Vector arithmetic
+Math	PostScaled	BOUND	zjoltMat44Multiply
+Math	PostTranslated	BOUND	zjoltMat44FromRotationTranslation zjoltMat44Multiply
+Math	PreScaled	BOUND	zjoltMat44Multiply
+Math	PreTranslated	BOUND	zjoltMat44FromRotationTranslation zjoltMat44Multiply
+Math	PrepareRoundToInf	LANGUAGE	std.math and @Vector arithmetic
+Math	PrepareRoundToZero	LANGUAGE	std.math and @Vector arithmetic
+Math	RadiansToDegrees	LANGUAGE	std.math and @Vector arithmetic
+Math	Reciprocal	LANGUAGE	std.math and @Vector arithmetic
+Math	ReduceMax	LANGUAGE	@reduce on @Vector(4, f32)
+Math	ReduceMin	LANGUAGE	@reduce on @Vector(4, f32)
+Math	ReduceSum	LANGUAGE	@reduce on @Vector(4, f32)
+Math	ReinterpretAsFloat	LANGUAGE	@bitCast between @Vector(4, f32) and @Vector(4, u32)
+Math	ReinterpretAsInt	LANGUAGE	@bitCast between @Vector(4, f32) and @Vector(4, u32)
+Math	RotateAxisX	ZIG	src/c/core.zig:Quat.rotateAxisX
+Math	RotateAxisY	ZIG	src/c/core.zig:Quat.rotateAxisY
+Math	RotateAxisZ	ZIG	src/c/core.zig:Quat.rotateAxisZ
+Math	SetAxisX	ZIG	src/c/core.zig:Mat44.withAxisX
+Math	SetAxisY	ZIG	src/c/core.zig:Mat44.withAxisY
+Math	SetAxisZ	ZIG	src/c/core.zig:Mat44.withAxisZ
+Math	SetDiagonal	ZIG	src/c/core.zig:Mat44.withDiagonal3
+Math	SetDiagonal3	ZIG	src/c/core.zig:Mat44.withDiagonal3
+Math	SetDiagonal4	ZIG	src/c/core.zig:Mat44.withDiagonal4
+Math	SetIdentity	BOUND	zjoltMatrix2Identity zjoltMatrix3Identity
+Math	SetInversed	ZIG	src/c/core.zig:Mat44.inversed3x3
+Math	SetInversed3x3	BOUND	zjoltMat44Inverse
+Math	SetW	LANGUAGE	element access on @Vector(4, f32)
+Math	SetX	LANGUAGE	element access on @Vector(4, f32)
+Math	SetY	LANGUAGE	element access on @Vector(4, f32)
+Math	SetZ	LANGUAGE	element access on @Vector(4, f32)
+Math	SetZero	LANGUAGE	element access on @Vector(4, f32)
+Math	ShiftComponents4Minus	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Sign	LANGUAGE	std.math.sign
+Math	SplatW	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatW3	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatX	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatX3	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatY	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatY3	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatZ	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	SplatZ3	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	Sqrt	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Math	Square	LANGUAGE	std.math and @Vector arithmetic
+Math	StoreDouble3	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Math	StoreFloat3	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Math	StoreFloat4	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Math	StoreFloat4x4	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Math	StoreInt4	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Math	StoreInt4Aligned	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Math	Swizzle	LANGUAGE	@shuffle on @Vector(4, f32)
+Math	TestAllTrue	LANGUAGE	@reduce on @Vector(4, bool)
+Math	TestAllXYZTrue	LANGUAGE	@reduce on @Vector(4, bool)
+Math	TestAnyTrue	LANGUAGE	@reduce on @Vector(4, bool)
+Math	TestAnyXYZTrue	LANGUAGE	@reduce on @Vector(4, bool)
+Math	ToFloatFallback	BOUND	zjoltHalfFloatToFloatFallback4
+Math	ToInt	LANGUAGE	@bitCast between @Vector(4, f32) and @Vector(4, u32)
+Math	Transposed3x3	ZIG	src/c/core.zig:Mat44.transposed3x3
+Shaders	ApplyCollisionAndUpdateVelocity	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	ApplyGlobalPose	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	ApplyGrid	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	DeltaDensity	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	GetStrandMaterialIndex	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	GetStrandVertexCount	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	GetVertexStrandFraction	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	GradientSamplerSample	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	GridIndexToBufferIndex	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	GridPositionToIndexAndFraction	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	HairRegisterShaders	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	Integrate	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	IsVertexFixed	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	LimitVelocity	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Shaders	SkinRenderVertex	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom

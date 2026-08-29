@@ -1,18 +1,16 @@
 //! Many bodies at once.
 //!
 //! Adding ten thousand bodies one at a time produces a broad phase that is
-//! correct and badly shaped, and every query pays for that until a later step
-//! rebuilds the tree. `add` sorts the whole set by broad-phase layer and
-//! builds the subtree in one pass instead — Jolt's own guidance is that a
-//! batch added into roughly unoccupied space needs no `optimizeBroadPhase` at
-//! all.
+//! correct and badly shaped, and every query pays for that until a later
+//! step rebuilds the tree. `add` sorts the whole set by broad-phase layer
+//! and builds the subtree in one pass instead — Jolt's own guidance is
+//! that a batch added into roughly unoccupied space needs no
+//! `optimizeBroadPhase` at all.
 //!
-//! The slices these take are read once and released. Jolt's own batch calls
-//! shuffle the array they are given and, for the two-phase add, hold pointers
-//! into it until the finalize; the C layer copies into storage it owns so that
-//! none of that reaches a caller here. A `[]const BodyId` may be a temporary.
-//!
-//! Reached from `PhysicsSystem.batch()`.
+//! The slices these take are read once and released. Jolt's own batch
+//! calls shuffle the array they are given and, for the two-phase add, hold
+//! pointers into it until finalize; the C layer copies into storage it
+//! owns, so none of that reaches a caller here — a `[]const BodyId` may be a temporary. Reached from `PhysicsSystem.batch()`.
 
 const std = @import("std");
 const c = @import("c/batch.zig");
@@ -25,9 +23,8 @@ const broadphase_mod = @import("broadphase.zig");
 /// `abort`.
 ///
 /// Owned by the system it was prepared on: one still outstanding when the
-/// system is destroyed is aborted with it, so forgetting to consume it leaks
-/// nothing. Until it is consumed the bodies are neither in the simulation nor
-/// findable by a query.
+/// system is destroyed is aborted with it, so forgetting to consume it
+/// leaks nothing. Bodies are neither in the simulation nor findable by a query until consumed.
 pub const AddBatch = struct {
     handle: *c.BodyAddBatch,
 };
@@ -113,6 +110,36 @@ pub const Batch = struct {
             bodies.ptr,
             @intCast(bodies.len),
         ));
+    }
+
+    /// Bulk form of `BodyInterface.unassignId`. The returned slice has one
+    /// entry per entry in `bodies`, in the same order, allocated with
+    /// `allocator` and owned by the caller; an id that does not currently
+    /// name a live body gets `null` instead of failing the whole batch, the
+    /// same reasoning `destroy` uses.
+    pub fn unassignIds(
+        self: Batch,
+        allocator: std.mem.Allocator,
+        bodies: []const body_mod.BodyId,
+    ) err.Error![]?body_mod.UnassignedBody {
+        const raw = try allocator.alloc(?*c.UnassignedBody, bodies.len);
+        defer allocator.free(raw);
+
+        try err.check(c.zjoltBodyUnassignIds(
+            self.handle,
+            bodies.ptr,
+            @intCast(bodies.len),
+            raw.ptr,
+        ));
+
+        const out = try allocator.alloc(?body_mod.UnassignedBody, bodies.len);
+        for (raw, out) |maybe_handle, *slot| {
+            slot.* = if (maybe_handle) |handle|
+                .{ .handle = handle, .owner = self.handle }
+            else
+                null;
+        }
+        return out;
     }
 
     //=========================================================================

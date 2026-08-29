@@ -17,6 +17,7 @@ pub const AllowedDofs = core.AllowedDofs;
 pub const Body = core.Body;
 pub const BodyId = core.BodyId;
 pub const Mat44 = core.Mat44;
+pub const MassProperties = core.MassProperties;
 pub const MotionQuality = core.MotionQuality;
 pub const MotionType = core.MotionType;
 pub const ObjectLayer = core.ObjectLayer;
@@ -55,6 +56,7 @@ pub const BodyDesc = extern struct {
     allowed_dofs: AllowedDofs,
     override_mass_properties: OverrideMassProperties,
     mass: f32,
+    mass_properties_override: MassProperties,
     allow_dynamic_or_kinematic: bool,
     is_sensor: bool,
     allow_sleeping: bool,
@@ -73,6 +75,27 @@ pub const BodyLock = extern struct {
     _reserved: [2]?*anyopaque,
 };
 
+pub const BodyLockMulti = extern struct {
+    _reserved_ids: ?[*]const BodyId,
+    _reserved_count: u32,
+    _reserved_mask: u64,
+    _reserved_interface: ?*anyopaque,
+};
+
+pub const SimulationStats = extern struct {
+    broad_phase_ticks: u64,
+    narrow_phase_ticks: u64,
+    velocity_constraint_ticks: u64,
+    position_constraint_ticks: u64,
+    update_bounds_ticks: u64,
+    ccd_ticks: u64,
+    num_contact_constraints: u32,
+    num_collision_steps: u8,
+    num_velocity_steps: u8,
+    num_position_steps: u8,
+    is_large_island: bool,
+};
+
 pub extern fn zjoltPhysicsSystemGetActiveBodies(system: *const PhysicsSystem, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltPhysicsSystemGetBodies(system: *const PhysicsSystem, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
@@ -86,6 +109,8 @@ pub extern fn zjoltBodyCreateAndAdd(system: *PhysicsSystem, desc: *const BodyDes
 pub extern fn zjoltBodyCreateWithId(system: *PhysicsSystem, desc: *const BodyDesc, id: BodyId, out: *BodyId) Result;
 
 pub extern fn zjoltBodyCreateAndAddWithId(system: *PhysicsSystem, desc: *const BodyDesc, id: BodyId, activation: Activation, out: *BodyId) Result;
+
+pub extern fn zjoltBodyApplyBodyCreationSettings(system: *PhysicsSystem, body: BodyId, desc: *const BodyDesc) Result;
 
 pub extern fn zjoltBodyDestroy(system: *PhysicsSystem, body: BodyId) void;
 
@@ -104,6 +129,8 @@ pub extern fn zjoltBodyDeactivate(system: *PhysicsSystem, body: BodyId) void;
 pub extern fn zjoltBodyResetSleepTimer(system: *PhysicsSystem, body: BodyId) void;
 
 pub extern fn zjoltBodyGetBodyType(system: *const PhysicsSystem, body: BodyId) BodyType;
+
+pub extern fn zjoltBodyIdGetSequenceNumber(id: BodyId) u8;
 
 pub extern fn zjoltBodySetMotionType(system: *PhysicsSystem, body: BodyId, motion_type: MotionType, activation: Activation) void;
 
@@ -124,6 +151,36 @@ pub extern fn zjoltBodyGetWorldTransform(system: *const PhysicsSystem, body: Bod
 pub extern fn zjoltBodyGetCenterOfMassTransform(system: *const PhysicsSystem, body: BodyId, out: *RMat44) void;
 
 pub extern fn zjoltBodyGetInverseInertia(system: *const PhysicsSystem, body: BodyId, out: *Mat44) Result;
+
+pub extern fn zjoltBodyGetLocalSpaceInverseInertia(system: *const PhysicsSystem, body: BodyId, out: *Mat44) Result;
+
+pub extern fn zjoltBodyGetInverseInertiaForRotation(system: *const PhysicsSystem, body: BodyId, rotation: *const Mat44, out: *Mat44) Result;
+
+pub extern fn zjoltBodyGetInverseMassUnchecked(system: *const PhysicsSystem, body: BodyId) f32;
+
+pub extern fn zjoltBodyGetAllowedDOFs(system: *const PhysicsSystem, body: BodyId) AllowedDofs;
+
+pub extern fn zjoltBodyHasMotionProperties(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodySetInverseMass(system: *PhysicsSystem, body: BodyId, inverse_mass: f32) Result;
+
+pub extern fn zjoltBodySetInverseInertia(system: *PhysicsSystem, body: BodyId, diagonal: *const Vec3, rotation: *const Quat) Result;
+
+pub extern fn zjoltBodyScaleToMass(system: *PhysicsSystem, body: BodyId, mass: f32) Result;
+
+pub extern fn zjoltBodySetMassProperties(system: *PhysicsSystem, body: BodyId, allowed_dofs: AllowedDofs, mass_properties: *const MassProperties) Result;
+
+pub extern fn zjoltBodyMaskTranslationDOFs(system: *const PhysicsSystem, body: BodyId, v: *const Vec3, out: *Vec3) void;
+
+pub extern fn zjoltBodyMaskAngularDOFs(system: *const PhysicsSystem, body: BodyId, v: *const Vec3, out: *Vec3) void;
+
+pub extern fn zjoltBodyClampLinearVelocity(system: *PhysicsSystem, body: BodyId) Result;
+
+pub extern fn zjoltBodyClampAngularVelocity(system: *PhysicsSystem, body: BodyId) Result;
+
+pub extern fn zjoltBodyMultiplyWorldSpaceInverseInertiaByVector(system: *const PhysicsSystem, body: BodyId, v: *const Vec3, out: *Vec3) Result;
+
+pub extern fn zjoltBodyGetLocalSpaceInverseInertiaUnchecked(system: *const PhysicsSystem, body: BodyId, out: *Mat44) Result;
 
 pub extern fn zjoltBodySetPositionAndRotationWhenChanged(system: *PhysicsSystem, body: BodyId, position: *const RVec3, rotation: ?*const Quat, activation: Activation) void;
 
@@ -156,6 +213,14 @@ pub extern fn zjoltBodyAddForceAtPoint(system: *PhysicsSystem, body: BodyId, for
 pub extern fn zjoltBodyAddTorque(system: *PhysicsSystem, body: BodyId, torque: *const Vec3) void;
 
 pub extern fn zjoltBodyAddForceAndTorque(system: *PhysicsSystem, body: BodyId, force: *const Vec3, torque: *const Vec3) void;
+
+pub extern fn zjoltBodyGetAccumulatedForce(system: *const PhysicsSystem, body: BodyId, out: *Vec3) void;
+
+pub extern fn zjoltBodyGetAccumulatedTorque(system: *const PhysicsSystem, body: BodyId, out: *Vec3) void;
+
+pub extern fn zjoltBodyResetForce(system: *PhysicsSystem, body: BodyId) void;
+
+pub extern fn zjoltBodyResetTorque(system: *PhysicsSystem, body: BodyId) void;
 
 pub extern fn zjoltBodyAddImpulse(system: *PhysicsSystem, body: BodyId, impulse: *const Vec3) void;
 
@@ -215,6 +280,18 @@ pub extern fn zjoltBodySetIsSensor(system: *PhysicsSystem, body: BodyId, is_sens
 
 pub extern fn zjoltBodyIsSensor(system: *const PhysicsSystem, body: BodyId) bool;
 
+pub extern fn zjoltBodyGetApplyGyroscopicForce(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodyGetCollideKinematicVsNonDynamic(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodyGetEnhancedInternalEdgeRemoval(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodyIsCollisionCacheInvalid(system: *const PhysicsSystem, body: BodyId) bool;
+
+pub extern fn zjoltBodyGetUseManifoldReductionWithBody(system: *const PhysicsSystem, body1: BodyId, body2: BodyId) bool;
+
+pub extern fn zjoltBodyGetEnhancedInternalEdgeRemovalWithBody(system: *const PhysicsSystem, body1: BodyId, body2: BodyId) bool;
+
 pub extern fn zjoltBodyGetMaterial(system: *const PhysicsSystem, body: BodyId, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
 
 pub extern fn zjoltBodyNotifyShapeChanged(system: *PhysicsSystem, body: BodyId, previous_center_of_mass: *const Vec3, update_mass_properties: bool, activation: Activation) void;
@@ -222,6 +299,8 @@ pub extern fn zjoltBodyNotifyShapeChanged(system: *PhysicsSystem, body: BodyId, 
 pub extern fn zjoltBodyGetTransforms(system: *const PhysicsSystem, ids: [*]const BodyId, count: u32, out_positions: ?[*]RVec3, out_rotations: ?[*]Quat, out_missing: ?*u32) Result;
 
 pub extern fn zjoltBodyGetMotions(system: *const PhysicsSystem, ids: [*]const BodyId, count: u32, out_center_of_mass: ?[*]RVec3, out_linear_velocities: ?[*]Vec3, out_missing: ?*u32) Result;
+
+pub extern fn zjoltShapeMustBeStatic(shape: ?*const Shape) bool;
 
 pub extern fn zjoltBodyLockRead(system: *const PhysicsSystem, body: BodyId, out_lock: *BodyLock) void;
 
@@ -268,3 +347,27 @@ pub extern fn zjoltBodySetFrictionLocked(body: *Body, friction: f32) void;
 pub extern fn zjoltBodySetRestitutionLocked(body: *Body, restitution: f32) void;
 
 pub extern fn zjoltBodyAddImpulseLocked(body: *Body, impulse: *const Vec3) void;
+
+pub extern fn zjoltBodyGetSimulationStatsLocked(body: *const Body, out: *SimulationStats) Result;
+
+pub extern fn zjoltBodyValidateCachedBoundsLocked(body: *const Body) Result;
+
+pub extern fn zjoltBodyValidateMotionLocked(body: *const Body) Result;
+
+pub extern fn zjoltBodyLockMultiRead(system: *const PhysicsSystem, ids: [*]const BodyId, count: u32, out_lock: *BodyLockMulti) void;
+
+pub extern fn zjoltBodyLockMultiReadRelease(lock: *BodyLockMulti) void;
+
+pub extern fn zjoltBodyLockMultiWrite(system: *PhysicsSystem, ids: [*]const BodyId, count: u32, out_lock: *BodyLockMulti) void;
+
+pub extern fn zjoltBodyLockMultiWriteRelease(lock: *BodyLockMulti) void;
+
+pub extern fn zjoltBodyLockMultiGet(lock: *const BodyLockMulti, index: u32) ?*Body;
+
+pub const UnassignedBody = opaque {};
+
+pub extern fn zjoltBodyUnassignId(system: *PhysicsSystem, body: BodyId, out: **UnassignedBody) Result;
+
+pub extern fn zjoltUnassignedBodyAssignId(system: *PhysicsSystem, unassigned: *UnassignedBody, id: BodyId, out: *BodyId) Result;
+
+pub extern fn zjoltUnassignedBodyDestroy(system: *PhysicsSystem, unassigned: ?*UnassignedBody) Result;

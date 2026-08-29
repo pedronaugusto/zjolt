@@ -1,0 +1,162 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Core	AccumulateMeasurement	ZIG	src/memory.zig:MeasurementAggregate.accumulateMeasurement
+Core	Acquire	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	AddAttribute	BOUND	zjoltReflectGetAttribute
+Core	AddBaseClass	BOUND	zjoltReflectGetBaseClass
+Core	AddDependency	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	AddJob	BOUND	zjoltJobSystemCreateHost ZJoltHostJobSystem ZJoltJob zjoltJobRun zjoltJobAddRef zjoltJobRelease
+Core	AddJobs	BOUND	zjoltJobSystemCreateHost ZJoltHostJobSystem
+Core	AddObjectToBatch	ZIG	src/memory.zig:addObjectToBatch
+Core	AddThread	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	Aggregator	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	Align	LANGUAGE	std.math and @Vector arithmetic
+Core	AlignUp	LANGUAGE	std.math and @Vector arithmetic
+Core	AlignedAllocate	BOUND	ZJoltAllocator ZJoltInitDesc zjoltInit
+Core	AlignedFree	BOUND	ZJoltAllocator
+Core	AllocateTable	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	AppendVector	LANGUAGE	std.ArrayList and Zig slices
+Core	Array	LANGUAGE	std.ArrayList and Zig slices
+Core	AssertFailedParamHelper	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Core	AtomicMax	LANGUAGE	@atomicRmw
+Core	AtomicMin	LANGUAGE	@atomicRmw
+Core	BarrierImpl	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	BinaryHeapPop	LANGUAGE	std.sort.pdq and std.PriorityQueue
+Core	BinaryHeapPush	LANGUAGE	std.sort.pdq and std.PriorityQueue
+Core	CanBeExecuted	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	ClearAndKeepMemory	LANGUAGE	std.ArrayList and Zig slices
+Core	ConstructObject	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	ConvertToString	LANGUAGE	std.fmt.allocPrint
+Core	CopyTable	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	CountLeadingZeros	LANGUAGE	@clz and @ctz
+Core	CountTrailingZeros	LANGUAGE	@clz and @ctz
+Core	CreateBarrier	BOUND	zjoltJobSystemCreateHost ZJOLT_MAX_PHYSICS_BARRIERS
+Core	CreateJob	BOUND	zjoltJobSystemCreateHost ZJoltJob ZJoltHostJobSystem zjoltJobRun
+Core	DestroyBarrier	BOUND	zjoltJobSystemCreateHost
+Core	DestructObject	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	DestructObjectBatch	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	DumpChart	INTERNAL	no public declaration
+Core	DumpInternal	INTERNAL	upstream libs/JoltPhysics/Jolt/Core/Profiler.h:173 (suffix)
+Core	DynamicCast	BOUND	zjoltReflectCastTo
+Core	Execute	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	ExternalProfileMeasurement	EXTENSION	ZJoltExternalProfilerStartFn ZJoltExternalProfilerEndFn zjoltExternalProfilerSetHooks
+Core	FPControlWord	BOUND	zjoltFPFlushDenormalsEnter zjoltFPFlushDenormalsLeave
+Core	FixedSizeFreeList	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	FromOffset	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	GetHash	LANGUAGE	std.hash.Wyhash
+Core	GetIndexAndControlValue	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	GetJobSystem	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	GetKey	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	GetMaxBuckets	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	GetMaxX	BOUND	zjoltVehicleConstraintGetWheelLongitudinalFrictionCurve
+Core	GetMinX	BOUND	zjoltVehicleConstraintGetWheelLongitudinalFrictionCurve
+Core	GetMutexByIndex	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	GetMutexByObjectIndex	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	GetMutexIndex	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	GetNextPowerOf2	LANGUAGE	std.math and @Vector arithmetic
+Core	GetNumBuckets	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	GetNumMutexes	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	GetPtr	LANGUAGE	std.ArrayList and Zig slices
+Core	GetRTTIOfType	BOUND	zjoltReflectFind zjoltReflectFindByHash zjoltReflectObjectGetRtti
+Core	GetStorage	LANGUAGE	std.ArrayList and Zig slices
+Core	GetStride	LANGUAGE	std.ArrayList and Zig slices
+Core	GetUInt32	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	GetUsage	BOUND	ZJoltTempAllocator ZJOLT_TEMP_ALLOCATOR_KIND_HOST zjoltPhysicsSystemGetTempAllocatorStats ZJOLT_TEMP_ALLOCATOR_KIND_MALLOC_FALLBACK
+Core	GrowTable	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	HasError	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Core	Hash64	LANGUAGE	std.hash.Wyhash
+Core	HashBytes	LANGUAGE	std.hash.Wyhash
+Core	HashCombine	LANGUAGE	std.hash.Wyhash
+Core	HashCombineArgs	LANGUAGE	std.hash.Wyhash
+Core	HashString	LANGUAGE	std.hash.Wyhash
+Core	HashTable	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	InsertKey	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	InsertionSort	LANGUAGE	std.sort.insertion
+Core	InternalGetPointer	BOUND	zjoltReflectObjectSaveStream zjoltReflectObjectRestoreStream
+Core	Invoke	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	IsAbstract	BOUND	zjoltReflectGetInfo
+Core	IsDone	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	IsEOF	EXTENSION	ZJoltStream zjoltPhysicsSystemRestoreStateStream
+Core	IsEmpty	LANGUAGE	std.ArrayList and Zig slices
+Core	IsFailed	EXTENSION	ZJoltStream is_failed
+Core	IsType	ZIG	src/reflect.zig:Rtti.isType
+Core	IteratorBase	LANGUAGE	std.ArrayList and Zig slices
+Core	JobHandle	BOUND	ZJoltJob zjoltJobRun zjoltJobAddRef zjoltJobRelease ZJoltHostJobSystem
+Core	JobSystemWithBarrier	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	KeyValue	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	LFHMAllocator	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	LFHMAllocatorContext	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	LockFreeHashMap	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	MutexArray	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	MutexBase	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	NeonShuffleFloat32x4	LANGUAGE	@shuffle on @Vector(4, f32)
+Core	NibbleToBinary	LANGUAGE	std.fmt.allocPrint
+Core	NonCopyable	LANGUAGE	defer and Zig ownership; no copy constructors exist
+Core	OwnsMemory	LANGUAGE	std.ArrayList and Zig slices
+Core	PrefetchL1	LANGUAGE	@prefetch
+Core	QuickSort	LANGUAGE	std.sort.pdq and std.PriorityQueue
+Core	QuickSortMedianOfThree	LANGUAGE	std.sort.pdq
+Core	QuickSortNinther	LANGUAGE	std.sort.pdq
+Core	RVVShuffleFloat32x4	LANGUAGE	@shuffle on @Vector(4, f32)
+Core	RVVSumElementsFloat32x4	LANGUAGE	@reduce on @Vector(4, f32)
+Core	Reallocate	BOUND	ZJoltAllocator zjoltInit
+Core	ReallocateImpl	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	RefConst	LANGUAGE	defer and Zig ownership; no copy constructors exist
+Core	RefTarget	LANGUAGE	defer and Zig ownership; no copy constructors exist
+Core	RefTargetVirtual	LANGUAGE	defer and Zig ownership; no copy constructors exist
+Core	Register	BOUND	zjoltReflectFind zjoltReflectFindByHash
+Core	RegisterDefaultAllocator	BOUND	zjoltInit ZJoltInitDesc
+Core	RemoveDependency	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	RemoveDependencyAndQueue	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	RemoveThread	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	Reserve	LANGUAGE	std.ArrayList and Zig slices
+Core	RestoreObjectArray	BOUND	zjoltShapeRestore zjoltShapeRestoreStream
+Core	RestoreObjectReference	BOUND	zjoltShapeRestore zjoltShapeRestoreStream
+Core	STLAlignedAllocator	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	STLAllocator	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	STLLocalAllocator	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	STLTempAllocator	LANGUAGE	std.mem.Allocator; Zig passes allocators explicitly
+Core	SaveObjectArray	BOUND	zjoltShapeSave zjoltShapeSaveStream
+Core	SaveObjectReference	BOUND	zjoltShapeSave zjoltShapeSaveStream
+Core	ScopeExit	LANGUAGE	defer and Zig ownership; no copy constructors exist
+Core	Semaphore	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	SetBarrier	BOUND	zjoltJobSystemCreateHost
+Core	SetControlValue	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	SetError	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Core	SetName	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
+Core	SetNumBuckets	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	SetThreadExitFunction	BOUND	zjoltJobSystemCreateThreadPoolWithHooks ZJoltThreadHookFn
+Core	SetThreadInitFunction	BOUND	zjoltJobSystemCreateThreadPoolWithHooks ZJoltThreadHookFn zjoltJobSystemCreateThreadPool
+Core	SharedMutexBase	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	Sort	BOUND	ZJoltVehicleCurveDesc
+Core	StaticArray	LANGUAGE	std.ArrayList and Zig slices
+Core	StaticCast	BOUND	zjoltReflectCastTo
+Core	StreamIn	EXTENSION	ZJoltStream zjoltPhysicsSystemRestoreStateStream zjoltPhysicsSystemRestoreBodyStateLockedStream zjoltShapeRestoreStream zjoltSceneRestoreStream zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+Core	StreamInWrapper	EXTENSION	ZJoltStream zjoltPhysicsSystemRestoreStateStream
+Core	StreamOut	EXTENSION	ZJoltStream zjoltPhysicsSystemSaveStateStream zjoltPhysicsSystemSaveBodyStateLockedStream zjoltShapeSaveStream zjoltSceneSaveStream zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+Core	StreamOutWrapper	EXTENSION	ZJoltStream zjoltPhysicsSystemSaveStateStream
+Core	StridedPtr	LANGUAGE	std.ArrayList and Zig slices
+Core	StringFormat	LANGUAGE	std.fmt.allocPrint
+Core	StringReplace	LANGUAGE	std.mem.replace
+Core	StringToVector	LANGUAGE	std.mem.splitScalar
+Core	TempAllocatorImpl	BOUND	ZJOLT_TEMP_ALLOCATOR_KIND_FIXED ZJoltPhysicsSystemDesc
+Core	TempAllocatorImplWithMallocFallback	BOUND	ZJOLT_TEMP_ALLOCATOR_KIND_MALLOC_FALLBACK zjoltPhysicsSystemGetTempAllocatorStats zjoltPhysicsSystemTempAllocatorCanAllocate
+Core	ToLower	LANGUAGE	std.ascii.toLower
+Core	ToOffset	LANGUAGE	std.HashMap and std.AutoHashMap
+Core	ToVec4	ZIG	src/c/core.zig:Color.toVec4
+Core	Trace	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Core	TraceStats	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Core	UnlockAll	LANGUAGE	std.Thread.Mutex and std.Thread.Semaphore
+Core	UpdateReferenceTime	INTERNAL	no public declaration
+Core	VectorToString	LANGUAGE	std.mem.join
+Core	Wait	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Core	WaitForJobs	BOUND	zjoltJobSystemCreateHost zjoltPhysicsSystemStep

@@ -507,6 +507,52 @@ static void makeBoxMesh(float half_x, float half_y, float half_z,
   memcpy(indices, faces, sizeof(faces));
 }
 
+//===----------------------------------------------------------------------===//
+// A memory-backed ZJoltStream
+//
+// The C-side equivalent of what a real host would write for its own pack
+// file or socket: read/write/is_eof/is_failed over a plain buffer. Proves the
+// four function pointers in ZJoltStream are exactly what the header says they
+// are, from C with no C++ or Zig in the way — the same reason this whole file
+// exists.
+//===----------------------------------------------------------------------===//
+
+typedef struct MemStream {
+  unsigned char *buffer;
+  size_t capacity;
+  size_t pos;
+  bool overflowed;
+  bool eof;
+} MemStream;
+
+static void memStreamWrite(void *user, const void *data, size_t size) {
+  MemStream *s = (MemStream *)user;
+  if (s->pos + size > s->capacity) {
+    s->overflowed = true;
+    return;
+  }
+  memcpy(s->buffer + s->pos, data, size);
+  s->pos += size;
+}
+
+static void memStreamRead(void *user, void *data, size_t size) {
+  MemStream *s = (MemStream *)user;
+  size_t available = s->pos < s->capacity ? s->capacity - s->pos : 0;
+  size_t taken = size < available ? size : available;
+  if (taken != 0) memcpy(data, s->buffer + s->pos, taken);
+  if (taken < size) {
+    memset((unsigned char *)data + taken, 0, size - taken);
+    s->eof = true;
+  }
+  s->pos += size;
+}
+
+static bool memStreamIsEof(void *user) { return ((MemStream *)user)->eof; }
+
+static bool memStreamIsFailed(void *user) {
+  return ((MemStream *)user)->overflowed;
+}
+
 int main(void) {
   printf("zjolt C smoke test\n");
 
@@ -694,13 +740,54 @@ int main(void) {
             ZJOLT_SHAPE_SUB_TYPE_ROTATED_TRANSLATED,
         "decorated sub type");
 
+  /* SubShapeIdCreator: PushID is pure bit arithmetic, exercised here with no
+     shape at all -- just Create/Push/GetID/GetNumBitsWritten/Destroy. */
+  ZJoltSubShapeIdCreator *creator = NULL;
+  CHECK_OK(zjoltSubShapeIdCreatorCreate(&creator));
+  CHECK(zjoltSubShapeIdCreatorGetNumBitsWritten(creator) == 0,
+        "a fresh creator has written no bits");
+  CHECK_OK(zjoltSubShapeIdCreatorPushID(creator, 1, 2));
+  CHECK(zjoltSubShapeIdCreatorGetNumBitsWritten(creator) == 2,
+        "PushID advances the bit count by exactly `bits`");
+  CHECK(zjoltSubShapeIdCreatorPushID(creator, 4, 2) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a value that does not fit in `bits` bits is refused");
+  CHECK(zjoltSubShapeIdCreatorPushID(creator, 0, 31) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a push past SubShapeID::MaxBits (32) total is refused");
+  zjoltSubShapeIdCreatorDestroy(creator);
+
+  /* zjoltShapeGetSubShapeIDFromIndexInto, chained from a fresh creator for
+     one level, matches the direct, root-only zjoltShapeGetSubShapeIDFromIndex
+     exactly. */
+  ZJoltCompoundChild pair_children[2];
+  memset(pair_children, 0, sizeof(pair_children));
+  pair_children[0].shape = sphere;
+  pair_children[0].rotation = identity;
+  pair_children[1].shape = box;
+  pair_children[1].rotation = identity;
+  pair_children[1].position.x = 2.0f;
+  ZJoltShape *pair = NULL;
+  CHECK_OK(zjoltShapeCreateStaticCompound(pair_children, 2, &pair));
+
+  ZJoltSubShapeId direct_id = ZJOLT_SUB_SHAPE_ID_EMPTY;
+  CHECK_OK(zjoltShapeGetSubShapeIDFromIndex(pair, 1, &direct_id));
+
+  ZJoltSubShapeIdCreator *pair_creator = NULL;
+  CHECK_OK(zjoltSubShapeIdCreatorCreate(&pair_creator));
+  CHECK_OK(zjoltShapeGetSubShapeIDFromIndexInto(pair, 1, pair_creator));
+  CHECK(zjoltSubShapeIdCreatorGetID(pair_creator) == direct_id,
+        "the chained and direct paths agree at the root");
+  zjoltSubShapeIdCreatorDestroy(pair_creator);
+  zjoltShapeRelease(pair);
+
   /* Convex hull from the eight corners of a cube. */
   ZJoltVec3 hull_points[8];
   uint32_t mesh_indices[36];
   makeBoxMesh(0.5f, 0.5f, 0.5f, hull_points, mesh_indices);
   ZJoltShape *hull = NULL;
-  CHECK_OK(zjoltShapeCreateConvexHull(hull_points, 8, 0.05f, 0.0f, 1000.0f,
-                                      NULL, &hull));
+  CHECK_OK(zjoltShapeCreateConvexHull(hull_points, 8, 0.05f, 0.0f, 0.0f,
+                                      1000.0f, NULL, &hull));
   CHECK(zjoltShapeGetSubType(hull) == ZJOLT_SHAPE_SUB_TYPE_CONVEX_HULL,
         "hull sub type");
 
@@ -709,8 +796,10 @@ int main(void) {
   uint32_t floor_indices[36];
   makeBoxMesh(20.0f, 0.5f, 20.0f, floor_vertices, floor_indices);
   ZJoltShape *floor_shape = NULL;
-  CHECK_OK(zjoltShapeCreateMesh(floor_vertices, 8, floor_indices, 12, NULL,
-                                NULL, 0, 0, &floor_shape));
+  CHECK_OK(zjoltShapeCreateMesh(
+      floor_vertices, 8, floor_indices, 12, NULL, NULL, NULL, 0, 0,
+      ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE,
+      ZJOLT_MESH_BUILD_QUALITY_FAVOR_RUNTIME_PERFORMANCE, &floor_shape));
   CHECK(zjoltShapeGetSubType(floor_shape) == ZJOLT_SHAPE_SUB_TYPE_MESH,
         "floor is a mesh");
 
@@ -776,6 +865,47 @@ int main(void) {
 
   zjoltShapeRelease(restored);
   free(saved);
+
+  //-------------------------------------------------------------------------
+  // Save and restore through a host stream
+  //-------------------------------------------------------------------------
+
+  unsigned char stream_buffer[1 << 16];
+  MemStream stream_out = {stream_buffer, sizeof(stream_buffer), 0, false,
+                          false};
+  ZJoltStream save_stream = {memStreamRead, memStreamWrite, memStreamIsEof,
+                             memStreamIsFailed, &stream_out};
+  CHECK_OK(zjoltShapeSaveStream(hull, &save_stream));
+  CHECK(stream_out.pos > 0, "a shape saved through a stream wrote something");
+
+  MemStream stream_in = {stream_buffer, stream_out.pos, 0, false, false};
+  ZJoltStream restore_stream = {memStreamRead, memStreamWrite, memStreamIsEof,
+                                memStreamIsFailed, &stream_in};
+  ZJoltShape *stream_restored = NULL;
+  CHECK_OK(zjoltShapeRestoreStream(&restore_stream, &stream_restored));
+  CHECK(zjoltShapeGetSubType(stream_restored) ==
+            ZJOLT_SHAPE_SUB_TYPE_CONVEX_HULL,
+        "a shape restored through a stream keeps its sub type");
+  zjoltShapeRelease(stream_restored);
+
+  /* A stream too small to hold the payload must fail cleanly through
+     is_failed rather than silently writing a truncated prefix and reporting
+     success. */
+  unsigned char tiny_buffer[4];
+  MemStream tiny_out = {tiny_buffer, sizeof(tiny_buffer), 0, false, false};
+  ZJoltStream tiny_stream = {memStreamRead, memStreamWrite, memStreamIsEof,
+                             memStreamIsFailed, &tiny_out};
+  CHECK(zjoltShapeSaveStream(hull, &tiny_stream) == ZJOLT_RESULT_IO_ERROR,
+        "a stream too small to hold the shape fails cleanly");
+  CHECK(tiny_out.overflowed, "...and the writer's own bookkeeping says why");
+
+  /* A stream missing a required callback is refused outright, not called
+     through a null function pointer. */
+  ZJoltStream incomplete_stream = {NULL, memStreamWrite, NULL, NULL,
+                                   &stream_out};
+  CHECK(zjoltShapeSaveStream(hull, &incomplete_stream) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a stream missing is_failed is refused, not called");
 
   //-------------------------------------------------------------------------
   // World
@@ -907,6 +1037,145 @@ int main(void) {
   const ZJoltVec3 force = {0.0f, 0.0f, 100.0f};
   const ZJoltVec3 torque = {0.0f, 50.0f, 0.0f};
   zjoltBodyAddForceAndTorque(system, ball_id, &force, &torque);
+
+  /* Read back what was just added. Left in place, uncancelled and
+     unconsumed, for whatever later in this file steps the ball -- this only
+     reads. */
+  ZJoltVec3 accumulated_force = {1, 2, 3};
+  ZJoltVec3 accumulated_torque = {1, 2, 3};
+  zjoltBodyGetAccumulatedForce(system, ball_id, &accumulated_force);
+  zjoltBodyGetAccumulatedTorque(system, ball_id, &accumulated_torque);
+  CHECK(fabsf(accumulated_force.z - 100.0f) < 1e-6f, "the accumulated force reads back exactly");
+  CHECK(fabsf(accumulated_torque.y - 50.0f) < 1e-6f, "the accumulated torque reads back exactly");
+
+  /* A body of its own for everything that MUTATES mass, inertia or force
+     state below, so none of it touches ball_id's trajectory for the rest of
+     this file. */
+  ZJoltBodyDesc probe_desc;
+  zjoltBodyDescInit(&probe_desc);
+  probe_desc.shape = sphere;
+  probe_desc.object_layer = LAYER_MOVING;
+  probe_desc.position.y = (ZJoltReal)5.0;
+  ZJoltBodyId probe_id = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltBodyCreateAndAdd(system, &probe_desc, ZJOLT_ACTIVATION_DONT_ACTIVATE,
+                                 &probe_id));
+
+  zjoltBodyAddForceAndTorque(system, probe_id, &force, &torque);
+  zjoltBodyResetForce(system, probe_id);
+  zjoltBodyResetTorque(system, probe_id);
+  ZJoltVec3 reset_force = {1, 2, 3};
+  zjoltBodyGetAccumulatedForce(system, probe_id, &reset_force);
+  CHECK(reset_force.x == 0.0f && reset_force.y == 0.0f && reset_force.z == 0.0f,
+        "reset cleared the accumulated force");
+
+  /* Runtime mass and inertia: a struct pointer (ZJoltMassProperties) and a
+     4x4 matrix pointer (ZJoltMat44) crossing the boundary, which is exactly
+     the residue only a plain-C caller exercises. */
+  CHECK(zjoltBodyGetAllowedDOFs(system, probe_id) == ZJOLT_ALLOWED_DOFS_ALL,
+        "a body created without allowed_dofs set reads back ALL");
+  CHECK(zjoltBodyHasMotionProperties(system, probe_id),
+        "a dynamic body has motion properties");
+  CHECK(!zjoltBodyHasMotionProperties(system, floor_id),
+        "an ordinary static body has none");
+  const float inv_mass_before = zjoltBodyGetInverseMassUnchecked(system, probe_id);
+  CHECK(inv_mass_before > 0.0f, "a dynamic sphere has a finite mass");
+  CHECK_OK(zjoltBodyScaleToMass(system, probe_id, 1.0f / inv_mass_before * 2.0f));
+  CHECK(fabsf(zjoltBodyGetInverseMassUnchecked(system, probe_id) - inv_mass_before * 0.5f) < 1e-4f,
+        "ScaleToMass halved the inverse mass when the mass doubled");
+
+  const ZJoltMassProperties custom_mass = {
+      10.0f, {1.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f, 0.0f, 3.0f}};
+  CHECK_OK(zjoltBodySetMassProperties(system, probe_id, ZJOLT_ALLOWED_DOFS_ALL,
+                                      &custom_mass));
+  CHECK(fabsf(zjoltBodyGetInverseMassUnchecked(system, probe_id) - 0.1f) < 1e-5f,
+        "SetMassProperties took the custom mass");
+  CHECK(zjoltBodySetMassProperties(system, probe_id, 0, &custom_mass) ==
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+        "an all-zero DOF mask is refused rather than dividing by zero");
+
+  /* SetInverseMass reaches inverse_mass == 0 on a still-translating body --
+     the exact case SetMassProperties above cannot express while any
+     translation axis stays allowed. */
+  CHECK_OK(zjoltBodySetInverseMass(system, probe_id, 0.0f));
+  CHECK(zjoltBodyGetInverseMassUnchecked(system, probe_id) == 0.0f,
+        "SetInverseMass(0) reads back exactly zero");
+  CHECK_OK(zjoltBodySetInverseMass(system, probe_id, 0.25f));
+  CHECK(zjoltBodyGetInverseMassUnchecked(system, probe_id) == 0.25f,
+        "SetInverseMass reads back exactly what was set");
+
+  const ZJoltMat44 identity_mat44 = {
+      {1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+       0.0f, 0.0f, 0.0f, 1.0f}};
+  ZJoltMat44 local_inverse_inertia;
+  CHECK_OK(zjoltBodyGetLocalSpaceInverseInertia(system, probe_id, &local_inverse_inertia));
+  ZJoltMat44 for_identity;
+  CHECK_OK(zjoltBodyGetInverseInertiaForRotation(system, probe_id, &identity_mat44,
+                                                 &for_identity));
+  CHECK(memcmp(&local_inverse_inertia, &for_identity, sizeof(ZJoltMat44)) == 0,
+        "GetInverseInertiaForRotation at identity matches GetLocalSpaceInverseInertia");
+
+  /* Three flags with no BodyDesc field of their own: nothing sets them, so a
+     freshly created body must read Jolt's own default back, not whatever was
+     on the stack. */
+  CHECK(!zjoltBodyGetApplyGyroscopicForce(system, probe_id), "apply_gyroscopic_force defaults false");
+  CHECK(!zjoltBodyGetCollideKinematicVsNonDynamic(system, probe_id),
+        "collide_kinematic_vs_non_dynamic defaults false");
+  CHECK(!zjoltBodyGetEnhancedInternalEdgeRemoval(system, probe_id),
+        "enhanced_internal_edge_removal defaults false");
+  zjoltBodyDestroy(system, probe_id);
+
+  /* MustBeStatic: a plain sphere may be dynamic; Jolt's soft-body-only shapes
+     are out of reach here, so a plane is the simplest shape guaranteed to
+     require one. */
+  CHECK(!zjoltShapeMustBeStatic(sphere), "a sphere may be dynamic");
+  ZJoltShape *plane = NULL;
+  const ZJoltVec3 plane_normal = {0.0f, 1.0f, 0.0f};
+  CHECK_OK(zjoltShapeCreatePlane(&plane_normal, 0.0f, 0.0f, NULL, &plane));
+  CHECK(zjoltShapeMustBeStatic(plane), "a plane must be static");
+  zjoltShapeRelease(plane);
+
+  /* Detach a body from its id, reassign a chosen one, and confirm the same
+     object comes back. A body of its own, so none of this disturbs ball_id
+     for the rest of this file. */
+  ZJoltBodyDesc detach_desc;
+  zjoltBodyDescInit(&detach_desc);
+  detach_desc.shape = sphere;
+  detach_desc.object_layer = LAYER_MOVING;
+  detach_desc.position.y = (ZJoltReal)5.0;
+  detach_desc.user_data = 0xD07u;
+  ZJoltBodyId detach_id = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltBodyCreateAndAdd(system, &detach_desc, ZJOLT_ACTIVATION_DONT_ACTIVATE,
+                                 &detach_id));
+
+  ZJoltUnassignedBody *unassigned = NULL;
+  CHECK_OK(zjoltBodyUnassignId(system, detach_id, &unassigned));
+  CHECK(!zjoltBodyIsAdded(system, detach_id), "the old id is no longer added");
+  const ZJoltBodyId reassigned_id = 777u;
+  ZJoltBodyId assigned_out = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltUnassignedBodyAssignId(system, unassigned, reassigned_id, &assigned_out));
+  CHECK(assigned_out == reassigned_id, "the body took the chosen id");
+  CHECK(zjoltBodyGetUserData(system, assigned_out) == 0xD07u,
+        "the reassigned body is the same object, user data intact");
+  zjoltBodyDestroy(system, assigned_out);
+
+  /* The sequence number byte is a documented layout, not a guess: destroying
+     a body and creating a fresh one recycles the same index with the next
+     sequence number. */
+  ZJoltBodyDesc scratch_desc;
+  zjoltBodyDescInit(&scratch_desc);
+  scratch_desc.shape = sphere;
+  scratch_desc.object_layer = LAYER_MOVING;
+  ZJoltBodyId scratch_id = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltBodyCreate(system, &scratch_desc, &scratch_id));
+  const uint32_t scratch_index = scratch_id & 0x7fffffu;
+  const uint8_t scratch_seq = zjoltBodyIdGetSequenceNumber(scratch_id);
+  zjoltBodyDestroy(system, scratch_id);
+  ZJoltBodyId recycled_id = ZJOLT_BODY_ID_INVALID;
+  CHECK_OK(zjoltBodyCreate(system, &scratch_desc, &recycled_id));
+  CHECK((recycled_id & 0x7fffffu) == scratch_index, "the freed index was recycled");
+  CHECK(zjoltBodyIdGetSequenceNumber(recycled_id) == (uint8_t)(scratch_seq + 1),
+        "the recycled id's sequence number advanced by one");
+  zjoltBodyDestroy(system, recycled_id);
 
   /* Jolt asserts its way out of a max_bodies past its id range; this has to
      come back as an error instead. */
@@ -1461,9 +1730,11 @@ int main(void) {
   const ZJoltPhysicsMaterial *quad_materials[2] = {gravel, metal};
 
   ZJoltShape *quad = NULL;
-  CHECK_OK(zjoltShapeCreateMesh(quad_vertices, 4, quad_indices, 2,
-                                quad_triangle_materials, quad_materials, 2, 0,
-                                &quad));
+  CHECK_OK(zjoltShapeCreateMesh(
+      quad_vertices, 4, quad_indices, 2, quad_triangle_materials, NULL,
+      quad_materials, 2, 0,
+      ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE,
+      ZJOLT_MESH_BUILD_QUALITY_FAVOR_RUNTIME_PERFORMANCE, &quad));
 
   ZJoltBodyDesc quad_desc;
   zjoltBodyDescInit(&quad_desc);

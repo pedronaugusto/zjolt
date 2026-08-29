@@ -38,8 +38,8 @@ ZJoltResult zjoltPhysicsMaterialCreate(const char *debug_name,
 
 const ZJoltPhysicsMaterial *zjoltPhysicsMaterialDefault(void) {
   // RegisterTypes creates it and UnregisterTypes drops it, so its lifetime is
-  // exactly the library's. Reported as null outside that window rather than as
-  // a pointer that used to be good.
+  // exactly the library's. Reported as null outside that window rather than
+  // as a dangling pointer.
   if (!zjolt::IsInitialized()) return nullptr;
   return zjolt::ToC(JPH::PhysicsMaterial::sDefault.GetPtr());
 }

@@ -1,24 +1,24 @@
 //===----------------------------------------------------------------------===//
 // zjolt — a whole world, described rather than simulated.
 //
-// A few conversions here are duplicated rather than shared, the same way
-// zjolt_ragdoll.cpp and zjolt_vehicle.cpp duplicate theirs: the ZJoltBodyDesc
-// and ZJoltSoftBodyDesc field mappings come from zjolt_body.cpp and
-// zjolt_softbody.cpp, and the two handle casts come from zjolt_constraint.cpp
-// and zjolt_softbody.cpp, where they are inline in their own translation
-// units. This subsystem adds files and appends registrations; it does not
-// edit the translation units those would otherwise be promoted out of.
+// A few conversions here are duplicated rather than shared, the same
+// way zjolt_ragdoll.cpp/zjolt_vehicle.cpp duplicate theirs: field
+// mappings from zjolt_body.cpp/zjolt_softbody.cpp, handle casts from
+// zjolt_constraint.cpp/zjolt_softbody.cpp — this subsystem adds files
+// and appends registrations, not editing the units those would
+// otherwise be promoted out of.
 //
-// The container around the serialised payload is the one zjolt_shape.cpp and
-// zjolt_state.cpp write, field for field, with a magic tag of its own — the
-// tags differ deliberately, so a shape buffer handed to a scene restore is
-// refused on the tag rather than parsed.
+// The container around the serialised payload is the one
+// zjolt_shape.cpp/zjolt_state.cpp write, field for field, with its own
+// magic tag — deliberately different, so a shape buffer handed to a scene restore is refused on the tag rather than parsed.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
 #include "zjolt_scene.h"
 
 #include <Jolt/Core/UnorderedSet.h>
+#include <Jolt/ObjectStream/ObjectStreamIn.h>
+#include <Jolt/ObjectStream/ObjectStreamOut.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsScene.h>
@@ -28,10 +28,7 @@
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// A scene is one of the handles Jolt constructs and reference counts itself,
-// so it is a reinterpret_cast tag onto JPH::PhysicsScene exactly as ZJoltShape
-// is onto JPH::Shape in zjolt_internal.h — never completed, never dereferenced
-// as the tag, every use going back through the Jolt type first.
+// A scene is Jolt-constructed and reference-counted, so it is a reinterpret_cast tag onto JPH::PhysicsScene exactly as ZJoltShape is onto JPH::Shape (zjolt_internal.h) — never completed or dereferenced as the tag, every use going back through the Jolt type first.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -77,12 +74,13 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Descriptor conversion
 //
-// Mirrors zjolt_body.cpp's BuildCreationSettings and zjolt_softbody.cpp's
-// BuildSoftBodyCreationSettings field for field, plus the read-back direction
-// neither of them needs.
+// Mirrors zjolt_body.cpp's BuildCreationSettings and zjolt_softbody.cpp's BuildSoftBodyCreationSettings field for field, plus the read-back direction neither of them needs.
 //===----------------------------------------------------------------------===//
 
-JPH::EMotionType ToJoltMotionType(ZJoltMotionType type) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Its callers read this straight out of a host-supplied
+// ZJoltBodyDesc, which is the entry point this value arrives from.
+JPH::EMotionType ToJoltMotionType(int32_t type) {
   switch (type) {
     case ZJOLT_MOTION_TYPE_STATIC:
       return JPH::EMotionType::Static;
@@ -121,10 +119,11 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
   out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
-  out->mMotionType = ToJoltMotionType(desc.motion_type);
-  out->mMotionQuality = desc.motion_quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-                            ? JPH::EMotionQuality::LinearCast
-                            : JPH::EMotionQuality::Discrete;
+  out->mMotionType = ToJoltMotionType(zjolt::RawEnum(desc.motion_type));
+  out->mMotionQuality =
+      zjolt::RawEnum(desc.motion_quality) == ZJOLT_MOTION_QUALITY_LINEAR_CAST
+          ? JPH::EMotionQuality::LinearCast
+          : JPH::EMotionQuality::Discrete;
   out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
   out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
   out->mIsSensor = desc.is_sensor;
@@ -138,7 +137,7 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
   out->mMaxAngularVelocity = desc.max_angular_velocity;
   out->mGravityFactor = desc.gravity_factor;
 
-  if (desc.override_mass_properties ==
+  if (zjolt::RawEnum(desc.override_mass_properties) ==
       ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
     if (!(desc.mass > 0.0f)) {
       return zjolt::SetError(
@@ -158,12 +157,10 @@ ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
 
 /// The shape one body entry holds, or null — without building one.
 ///
-/// GetShape() on its own is not safe to ask. When the entry carries unbuilt
-/// shape SETTINGS instead of a shape (the two are mutually exclusive), it
-/// builds the shape into a temporary and hands back a pointer that dies with
-/// it (BodyCreationSettings.cpp:186). Nothing this ABI creates or restores is
-/// ever in that state — the binary restore always stores a built shape — and
-/// answering "no shape" for it is what keeps every caller here off that path.
+/// GetShape() alone is unsafe here: if the entry carries unbuilt shape
+/// SETTINGS instead of a shape, it builds into a temporary and returns a
+/// pointer that dies with it. Nothing this ABI creates or restores is ever
+/// in that state, so this never takes that path.
 const JPH::Shape *ShapeOf(const JPH::BodyCreationSettings &settings) {
   if (settings.GetShapeSettings() != nullptr) return nullptr;
   return settings.GetShape();
@@ -276,10 +273,7 @@ void ReadSoftBodyCreationSettings(const JPH::SoftBodyCreationSettings &settings,
 //===----------------------------------------------------------------------===//
 // The preconditions Jolt leaves to an assert
 //
-// Everything below is reachable only through zjoltSceneRestore — every
-// zjoltSceneAdd* call refuses the same things at the door — but a buffer is
-// input, and input is where a level that was cooked by an older tool arrives
-// from. Each check names the Jolt line that would otherwise fire.
+// Reachable only through zjoltSceneRestore — zjoltSceneAdd* calls refuse the same things at the door — since a buffer is input, and input is where a level cooked by an older tool arrives from.
 //===----------------------------------------------------------------------===//
 
 /// What SaveBinaryState dereferences: a body's shape
@@ -350,9 +344,7 @@ ZJoltResult ValidateInstantiable(const JPH::PhysicsScene &scene) {
 //===----------------------------------------------------------------------===//
 // The container
 //
-// The shared framing in zjolt_internal.h, with this subsystem's own magic
-// tag. A scene buffer handed to zjoltShapeRestore, or the other way round, is
-// refused on the tag rather than parsed into something plausible and wrong.
+// The shared framing in zjolt_internal.h, with this subsystem's own magic tag: a scene buffer handed to zjoltShapeRestore, or the reverse, is refused on the tag rather than parsed into something plausible and wrong.
 //===----------------------------------------------------------------------===//
 
 /// The shared container from zjolt_internal.h, with this subsystem's own tag
@@ -728,6 +720,157 @@ ZJoltResult zjoltSceneRestore(const void *data, size_t size,
   restored->AddRef();
   *out = zjolt::ToC(restored);
   return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// The stream form
+//
+// Jolt's own payload behind the twelve-byte header zjolt::WriteStreamHeader/ReadStreamHeader write, not zjoltSceneSave's 32-byte container (@see ZJoltStream in zjolt_core.h). Restoring a shape here goes through the same Shape::sRestoreFromBinaryState path as zjoltShapeRestoreStream, so the same reduced margin against a corrupted (not adversarial) stream applies — @see the note above zjoltShapeSaveStream.
+//===----------------------------------------------------------------------===//
+
+namespace {
+constexpr uint8_t kStreamMagic[4] = {'Z', 'S', 'S', 'C'};
+}  // namespace
+
+ZJoltResult zjoltSceneSaveStream(const ZJoltScene *scene,
+                                 const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(scene, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+
+  const JPH::PhysicsScene *jolt = zjolt::ToJolt(scene);
+  const ZJoltResult valid = ValidateSavable(*jolt);
+  if (valid != ZJOLT_RESULT_OK) return valid;
+
+  zjolt::HostStream host(*stream);
+  zjolt::WriteStreamHeader(host, kStreamMagic);
+  jolt->SaveBinaryState(host, /*inSaveShapes=*/true, /*inSaveGroupFilter=*/false);
+
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while writing the scene");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSceneRestoreStream(const ZJoltStream *stream,
+                                    ZJoltScene **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(
+      host, kStreamMagic, "not a scene saved by zjoltSceneSaveStream");
+  if (header != ZJOLT_RESULT_OK) return header;
+
+  JPH::PhysicsScene::PhysicsSceneResult result =
+      JPH::PhysicsScene::sRestoreFromBinaryState(host);
+
+  if (result.HasError()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT, result.GetError().c_str());
+  }
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while reading the scene");
+  }
+  if (!result.IsValid() || host.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the stream ended before the scene did");
+  }
+
+  JPH::PhysicsScene *restored = result.Get();
+  restored->AddRef();
+  *out = zjolt::ToC(restored);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Jolt's own object stream
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSceneSaveObjectStream(const ZJoltScene *scene,
+                                       ZJoltObjectStreamFormat format,
+                                       const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_format = zjolt::RawEnum(format);
+  if (!zjolt::Present(scene, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+#ifdef JPH_OBJECT_STREAM
+  const JPH::PhysicsScene *jolt = zjolt::ToJolt(scene);
+  const ZJoltResult valid = ValidateSavable(*jolt);
+  if (valid != ZJOLT_RESULT_OK) return valid;
+
+  zjolt::ObjectStreamOStream out(*stream);
+  const JPH::ObjectStream::EStreamType type =
+      raw_format == ZJOLT_OBJECT_STREAM_FORMAT_TEXT
+          ? JPH::ObjectStream::EStreamType::Text
+          : JPH::ObjectStream::EStreamType::Binary;
+  const bool ok = JPH::ObjectStreamOut::sWriteObject(out, type, *jolt);
+
+  if (out.StreamFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while writing the scene");
+  }
+  if (!ok) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "Jolt's object stream could not write this scene");
+  }
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltSceneRestoreObjectStream(const ZJoltStream *stream,
+                                          ZJoltScene **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+#ifdef JPH_OBJECT_STREAM
+  zjolt::ObjectStreamIStream in(*stream);
+  JPH::PhysicsScene *scene = nullptr;
+  const bool ok = JPH::ObjectStreamIn::sReadObject(in, scene);
+
+  if (in.StreamFailed()) {
+    delete scene;
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while reading the scene");
+  }
+  if (!ok || scene == nullptr) {
+    delete scene;
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "not a scene Jolt's object stream can read");
+  }
+
+  // sReadObject's raw-pointer overload hands back a freshly constructed
+  // object nobody has referenced yet -- refcount zero, the arithmetic
+  // zjolt::Own answers for, NOT the AddRef-once compensation
+  // zjoltSceneRestore makes for a Ref<> that is about to drop its own
+  // reference at scope exit. There is no such Ref<> here.
+  *out = zjolt::ToC(zjolt::Own(scene));
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
 }
 
 }  // extern "C"

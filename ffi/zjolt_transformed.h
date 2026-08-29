@@ -18,28 +18,18 @@ extern "C" {
 //===----------------------------------------------------------------------===//
 // A shape and its placement, with no body and no physics system
 //
-// zjolt_query.h answers "what does this system's geometry look like from
-// here" — every query in it takes a ZJoltPhysicsSystem. This is the other
-// half: given a shape a caller already has in hand, and a world transform for
-// it, run the same kinds of query against it alone. There is no broad phase
-// to walk, because there is nothing to find but the one shape already named.
-//
-// Typical sources of one of these: a broad-phase hit read under a body lock,
-// carried past the point where the lock is safe to hold (that is what the
-// upstream type this wraps is FOR); or a compound's child, drilled into with
-// zjoltShapeGetSubShapeTransformedShape.
+// The other half of zjolt_query.h: given a shape already in hand and a world transform, run the same query kinds
+// against it alone. Typical source: a broad-phase hit carried past its body lock, or a compound's child.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltTransformedShape ZJoltTransformedShape;
 
-/// Wraps `shape` at the given world placement. Takes a reference on `shape`,
-/// so the caller may release theirs once this returns; release the result
-/// with zjoltTransformedShapeDestroy.
+/// Wraps `shape` at the given world placement. Takes a reference on
+/// `shape`, so the caller may release theirs once this returns; release
+/// the result with zjoltTransformedShapeDestroy.
 ///
 /// `scale` may be NULL for (1, 1, 1). `body` may be ZJOLT_BODY_ID_INVALID
-/// when there is no body behind this shape — a filter that inspects the
-/// reported body id then sees the invalid id, same as any other query result
-/// naming a body-less shape.
+/// when there is no body behind this shape.
 ZJOLT_API ZJoltResult zjoltTransformedShapeCreate(
     const ZJoltShape *shape, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *scale, ZJoltBodyId body,
@@ -67,10 +57,9 @@ ZJOLT_API void zjoltTransformedShapeGetWorldTransform(
 /// Repositions `ts` in place, in the same sense zjoltTransformedShapeCreate
 /// took its placement in.
 ///
-/// A NULL `scale` SETS the scale to (1, 1, 1); it does not leave the current
-/// one alone. Moving an already-scaled shape means passing its scale again —
-/// read it back with zjoltTransformedShapeGetWorldTransform first if the
-/// caller does not still hold it.
+/// A NULL `scale` SETS the scale to (1, 1, 1), it does not leave the
+/// current one alone — pass it again (read back via
+/// zjoltTransformedShapeGetWorldTransform) to move an already-scaled shape.
 ZJOLT_API void zjoltTransformedShapeSetWorldTransform(
     ZJoltTransformedShape *ts, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *scale);
@@ -108,14 +97,28 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeGetSupportingFace(
     ZJoltVec3 *out_vertices, uint32_t *out_count);
 
 //===----------------------------------------------------------------------===//
+// Decomposing a compound
+//
+// zjoltShapeGetSubShapeIDFromIndexInto composes a grandchild's id when the path is already known. This is the
+// other way in: hand Jolt a box, walk the tree, and report each LEAF overlapping it as its own placed handle.
+//===----------------------------------------------------------------------===//
+
+/// Every leaf of `ts` whose world-space bounds overlap `box`, each as a
+/// fresh, owned handle — release every one with zjoltTransformedShapeDestroy.
+/// A childless shape reports itself, once. `filter` may be NULL to
+/// accept every leaf; the body id it sees is always ZJOLT_BODY_ID_INVALID.
+///
+/// Destroy returned handles before retrying a short buffer bigger; ZJOLT_RESULT_OUT_OF_MEMORY leaves NOTHING behind.
+ZJOLT_API ZJoltResult zjoltTransformedShapeCollectTransformedShapes(
+    const ZJoltTransformedShape *ts, const ZJoltAABox *box,
+    const ZJoltShapeFilter *filter, ZJoltTransformedShape **out_shapes,
+    uint32_t capacity, uint32_t *out_count);
+
+//===----------------------------------------------------------------------===//
 // Triangle read-back
 //
-// A second ZJoltShapeTrianglesContext-shaped type rather than that one
-// reused: sharing it would mean this header including zjolt_shape.h for a
-// scratch buffer's layout alone, the one dependency zjolt_shape.h's own
-// comment on the forward-declared ZJoltTransformedShape tag was written to
-// avoid taking on in the other direction. @see zjoltShapeGetTrianglesNext for
-// the protocol, which is identical.
+// A second ZJoltShapeTrianglesContext-shaped type rather than reusing zjolt_shape.h's, avoiding a dependency
+// that header's own comment was written to avoid. @see zjoltShapeGetTrianglesNext: identical protocol.
 //===----------------------------------------------------------------------===//
 
 #if defined(__cplusplus)
@@ -147,14 +150,8 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeGetTrianglesNext(
 //===----------------------------------------------------------------------===//
 // Queries against this one shape
 //
-// Same three forms as zjolt_query.h where more than one hit is possible — a
-// compound wrapped in a single ZJoltTransformedShape still has many leaves —
-// except the streaming *Each form, left out here: the result set behind one
-// already-resolved shape is bounded by its own leaf count rather than by
-// however much of a world a broad phase might otherwise hand back, so the
-// allocation avoidance that streaming exists for in zjolt_query.h matters far
-// less on this side. Add it if that stops being true for some caller; nothing
-// here forecloses it.
+// Same three forms as zjolt_query.h, minus the streaming *Each form: a resolved shape's result set is bounded by
+// its own leaf count, so the allocation-avoidance streaming exists for matters far less here.
 //===----------------------------------------------------------------------===//
 
 /// @see zjoltCastRayClosest. `filter` may be NULL to accept every sub-shape.
@@ -181,9 +178,8 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeCollidePointAll(
 /// @see zjoltCollideShapeAll; contact points come back relative to
 /// `base_offset` for the same precision reason.
 ///
-/// `settings` may be NULL for Jolt's defaults. The separation distance that
-/// used to be a parameter of its own here is `settings->max_separation_
-/// distance`, for the reason zjolt_query.h's Overlap section gives.
+/// `settings` may be NULL for Jolt's defaults; the separation distance is
+/// `settings->max_separation_distance` (@see zjolt_query.h's Overlap section).
 ZJOLT_API ZJoltResult zjoltTransformedShapeCollideShapeAll(
     const ZJoltTransformedShape *ts, const ZJoltShape *shape,
     const ZJoltVec3 *scale, const ZJoltRVec3 *position,

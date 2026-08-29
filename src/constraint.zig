@@ -1,36 +1,17 @@
 //! Constraints: the joints between two bodies.
 //!
-//! Twelve kinds, one handle. `Constraint` is a thin owner over the C handle;
-//! which kind it is comes from `subType`, and every kind-specific accessor
-//! checks it before doing anything, so calling `hingeGetCurrentAngle` on a
-//! slider is `error.InvalidArgument` rather than a reinterpreted object.
+//! Twelve kinds, one handle. `Constraint` is a thin owner over the C
+//! handle; which kind it is comes from `subType`, and every kind-specific
+//! accessor checks it first — `hingeGetCurrentAngle` on a slider is
+//! `error.InvalidArgument`, not a reinterpreted object.
 //!
-//! ## Ownership
+//! Reference counted: `init*` hands back one reference (`deinit`/`release`
+//! drops it); adding one to a system takes a second, independent
+//! reference the system owns.
 //!
-//! A constraint is reference counted. `init*` hands back one reference that is
-//! yours — `deinit` (or `release`, which is the same thing spelled the way
-//! `Shape` spells it) drops it. Adding one to a system takes a second
-//! reference that the system owns, so these two are independent:
-//!
-//! ```zig
-//! var hinge = try zjolt.Constraint.initHinge(system, door, frame, .{
-//!     .point1 = zjolt.rvec3(0, 1, 0),
-//!     .hinge_axis1 = zjolt.vec3(0, 1, 0),
-//!     .normal_axis1 = zjolt.vec3(1, 0, 0),
-//!     .hinge_axis2 = zjolt.vec3(0, 1, 0),
-//!     .normal_axis2 = zjolt.vec3(1, 0, 0),
-//!     .limits_min = -std.math.pi / 2.0,
-//!     .limits_max = 0,
-//! });
-//! defer hinge.release();
-//! try hinge.addTo(system);
-//! ```
-//!
-//! ## Against the bodies
-//!
-//! A constraint holds raw pointers to its bodies, as Jolt does. Destroying a
-//! body a live constraint still names leaves it pointing at freed memory, and
-//! nothing detects it. Remove and release a body's constraints first.
+//! A constraint holds raw pointers to its bodies, as Jolt does. Destroying
+//! a body a live constraint still names leaves it pointing at freed
+//! memory, undetected — remove and release a body's constraints first.
 
 const std = @import("std");
 const c = @import("c/constraint.zig");
@@ -38,6 +19,8 @@ const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const system_mod = @import("system.zig");
+const stream_mod = @import("stream.zig");
+const tree_mod = @import("tree.zig");
 
 /// The body id that stands for "the world": an implicit, infinitely heavy
 /// static body at the origin. Pass it as either body to bolt the other one
@@ -75,6 +58,43 @@ pub const PathDesc = c.PathConstraintDesc;
 
 /// One control point of a cubic Hermite spline.
 pub const PathPoint = c.PathPoint;
+
+//=============================================================================
+// Custom constraints
+//
+// The callback seam a Zig host builds its own solver on. @see
+// `src/constraint_part.zig`, a port of the fourteen `ConstraintPart` types Jolt's own constraints use, meant to run in these callbacks without a crossing per Jacobian operation.
+//=============================================================================
+
+/// Body state a custom constraint's callbacks read and write. @see
+/// `ffi/zjolt_constraint.h`'s `ZJoltSolverBody`.
+pub const SolverBody = c.SolverBody;
+pub const SolverBodyPair = c.SolverBodyPair;
+
+/// One function pointer per Jolt solver virtual. Every one but `draw` and
+/// `destroy` must be set — @see `Constraint.initCustom`.
+pub const CustomCallbacks = c.CustomConstraintCallbacks;
+pub const CustomDesc = c.CustomConstraintDesc;
+
+/// What a custom constraint's `save_state` / `restore_state` callbacks talk
+/// to — a live `JPH::StateRecorder&` Jolt itself is mid-call on, not a stream
+/// this ABI built. Valid only for the length of that one callback.
+pub const StateRecorder = c.StateRecorder;
+
+/// Writes `data` through `recorder`. Called from inside a `save_state`
+/// callback; @see `src/constraint_part.zig`'s `ConstraintPart`s for what a
+/// port of Jolt's own `mTotalLambda` writes here.
+pub fn stateRecorderWriteBytes(recorder: *StateRecorder, data: []const u8) void {
+    if (data.len == 0) return;
+    c.zjoltStateRecorderWriteBytes(recorder, data.ptr, data.len);
+}
+
+/// Reads `data.len` bytes through `recorder`. Called from inside a
+/// `restore_state` callback.
+pub fn stateRecorderReadBytes(recorder: *StateRecorder, data: []u8) void {
+    if (data.len == 0) return;
+    c.zjoltStateRecorderReadBytes(recorder, data.ptr, data.len);
+}
 
 /// The frame at one point along a path.
 pub const PathFrame = struct {
@@ -160,6 +180,76 @@ pub const Path = struct {
 };
 
 //=============================================================================
+// Constraint settings
+//=============================================================================
+
+/// A constraint's configuration, snapshotted from a live one
+/// (`Constraint.constraintSettings`) or restored from a stream. Reference
+/// counted, like `Path`. Does not record which bodies the constraint it
+/// came from joins — Jolt's own note on `GetConstraintSettings`;
+/// recreating an equivalent constraint from `restoreBinaryState` still
+/// needs body ids from elsewhere.
+pub const ConstraintSettings = struct {
+    handle: *c.ConstraintSettings,
+
+    pub fn deinit(self: ConstraintSettings) void {
+        c.zjoltConstraintSettingsRelease(self.handle);
+    }
+
+    pub fn addRef(self: ConstraintSettings) void {
+        c.zjoltConstraintSettingsAddRef(self.handle);
+    }
+
+    pub fn refCount(self: ConstraintSettings) u32 {
+        return c.zjoltConstraintSettingsGetRefCount(self.handle);
+    }
+
+    /// The five base fields `Constraint.enabled`, `.constraintPriority`,
+    /// `.numVelocityStepsOverride`, `.numPositionStepsOverride` and
+    /// `.drawSize` read off a live constraint, plus `.userData` — read here
+    /// too since a settings object restored from a stream has no live
+    /// constraint to ask.
+    pub fn enabled(self: ConstraintSettings) bool {
+        return c.zjoltConstraintSettingsGetEnabled(self.handle);
+    }
+
+    pub fn constraintPriority(self: ConstraintSettings) u32 {
+        return c.zjoltConstraintSettingsGetConstraintPriority(self.handle);
+    }
+
+    pub fn numVelocityStepsOverride(self: ConstraintSettings) u32 {
+        return c.zjoltConstraintSettingsGetNumVelocityStepsOverride(self.handle);
+    }
+
+    pub fn numPositionStepsOverride(self: ConstraintSettings) u32 {
+        return c.zjoltConstraintSettingsGetNumPositionStepsOverride(self.handle);
+    }
+
+    pub fn drawConstraintSize(self: ConstraintSettings) f32 {
+        return c.zjoltConstraintSettingsGetDrawConstraintSize(self.handle);
+    }
+
+    pub fn userData(self: ConstraintSettings) u64 {
+        return c.zjoltConstraintSettingsGetUserData(self.handle);
+    }
+
+    /// Writes `self` through `stream` in Jolt's own binary form. Does not
+    /// write `userData`; Jolt's own `ConstraintSettings::SaveBinaryState`
+    /// does not either.
+    pub fn saveBinaryState(self: ConstraintSettings, stream: stream_mod.Stream) err.Error!void {
+        try err.check(c.zjoltConstraintSettingsSaveBinaryState(self.handle, &stream));
+    }
+
+    /// Reads settings written by `saveBinaryState`, whichever concrete kind
+    /// was saved. Release the result with `deinit`.
+    pub fn restoreBinaryState(stream: stream_mod.Stream) err.Error!ConstraintSettings {
+        var handle: *c.ConstraintSettings = undefined;
+        try err.check(c.zjoltConstraintSettingsRestoreBinaryState(&stream, &handle));
+        return .{ .handle = handle };
+    }
+};
+
+//=============================================================================
 // The constraint
 //=============================================================================
 
@@ -169,9 +259,8 @@ pub const Constraint = struct {
     //-------------------------------------------------------------------------
     // Construction
     //
-    // Each takes the system the bodies live in, because that is where a body
-    // id resolves. Creating does NOT add: `addTo` is what starts it
-    // simulating.
+    // Each takes the system the bodies live in, where a body id resolves.
+    // Creating does NOT add: `addTo` starts it simulating.
     //-------------------------------------------------------------------------
 
     /// Welds two bodies together, removing all six degrees of freedom.
@@ -312,6 +401,18 @@ pub const Constraint = struct {
         return .{ .handle = handle };
     }
 
+    /// A constraint whose solver virtuals forward to `desc.callbacks`,
+    /// one crossing per virtual rather than one per Jacobian operation.
+    /// `desc` carries its own two bodies, unlike every other `init*`
+    /// above. `error.InvalidArgument` for a NULL required callback
+    /// (anything but `draw`/`destroy`), or a step override of 256+.
+    pub fn initCustom(system: system_mod.PhysicsSystem, desc: CustomDesc) err.Error!Constraint {
+        var handle: *c.Constraint = undefined;
+        var raw = desc;
+        try err.check(c.zjoltConstraintCreateCustom(system.handle, &raw, &handle));
+        return .{ .handle = handle };
+    }
+
     //-------------------------------------------------------------------------
     // Reference counting
     //-------------------------------------------------------------------------
@@ -431,22 +532,12 @@ pub const Constraint = struct {
         return out;
     }
 
-    /// The constraint's frame, as a transform from constraint space into body
-    /// 1's CENTRE-OF-MASS space. Compose with the body's centre-of-mass
-    /// transform to reach the world.
-    ///
-    /// This is the rotation the `*CS` accessors are measured against: a
-    /// swing-twist or six-DOF motor target is in constraint space, and this is
-    /// what relates it to a body's own frame.
-    ///
-    /// Two of Jolt's own caveats carry through. A kind that does not constrain
-    /// rotation — point, distance, pulley — does not track the original
-    /// rotation difference, so the rotation part is arbitrary rather than
-    /// meaningful. A gear or rack and pinion constrains no position, so its
-    /// translation column is zero rather than an attachment point.
-    ///
-    /// `error.InvalidArgument` for a vehicle constraint, which Jolt derives
-    /// from its constraint base directly and which has no such frame.
+    /// The constraint's frame: a transform from constraint space into
+    /// body 1's CENTRE-OF-MASS space — compose with the body's transform
+    /// to reach the world; what the `*CS` accessors (swing-twist/six-DOF
+    /// motor targets) are measured against. A kind that does not
+    /// constrain rotation (point, distance, pulley) has an arbitrary
+    /// rotation part; gear/rack-and-pinion has a zero translation column. `error.InvalidArgument` for a vehicle constraint.
     pub fn constraintToBody1Matrix(self: Constraint) err.Error!math.Mat44 {
         var out: math.Mat44 = math.mat44_identity;
         try err.check(c.zjoltConstraintGetConstraintToBody1Matrix(self.handle, &out));
@@ -461,12 +552,10 @@ pub const Constraint = struct {
     }
 
     /// How large Jolt draws this constraint through
-    /// `PhysicsSystem.drawConstraints` and friends. Metres; Jolt's default
-    /// is 1.
+    /// `PhysicsSystem.drawConstraints` and friends. Metres; Jolt's
+    /// default is 1.
     ///
-    /// `error.Unsupported` when this library was built without
-    /// `-Ddebug_renderer=true` — Jolt keeps the field behind that flag, so
-    /// there is nothing to set.
+    /// `error.Unsupported` without `-Ddebug_renderer=true` — Jolt keeps the field behind that flag.
     pub fn setDrawSize(self: Constraint, size: f32) err.Error!void {
         try err.check(c.zjoltConstraintSetDrawSize(self.handle, size));
     }
@@ -486,15 +575,57 @@ pub const Constraint = struct {
         c.zjoltConstraintResetWarmStart(self.handle);
     }
 
+    /// Snapshots this constraint's current settings — the read-back half of
+    /// authoring: create a constraint, then recover the settings object
+    /// that describes it, for a level editor or a save format. Works on any
+    /// kind, vehicle included (@see `vehicle.zig`'s `asConstraint`).
+    /// `error.OutOfMemory` if Jolt could not build it. Release the result
+    /// with `ConstraintSettings.deinit`.
+    pub fn constraintSettings(self: Constraint) err.Error!ConstraintSettings {
+        var handle: *c.ConstraintSettings = undefined;
+        try err.check(c.zjoltConstraintGetConstraintSettings(self.handle, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// `Constraint::BuildIslands`, adapted for a standalone
+    /// `tree.IslandBuilder`: `body1_index`/`body2_index` are the host's own
+    /// active-body-list indices in place of a live `BodyManager` lookup,
+    /// and activating an inactive body is the caller's job first, if at
+    /// all. Links both bodies only if both are dynamic, then links
+    /// `constraint_index` to whichever is — once per pair, for more than two.
+    pub fn buildIslands(
+        self: Constraint,
+        constraint_index: u32,
+        builder: tree_mod.IslandBuilder,
+        body1_index: u32,
+        body1_dynamic: bool,
+        body2_index: u32,
+        body2_dynamic: bool,
+    ) err.Error!void {
+        _ = self;
+        if (body1_dynamic and body2_dynamic) {
+            try builder.linkBodies(body1_index, body2_index);
+        }
+        if (body1_dynamic) {
+            try builder.linkConstraint(constraint_index, body1_index);
+        } else if (body2_dynamic) {
+            try builder.linkConstraint(constraint_index, body2_index);
+        }
+    }
+
+    /// The `user` pointer a custom constraint was created with.
+    /// `error.InvalidArgument` on a constraint that is not one.
+    pub fn customUserData(self: Constraint) err.Error!?*anyopaque {
+        var out: ?*anyopaque = null;
+        try err.check(c.zjoltConstraintGetCustomUserData(self.handle, &out));
+        return out;
+    }
+
     //-------------------------------------------------------------------------
     // Per-kind state
     //
-    // Each of these is `error.InvalidArgument` on a constraint of a different
-    // kind. `subType` is what says which one this is.
-    //
-    // The `totalLambda*` readings are the impulse the solver applied over the
-    // last step, in the constraint's own frame — what a breakable joint is
-    // built from.
+    // Each is `error.InvalidArgument` on a constraint of a different kind
+    // (`subType` says which). `totalLambda*` readings are the impulse the solver applied last step, in the constraint's own frame — what a breakable joint is built from.
     //-------------------------------------------------------------------------
 
     pub fn fixedTotalLambdaPosition(self: Constraint) err.Error!math.Vec3 {
@@ -540,12 +671,11 @@ pub const Constraint = struct {
     }
 
     /// The hinge's frame, read back in each body's CENTRE-OF-MASS space —
-    /// what Jolt resolved the descriptor to, not what a `.world` descriptor
-    /// was given.
+    /// what Jolt resolved the descriptor to, not a `.world` descriptor's
+    /// original value.
     ///
-    /// There is no setter for any of these, because Jolt has none: a hinge
-    /// derives its rest orientation from the frame once, at construction, and
-    /// never revisits it. Rebuild the constraint to move it.
+    /// No setter for any of these: a hinge derives its rest orientation
+    /// from the frame once, at construction, and never revisits it — rebuild the constraint to move it.
     pub fn hingeLocalSpacePoint1(self: Constraint) err.Error!math.Vec3 {
         var out: math.Vec3 = undefined;
         try err.check(c.zjoltHingeConstraintGetLocalSpacePoint1(self.handle, &out));
@@ -668,10 +798,9 @@ pub const Constraint = struct {
     /// The same target as an orientation of body 2 relative to body 1,
     /// projected onto the hinge axis and clamped as above.
     ///
-    /// No getter, deliberately: Jolt reduces `orientation` to an angle and
-    /// keeps only that — the same state a direct call to `hingeSetTargetAngle`
-    /// would leave — so there is no quaternion left anywhere to read back.
-    /// Use `hingeTargetAngle` for what this call actually stores.
+    /// No getter, deliberately: Jolt reduces `orientation` to an angle
+    /// and keeps only that (same state `hingeSetTargetAngle` leaves), so
+    /// no quaternion survives to read back. Use `hingeTargetAngle`.
     pub fn hingeSetTargetOrientation(self: Constraint, orientation: math.Quat) err.Error!void {
         try err.check(c.zjoltHingeConstraintSetTargetOrientation(self.handle, &orientation));
     }
@@ -692,13 +821,10 @@ pub const Constraint = struct {
         return out;
     }
 
-    /// The impulse that held the two bodies to the hinge AXIS — two numbers,
-    /// because a hinge removes exactly two rotational degrees of freedom.
-    ///
-    /// This is what a hinge being twisted out of plane is spending, and it is
-    /// not the same as `hingeTotalLambdaRotationLimits`, which is what a door
-    /// forced past its stop applies, nor `hingeTotalLambdaMotor`, which is the
-    /// motor holding its own target.
+    /// The impulse that held the two bodies to the hinge AXIS — two
+    /// numbers, since a hinge removes exactly two rotational DOF: what a
+    /// hinge twisted out of plane is spending. Distinct from
+    /// `hingeTotalLambdaRotationLimits` (a door forced past its stop) and `hingeTotalLambdaMotor` (the motor holding its target).
     pub fn hingeTotalLambdaRotation(self: Constraint) err.Error![2]f32 {
         var out: [2]f32 = .{ 0, 0 };
         try err.check(c.zjoltHingeConstraintGetTotalLambdaRotation(self.handle, &out[0], &out[1]));
@@ -1013,24 +1139,20 @@ pub const Constraint = struct {
         return out;
     }
 
-    /// Radians per second, in CONSTRAINT space: x is twist, y and z are swing.
+    /// Radians per second, in CONSTRAINT space: x is twist, y/z are swing.
     ///
-    /// Setting a target while the motor is off is not an error and does
-    /// nothing visible: the value is kept and starts driving when
-    /// `swingTwistSetSwingMotorState` or `swingTwistSetTwistMotorState` turns
-    /// the motor on. Writing a target every frame to a motor left off is the
-    /// usual reason a joint "ignores" it.
+    /// Setting a target while the motor is off is not an error: the
+    /// value is kept and starts driving once `swingTwistSetSwingMotorState`
+    /// / `swingTwistSetTwistMotorState` turns the motor on — the usual reason a joint seems to "ignore" a target.
     pub fn swingTwistSetTargetAngularVelocity(self: Constraint, velocity: math.Vec3) err.Error!void {
         try err.check(c.zjoltSwingTwistConstraintSetTargetAngularVelocity(self.handle, &velocity));
     }
 
     /// The same target expressed in BODY 2's space; stored as the
-    /// constraint-space one, so `swingTwistTargetAngularVelocity` is the
-    /// getter and it returns the CONVERTED value, not what was passed here.
-    ///
-    /// An angular velocity taken from a body's own motion is in body space,
-    /// and handing it to the constraint-space setter instead rotates it by the
-    /// constraint frame.
+    /// constraint-space one, so `swingTwistTargetAngularVelocity` returns
+    /// the CONVERTED value, not what was passed here. An angular
+    /// velocity taken from a body's own motion is in body space —
+    /// handing it to the constraint-space setter instead rotates it by the constraint frame.
     pub fn swingTwistSetTargetAngularVelocityBodySpace(self: Constraint, velocity: math.Vec3) err.Error!void {
         try err.check(c.zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(self.handle, &velocity));
     }
@@ -1047,12 +1169,10 @@ pub const Constraint = struct {
         try err.check(c.zjoltSwingTwistConstraintSetTargetOrientation(self.handle, &orientation));
     }
 
-    /// The same target given as the rotation of body 2 RELATIVE TO BODY 1 —
-    /// the `q` in `world_rotation2 = world_rotation1 * q`. That is the shape a
-    /// pose already comes in, so this is the call an animation-driven ragdoll
-    /// wants; the constraint-space one needs the frame composed in by hand.
-    ///
-    /// Clamped identically, and it reads back through
+    /// The same target as the rotation of body 2 RELATIVE TO BODY 1 —
+    /// the `q` in `world_rotation2 = world_rotation1 * q`, the shape a
+    /// pose already comes in (the call an animation-driven ragdoll
+    /// wants). Clamped identically; reads back through
     /// `swingTwistTargetOrientation` in constraint space.
     pub fn swingTwistSetTargetOrientationBodySpace(self: Constraint, orientation: math.Quat) err.Error!void {
         try err.check(c.zjoltSwingTwistConstraintSetTargetOrientationBodySpace(self.handle, &orientation));
@@ -1077,13 +1197,10 @@ pub const Constraint = struct {
         return out;
     }
 
-    /// The torque each LIMIT applied over the last step. Zero while the joint
-    /// sits inside its cone and inside its twist range, so a non-zero value is
-    /// the signal that something is forcing the joint past a limit — which is
-    /// what a ragdoll bone that should break or go limp watches.
-    ///
-    /// Distinct from `swingTwistTotalLambdaMotor`, which is what the motors
-    /// are spending to hold their own targets.
+    /// The torque each LIMIT applied over the last step. Zero inside the
+    /// cone and twist range; non-zero signals a joint forced past a
+    /// limit — what a ragdoll bone that should break or go limp watches.
+    /// Distinct from `swingTwistTotalLambdaMotor` (what the motors spend holding their own targets).
     pub fn swingTwistTotalLambdaTwist(self: Constraint) err.Error!f32 {
         var out: f32 = 0;
         try err.check(c.zjoltSwingTwistConstraintGetTotalLambdaTwist(self.handle, &out));
@@ -1223,14 +1340,12 @@ pub const Constraint = struct {
         try err.check(c.zjoltSixDofConstraintSetTargetOrientation(self.handle, &orientation));
     }
 
-    /// The same target given as the rotation of body 2 relative to body 1, as
-    /// `swingTwistSetTargetOrientationBodySpace` is; it reads back through
+    /// The same target as the rotation of body 2 relative to body 1, as
+    /// `swingTwistSetTargetOrientationBodySpace` is; reads back through
     /// `sixDofTargetOrientation` in constraint space.
     ///
-    /// Worth knowing on this constraint specifically: its TRANSLATION motors
-    /// work in body 1's constraint space and its ROTATION motors in body 2's.
-    /// That asymmetry applies to the constraint-space calls; this one takes
-    /// body space and converts.
+    /// This constraint's TRANSLATION motors work in body 1's constraint
+    /// space, ROTATION motors in body 2's — that asymmetry applies to the constraint-space calls; this one takes body space and converts.
     pub fn sixDofSetTargetOrientationBodySpace(self: Constraint, orientation: math.Quat) err.Error!void {
         try err.check(c.zjoltSixDofConstraintSetTargetOrientationBodySpace(self.handle, &orientation));
     }
@@ -1476,12 +1591,8 @@ pub fn count(system: system_mod.PhysicsSystem) u32 {
 //=============================================================================
 // The behavioural tests
 //
-// A hinge takes five degrees of freedom away and leaves one; a six-DOF joint
-// reports back, axis by axis, exactly the limits it was told to keep. Not one
-// test per entry point — everything else in this module is covered
-// mechanically: `misuse_sweep_test.zig` calls every entry point with nulls
-// and before init, and `abi_check.zig` pairs every declaration here against
-// the header.
+// A hinge takes five DOF away and leaves one; a six-DOF joint reports
+// back, axis by axis, exactly the limits it was told to keep. Not one test per entry point — `misuse_sweep_test.zig`/`abi_check.zig` cover the rest mechanically.
 //=============================================================================
 
 const zjolt = @import("zjolt.zig");

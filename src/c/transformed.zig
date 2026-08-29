@@ -63,6 +63,8 @@ pub extern fn zjoltTransformedShapeGetSubShapeUserData(ts: *const TransformedSha
 
 pub extern fn zjoltTransformedShapeGetSupportingFace(ts: *const TransformedShape, sub_shape_id: SubShapeId, direction: *const Vec3, base_offset: *const RVec3, out_vertices: [*]Vec3, out_count: *u32) Result;
 
+pub extern fn zjoltTransformedShapeCollectTransformedShapes(ts: *const TransformedShape, box: *const AABox, filter: ?*const ShapeFilter, out_shapes: ?[*]?*TransformedShape, capacity: u32, out_count: *u32) Result;
+
 pub extern fn zjoltTransformedShapeGetTrianglesStart(ts: *const TransformedShape, context: *TransformedShapeTrianglesContext, box: *const AABox, base_offset: *const RVec3) Result;
 
 pub extern fn zjoltTransformedShapeGetTrianglesNext(ts: *const TransformedShape, context: *TransformedShapeTrianglesContext, max_triangles: u32, out_vertices: [*]Vec3, out_materials: ?[*]?*const PhysicsMaterial, out_count: *u32) Result;

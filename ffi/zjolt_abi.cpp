@@ -1,22 +1,16 @@
 //===----------------------------------------------------------------------===//
 // zjolt — compile-time layout assertions and the runtime build report.
 //
-// The static_asserts here guard the one direction nothing else can see: this
-// package against the vendored Jolt it was compiled with. A Jolt upgrade that
-// renumbers an enumerator, changes a scalar's width or moves a constant would
-// keep compiling — the conversions are switches over Jolt's own names — and
-// start meaning something different. These fail the build instead.
+// These static_asserts guard the one direction nothing else can see: this
+// package against the vendored Jolt it was compiled with. A Jolt upgrade
+// that renumbers an enumerator, changes a scalar's width, or moves a
+// constant would keep compiling (conversions switch on Jolt's own names)
+// and silently start meaning something different — these fail the build.
 //
-// The other direction, the C header against a consumer's own declarations, is
-// NOT here any more. It was a digest folded over a hand-written list of every
-// field of every type, and that list was a duplicate that had to be maintained
-// by hand and could be forgotten. Zig consumers now @cImport the header and
-// compare by reflection (src/abi_check.zig), which needs no list.
-//
-// What remains for a consumer that cannot do that is zjoltAbiLayout(): the
-// config id, the build flags, and the two scalar widths the build options
-// decide. That is enough to refuse a mismatched library, which is the part a
-// non-Zig host actually needs.
+// The other direction, the C header against a consumer's own declarations,
+// is not checked here: Zig consumers @cImport the header and compare by
+// reflection instead (src/abi_check.zig). What remains for a consumer that
+// cannot do that is zjoltAbiLayout() — config id, build flags, two scalar widths — enough to refuse a mismatched library.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -75,9 +69,7 @@ static_assert(sizeof(ZJoltAllocator) == 6 * sizeof(void *),
 //===----------------------------------------------------------------------===//
 // Enumerator agreement
 //
-// The conversions in the other translation units are switches over Jolt's
-// enumerator NAMES, so a renumbering upstream compiles cleanly and changes
-// meaning. These pin the values that cross the boundary as integers.
+// The conversions in other translation units switch over Jolt's enumerator NAMES, so a renumbering upstream compiles cleanly and changes meaning — these pin the values that cross the boundary as integers.
 //===----------------------------------------------------------------------===//
 
 static_assert(static_cast<int>(JPH::EMotionType::Static) ==
@@ -170,9 +162,7 @@ static_assert(JPH::cMaxPhysicsBarriers == ZJOLT_MAX_PHYSICS_BARRIERS,
 //===----------------------------------------------------------------------===//
 // Lock storage
 //
-// ZJoltBodyLock reserves two pointers for the mutex and the lock interface. If
-// Jolt ever needs more state to release a lock, this must grow — and growing
-// it is an ABI break, so it fails the build rather than overflowing.
+// ZJoltBodyLock reserves two pointers for the mutex and lock interface. If Jolt ever needs more state to release a lock, this must grow — an ABI break — so it fails the build rather than overflowing.
 //===----------------------------------------------------------------------===//
 
 static_assert(sizeof(ZJoltBodyLock) >= 3 * sizeof(void *),

@@ -1,39 +1,21 @@
-//! Bridges a Zig `std.mem.Allocator` onto Jolt's global allocator seam.
+//! Bridges a Zig `std.mem.Allocator` onto Jolt's global (process-wide)
+//! allocator seam, plus three more `Core` primitives with no other home:
+//! the flush-denormals guard, the profiler's measurement aggregator and
+//! external-hook bridge, and a `FixedSizeFreeList`-style batched free.
 //!
-//! ## Why this is not a five-line shim
-//!
-//! Jolt frees with `free(block)` and `aligned_free(block)` — no size, no
-//! alignment. Zig's allocator interface requires both back at free time. The
-//! gap is closed by allocating a little extra and stashing the length and
-//! alignment in a header placed immediately before the pointer handed to Jolt:
-//!
-//! ```text
-//!   base                       returned pointer
-//!    |                          |
-//!    v                          v
-//!   [ .... padding .... ][Header][ ..... payload ..... ]
-//!    \___ prefix, a multiple of the backing alignment ___/
-//! ```
-//!
-//! `reallocate` is the one hook Jolt hands the old size to, so it could avoid
-//! the header — but it must interoperate with blocks that `allocate` produced,
-//! so it reads the header too and stays consistent.
-//!
-//! ## Alignment
+//! Jolt frees with `free(block)`/`aligned_free(block)` — no size, no
+//! alignment — but Zig's allocator interface requires both at free time.
+//! The gap is closed by allocating extra and stashing length + alignment
+//! in a header placed immediately before the pointer handed to Jolt.
+//! `reallocate` reads that header too, for consistency with blocks
+//! `allocate` produced, even though Jolt hands it the old size directly.
 //!
 //! Jolt's plain `allocate` takes no alignment yet places SIMD types in the
-//! memory it returns, so it has a minimum it does not state in the signature.
-//! That minimum is read from `zjoltDefaultAllocateAlignment()` at install time
-//! rather than assumed to be 16 — on a 32-bit target it is 8.
-//!
-//! ## Global state
-//!
-//! Jolt's allocator is process-wide, so this one is too. That is a property of
-//! Jolt, not a shortcut taken here: it is surfaced rather than hidden behind a
-//! per-system allocator parameter that could not be honoured.
+//! memory it returns; that minimum is read from `zjoltDefaultAllocateAlignment()` at install time, not assumed to be 16.
 
 const std = @import("std");
 const c = @import("c/core.zig");
+const err = @import("error.zig");
 
 /// Recorded ahead of every block so a free can reconstruct the slice Zig's
 /// allocator needs.
@@ -167,9 +149,7 @@ pub fn bridge(gpa: std.mem.Allocator) c.Allocator {
 //=============================================================================
 // Tests
 //
-// These drive the hooks directly rather than through a physics system, so the
-// header arithmetic is covered on its own — including the sizes and alignments
-// that Jolt would only reach under specific workloads.
+// Drive the hooks directly rather than through a physics system, so the header arithmetic is covered on its own — including sizes and alignments Jolt would only reach under specific workloads.
 //=============================================================================
 
 test "the bridge round-trips every alignment Jolt may ask for" {
@@ -260,4 +240,180 @@ test "the bridge rejects a non-power-of-two alignment" {
 
     try std.testing.expect(alignedAllocate(@ptrCast(&installed), 32, 3) == null);
     try std.testing.expect(alignedAllocate(@ptrCast(&installed), 32, 0) == null);
+}
+
+//=============================================================================
+// Floating-point control word
+//=============================================================================
+
+/// Forces denormal results to flush to zero on the calling thread for the
+/// guard's lifetime, restoring whatever state was there before — Jolt's own
+/// determinism guidance, since a call into third-party code can otherwise
+/// leave the rounding/flush mode changed underneath a later step. Restore
+/// with `deinit`, via `defer`. A no-op on a target with no floating-point
+/// control word (WASM, RISC-V, PPC, LoongArch).
+pub const FlushDenormalsGuard = struct {
+    state: c.FPControlWordState,
+
+    pub fn init() FlushDenormalsGuard {
+        var self: FlushDenormalsGuard = .{ .state = undefined };
+        c.zjoltFPFlushDenormalsEnter(&self.state);
+        return self;
+    }
+
+    pub fn deinit(self: *FlushDenormalsGuard) void {
+        c.zjoltFPFlushDenormalsLeave(&self.state);
+    }
+};
+
+test "FlushDenormalsGuard enters and leaves without error" {
+    var guard = FlushDenormalsGuard.init();
+    defer guard.deinit();
+}
+
+test "FlushDenormalsGuard nests LIFO" {
+    var outer = FlushDenormalsGuard.init();
+    {
+        var inner = FlushDenormalsGuard.init();
+        inner.deinit();
+    }
+    outer.deinit();
+}
+
+//=============================================================================
+// Profiler measurement aggregation
+//
+// A pure-Zig port of `Profiler::Aggregator::AccumulateMeasurement` —
+// private to `Profiler` upstream, so a caller has no other way to reach it.
+// No build gate: this touches nothing Jolt's own profiler owns.
+//=============================================================================
+
+/// Running statistics for repeated measurements of one named scope, the
+/// same shape Jolt's own profiler aggregates into before a dump.
+pub const MeasurementAggregate = struct {
+    call_count: u32 = 0,
+    total_cycles: u64 = 0,
+    min_cycles: u64 = std.math.maxInt(u64),
+    max_cycles: u64 = 0,
+
+    /// Folds one more measurement, in processor cycles, into the running
+    /// count/total/min/max.
+    pub fn accumulateMeasurement(self: *MeasurementAggregate, cycles_in_call_with_children: u64) void {
+        self.call_count += 1;
+        self.total_cycles += cycles_in_call_with_children;
+        self.min_cycles = @min(self.min_cycles, cycles_in_call_with_children);
+        self.max_cycles = @max(self.max_cycles, cycles_in_call_with_children);
+    }
+};
+
+test "MeasurementAggregate tracks count, total, min and max" {
+    var agg = MeasurementAggregate{};
+    agg.accumulateMeasurement(10);
+    agg.accumulateMeasurement(30);
+    agg.accumulateMeasurement(20);
+
+    try std.testing.expectEqual(@as(u32, 3), agg.call_count);
+    try std.testing.expectEqual(@as(u64, 60), agg.total_cycles);
+    try std.testing.expectEqual(@as(u64, 10), agg.min_cycles);
+    try std.testing.expectEqual(@as(u64, 30), agg.max_cycles);
+}
+
+//=============================================================================
+// External profiler bridge
+//
+// Gated behind `-Dexternal_profile`; `error.Unsupported` otherwise. Jolt's
+// own `ExternalProfileMeasurement` calls `start` on construction and `end`
+// on destruction of every profiled scope in its source.
+//=============================================================================
+
+pub const ExternalProfilerStartFn = c.ExternalProfilerStartFn;
+pub const ExternalProfilerEndFn = c.ExternalProfilerEndFn;
+
+/// Installs the hooks called at the start/end of every profiled scope from
+/// then on, until `clearExternalProfilerHooks`. Both required.
+pub fn setExternalProfilerHooks(
+    start: ExternalProfilerStartFn,
+    end: ExternalProfilerEndFn,
+    user: ?*anyopaque,
+) err.Error!void {
+    try err.check(c.zjoltExternalProfilerSetHooks(start, end, user));
+}
+
+/// Uninstalls the hooks; a scope measured after this call is a no-op.
+pub fn clearExternalProfilerHooks() void {
+    c.zjoltExternalProfilerClearHooks();
+}
+
+//=============================================================================
+// Batched free
+//
+// `FixedSizeFreeList<Object>::AddObjectToBatch`, generalised: any object
+// pool that stores one `u32` "next free" slot per object (Jolt's own
+// `ObjectStorage` shape) can link objects into a `Batch` here and return the
+// whole run to its pool in one shot, without a Zig port of the pool itself.
+//=============================================================================
+
+/// Sentinel: no object, or the end of a chain. Matches
+/// `FixedSizeFreeList::cInvalidObjectIndex`.
+pub const invalid_object_index: u32 = 0xffffffff;
+
+/// A run of object indices linked through the caller's own `next` slots,
+/// built by repeated `addObjectToBatch` calls. Freeing the whole run is the
+/// caller's own pool operation: walk from `first`, following `next`, for
+/// `count` objects.
+pub const Batch = struct {
+    first: u32 = invalid_object_index,
+    last: u32 = invalid_object_index,
+    count: u32 = 0,
+};
+
+/// Appends `object_index` to `batch`, threading it onto `next[object_index]`.
+/// `next` is the caller's own per-object "next free" array, one entry per
+/// pooled object; `next[object_index]` must equal `object_index` on entry
+/// (Jolt's own "not already in a free list" precondition) and is left
+/// `invalid_object_index`, the new end of the chain.
+pub fn addObjectToBatch(batch: *Batch, next: []u32, object_index: u32) void {
+    std.debug.assert(next[object_index] == object_index);
+    next[object_index] = invalid_object_index;
+    if (batch.first == invalid_object_index) {
+        batch.first = object_index;
+    } else {
+        next[batch.last] = object_index;
+    }
+    batch.last = object_index;
+    batch.count += 1;
+}
+
+test "addObjectToBatch threads objects into one chain in append order" {
+    var next = [_]u32{ 0, 1, 2, 3 };
+    var batch = Batch{};
+
+    addObjectToBatch(&batch, &next, 2);
+    addObjectToBatch(&batch, &next, 0);
+    addObjectToBatch(&batch, &next, 3);
+
+    try std.testing.expectEqual(@as(u32, 3), batch.count);
+    try std.testing.expectEqual(@as(u32, 2), batch.first);
+    try std.testing.expectEqual(@as(u32, 3), batch.last);
+
+    // Walk the chain from `first`, following `next`.
+    var walked: [3]u32 = undefined;
+    var cur = batch.first;
+    for (0..3) |i| {
+        walked[i] = cur;
+        cur = next[cur];
+    }
+    try std.testing.expectEqual(cur, invalid_object_index);
+    try std.testing.expectEqualSlices(u32, &.{ 2, 0, 3 }, &walked);
+}
+
+test "addObjectToBatch on a single object starts and ends the chain" {
+    var next = [_]u32{0};
+    var batch = Batch{};
+
+    addObjectToBatch(&batch, &next, 0);
+
+    try std.testing.expectEqual(@as(u32, 1), batch.count);
+    try std.testing.expectEqual(batch.first, batch.last);
+    try std.testing.expectEqual(invalid_object_index, next[0]);
 }

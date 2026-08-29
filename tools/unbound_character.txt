@@ -1,79 +1,55 @@
-# Physics/Character — every name `tools/coverage.sh Character` reported as
-# unbound, classified. Format: NAME  CATEGORY  reason.
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
 #
-# This is the list as it stood BEFORE the six REAL_GAPs below were bound; each
-# of those names its new entry points and no longer appears in the tool's
-# output. Re-run the tool for the current list, and read this for why the rest
-# of it is not work.
-#
-# Two things this list exists to correct in the raw output:
-#   * coverage.sh extracts bound names with `ZJOLT_API [A-Za-z_ *]*zjolt...`,
-#     whose character class excludes digits — so every entry point whose
-#     RETURN TYPE is a fixed-width integer (uint32_t, uint64_t, ...) is
-#     invisible to it. GetUserData, GetGroundUserData and GetMaxNumHits are
-#     fully bound and appear here only because of that.
-#   * it matches by substring, so `CharacterID` misses zjoltCharacterGetId and
-#     `ExtendedUpdate` misses zjoltCharacterUpdate.
-#
-# Visibility facts below are from Jolt 5.6.0 in libs/JoltPhysics:
-# CharacterVirtual.h is public: at 270 and private: at 537; Character.h is
-# public: at 48 and private: at 145; CharacterBase.h is public: at 55.
-
-AddHit  INTERNAL  Override on CharacterVirtual's private nested ContactCollector/ContactCastCollector (CharacterVirtual.h:576, :598, both past private: at 537) and on a function-local collector in Character.cpp:153/:301. Called only by Jolt's own narrow-phase traversal.
-CalculateCharacterGroundVelocity  INTERNAL  Private (CharacterVirtual.h:650). Integrates a contact point's arc over one step inside the update loop; what a caller wants out of it is already zjoltCharacterGetGroundVelocity.
-CastCharacter  EXTENSION_POINT  Pure virtual on CharacterVsCharacterCollision (CharacterVirtual.h:239), implemented by CharacterVsCharacterCollisionSimple. zjolt hands the caller that implementation as ZJoltCharacterVsCharacterCollision — zjoltCharacterVsCharacterCollisionCreate/Add/Remove plus zjoltCharacterSetCharacterVsCharacterCollision. Subclassing to swap the brute-force list for a tree is not reachable; the capability is.
-CharacterBase  INTERNAL  The abstract base's constructor (CharacterBase.h:59). Run by Character's and CharacterVirtual's own constructors; a caller never builds one.
-CharacterBaseSettings  BOUND_ELSEWHERE  ZJoltCharacterDesc/zjoltCharacterDescInit and ZJoltRigidCharacterDesc/zjoltRigidCharacterDescInit carry its fields. Settings objects do not cross the boundary (BINDING.md); both Init functions read Jolt's own defaults, so an upstream retune moves with them.
-CharacterContactKey  BOUND_ELSEWHERE  ZJoltCharacterContact flattens the key into body_b, character_id_b and sub_shape_id_b — the same three fields — so a contact's identity crosses without the class.
-CharacterID  BOUND_ELSEWHERE  ZJoltCharacterId (a uint32_t) plus zjoltCharacterGetId / zjoltRigidCharacterGetId. Matched as "characterid", which zjoltCharacterGetId does not contain.
-CharacterSettings  BOUND_ELSEWHERE  ZJoltRigidCharacterDesc/zjoltRigidCharacterDescInit. @see CharacterBaseSettings.
-CharacterVirtual  BOUND_ELSEWHERE  zjoltCharacterCreate — zjolt spends the plain name "Character" on the virtual one and calls Jolt's rigid Character "RigidCharacter".
-CharacterVirtualSettings  BOUND_ELSEWHERE  ZJoltCharacterDesc/zjoltCharacterDescInit. @see CharacterBaseSettings.
-CheckCollision  REAL_GAP  Public on both (CharacterVirtual.h:490, Character.h:140): overlap-test the character's shape at a hypothetical placement with the character's own back-face mode, active-edge mode and padding, ignoring its own inner body, and — for the virtual one — also against the character-vs-character list, which no zjoltCollideShape* call can reproduce. BOUND: zjoltCharacterCheckCollision, zjoltRigidCharacterCheckCollision.
-CollideCharacter  EXTENSION_POINT  Pure virtual on CharacterVsCharacterCollision (CharacterVirtual.h:230). @see CastCharacter — same ZJoltCharacterVsCharacterCollision.
-ContactAdded  INTERNAL  Private (CharacterVirtual.h:626). Jolt's own dispatcher into the listener's OnContactAdded/OnCharacterContactAdded, which are the bound half.
-ContactCastCollector  INTERNAL  Private nested class (CharacterVirtual.h:591). Backs the sweeps inside MoveShape/ValidateMovement; a C++ collector is not a type a C ABI carries.
-ContactCollector  INTERNAL  Private nested class (CharacterVirtual.h:569). Backs GetContactsAtPosition. @see ContactCastCollector.
-DegreesToRadians  INTERNAL  Jolt Core unit helper, used in the settings defaults (CharacterBase.h:42). Zig has std.math.degreesToRadians and C has its own.
-DetermineConstraints  INTERNAL  Private (CharacterVirtual.h:635). Turns contacts into the planes the solver slides on, once per collision iteration.
-ExtendedUpdate  BOUND_ELSEWHERE  zjoltCharacterUpdate with a non-NULL ZJoltCharacterUpdateSettings IS ExtendedUpdate; NULL is the plain Update. zjoltCharacterUpdateSettingsInit fills the same defaults.
-GetAdjustedBodyVelocity  INTERNAL  Private (CharacterVirtual.h:645). Reads a contact body's velocity and then calls the listener's OnAdjustBodyVelocity, which is the bound half.
-GetCharacterSettings  BOUND_ELSEWHERE  Settings objects do not cross (BINDING.md). Every field is readable: zjoltRigidCharacterGetUp, GetCosMaxSlopeAngle, GetShape, GetLayer, GetSupportingVolume.
-GetCharacterVirtualSettings  BOUND_ELSEWHERE  As above, via zjoltCharacterGetUp / GetCosMaxSlopeAngle / GetShape / GetMass / GetMaxStrength / GetPenetrationRecoverySpeed / GetCharacterPadding / GetMaxNumHits / GetHitReductionCosMaxAngle / GetShapeOffset / GetEnhancedInternalEdgeRemoval / GetInnerBodyId / GetSupportingVolume / GetId.
-GetContactsAtPosition  INTERNAL  Private (CharacterVirtual.h:629). Fills a TempContactList inside one collision iteration; zjoltCharacterCheckCollision is the public form of the same question.
-GetFirstContactForSweep  INTERNAL  Private (CharacterVirtual.h:663). Sweep used by the stair-walk and stick-to-floor steps.
-GetGroundUserData  BOUND_ELSEWHERE  zjoltCharacterGetGroundUserData and zjoltRigidCharacterGetGroundUserData. Listed only because their uint64_t return type hides them from coverage.sh's regex.
-GetHash  BOUND_ELSEWHERE  On CharacterID (CharacterID.h:68) and CharacterContactKey (CharacterVirtual.h:113). Both cross as plain integers — ZJoltCharacterId, and ZJoltCharacterContact's three key fields — so a host hashes them with its own hasher rather than importing Jolt's.
-GetInnerBodyPosition  INTERNAL  Private inline (CharacterVirtual.h:681). Where UpdateInnerBodyTransform puts the inner body; a caller reads the body itself, named by zjoltCharacterGetInnerBodyId.
-GetListener  REAL_GAP  Public (CharacterVirtual.h:294) and the only way to ask a character whether a listener is attached and which one; zjolt had the setter and not the getter. BOUND: zjoltCharacterGetListener.
-GetMaxNumHits  BOUND_ELSEWHERE  zjoltCharacterGetMaxNumHits / zjoltCharacterSetMaxNumHits. Hidden from coverage.sh by the uint32_t return type.
-GetSupportingVolume  REAL_GAP  Public on CharacterBase (CharacterBase.h:73). The plane that decides which contacts may count as ground; zjolt derives a good default at create time but gave no way to read it back or retune it. BOUND: zjoltCharacterGetSupportingVolume, zjoltRigidCharacterGetSupportingVolume.
-GetTransformedShape  REAL_GAP  Public on both (CharacterVirtual.h:475, Character.h:129). The character's volume as a standalone queryable shape — the only way to cast a ray at a CharacterVirtual, which is not in the broad phase. zjolt already has ZJoltTransformedShape and a full query surface over it. BOUND: zjoltCharacterGetTransformedShape, zjoltRigidCharacterGetTransformedShape.
-GetUserData  BOUND_ELSEWHERE  zjoltCharacterGetUserData / zjoltCharacterSetUserData. Hidden from coverage.sh by the uint64_t return type.
-GetValue  BOUND_ELSEWHERE  CharacterID::GetValue (CharacterID.h:31) unwraps the class to its uint32; ZJoltCharacterId IS that uint32, so zjoltCharacterGetId already returns what GetValue would.
-HandleContact  INTERNAL  Private (CharacterVirtual.h:653). Applies one constraint's impulse inside SolveConstraints.
-HashBytes  INTERNAL  Jolt Core hash helper (Core/HashCombine.h), reached only from CharacterContactKey::GetHash. Not a character API.
-IsInvalid  BOUND_ELSEWHERE  CharacterID::IsInvalid (CharacterID.h:38) is a comparison against 0xffffffff; zjolt exposes that value as ZJOLT_CHARACTER_ID_INVALID, and the sentinel bit pattern is identical so nothing is translated.
-IsSameBody  BOUND_ELSEWHERE  CharacterContactKey::IsSameBody (CharacterVirtual.h:94) compares mBodyB and mCharacterIDB; both are fields on ZJoltCharacterContact, so the caller writes the comparison.
-ListenerContactValue  INTERNAL  Private struct (CharacterVirtual.h:736) in the map StartTrackingContactChanges/FinishTrackingContactChanges keep between calls.
-MoveShape  INTERNAL  Private (CharacterVirtual.h:616). The slide-and-resolve loop at the heart of Update.
-MoveToContact  INTERNAL  Private (CharacterVirtual.h:672). Re-seats the character after a step lands it in a colliding position.
-OnAdjustBodyVelocity  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_adjust_body_velocity, installed with zjoltCharacterContactListenerCreate + zjoltCharacterSetListener. A NULL field behaves as Jolt's own default override.
-OnCharacterContactAdded  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_character_contact_added.
-OnCharacterContactPersisted  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_character_contact_persisted.
-OnCharacterContactRemoved  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_character_contact_removed.
-OnCharacterContactSolve  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_character_contact_solve.
-OnCharacterContactValidate  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_character_contact_validate.
-OnContactAdded  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_contact_added.
-OnContactPersisted  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_contact_persisted.
-OnContactRemoved  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_contact_removed.
-OnContactSolve  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_contact_solve.
-OnContactValidate  EXTENSION_POINT  ZJoltCharacterContactListenerCallbacks.on_contact_validate.
-RemoveConflictingContacts  INTERNAL  Private (CharacterVirtual.h:632). Drops opposed penetrating contacts on one body so the mover does not wedge.
-SetInnerBodyShape  REAL_GAP  Public (CharacterVirtual.h:472). zjoltCharacterSetShape already calls it, but ZJoltCharacterDesc lets the inner body carry a DIFFERENT shape from the swept one, and that setter then silently overwrote it with no way to restore it. BOUND: zjoltCharacterSetInnerBodyShape.
-SetSupportingVolume  REAL_GAP  Public on CharacterBase (CharacterBase.h:74). @see GetSupportingVolume. BOUND: zjoltCharacterSetSupportingVolume, zjoltRigidCharacterSetSupportingVolume.
-SolveConstraints  INTERNAL  Private (CharacterVirtual.h:638). The displacement solver itself.
-StoreActiveContacts  INTERNAL  Private (CharacterVirtual.h:666). Writes the list zjoltCharacterGetActiveContacts reads back.
-UpdateInnerBodyTransform  INTERNAL  Private (CharacterVirtual.h:687). Already run for the caller by SetPosition, SetRotation and SetShapeOffset — i.e. by zjoltCharacterSetPosition / SetRotation / SetShapeOffset.
-UpdateSupportingContact  INTERNAL  Private (CharacterVirtual.h:669). Picks the supporting contact and sets the ground state zjoltCharacterGetGroundState reports.
-ValidateMovement  INTERNAL  Private (CharacterVirtual.h:658). Sweep that asks whether there is room for one displacement, run per constraint iteration.
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Physics/Character	CalculateCharacterGroundVelocity	INTERNAL	no public declaration
+Physics/Character	CastCharacter	EXTENSION	zjolt zjoltCharacterVsCharacterCollisionCreate zjoltCharacterVsCharacterCollisionCreateCustom ZJoltCastCharacterFn
+Physics/Character	CharacterBase	ZIG	src/character.zig:CharacterBase
+Physics/Character	CharacterBaseSettings	BOUND	ZJoltCharacterDesc zjoltCharacterDescInit ZJoltRigidCharacterDesc zjoltRigidCharacterDescInit
+Physics/Character	CharacterContactKey	BOUND	ZJoltCharacterContact
+Physics/Character	CharacterVirtual	BOUND	zjoltCharacterCreate zjolt
+Physics/Character	CharacterVirtualSettings	BOUND	ZJoltCharacterDesc zjoltCharacterDescInit
+Physics/Character	CollideCharacter	EXTENSION	zjoltCharacterVsCharacterCollisionCreateCustom ZJoltCollideCharacterFn ZJoltCastCharacterFn ZJoltCharacterVsCharacterCollisionCallbacks zjoltCharacterSetCharacterVsCharacterCollision ZJoltCharacterVsCharacterVisitFn zjolt
+Physics/Character	ContactAdded	INTERNAL	no public declaration
+Physics/Character	ContactCastCollector	BOUND	zjoltCharacterUpdate zjoltCharacterWalkStairs zjoltCharacterStickToFloor
+Physics/Character	ContactCollector	BOUND	zjoltCharacterGetActiveContacts zjoltCharacterGetMaxNumHits zjoltCharacterSetMaxNumHits zjoltCharacterGetHitReductionCosMaxAngle zjoltCharacterSetHitReductionCosMaxAngle zjoltCharacterGetMaxHitsExceeded
+Physics/Character	DegreesToRadians	LANGUAGE	std.math and @Vector arithmetic
+Physics/Character	DetermineConstraints	INTERNAL	no public declaration
+Physics/Character	ExtendedUpdate	BOUND	zjoltCharacterUpdate ZJoltCharacterUpdateSettings zjoltCharacterUpdateSettingsInit
+Physics/Character	GetCharacterSettings	BOUND	zjoltRigidCharacterGetUp
+Physics/Character	GetCharacterVirtualSettings	BOUND	zjoltCharacterGetUp
+Physics/Character	GetContactsAtPosition	INTERNAL	no public declaration
+Physics/Character	GetFirstContactForSweep	INTERNAL	no public declaration
+Physics/Character	GetHash	LANGUAGE	std.hash.Wyhash
+Physics/Character	GetInnerBodyPosition	INTERNAL	no public declaration
+Physics/Character	HandleContact	INTERNAL	no public declaration
+Physics/Character	HashBytes	LANGUAGE	std.hash.Wyhash
+Physics/Character	IsSameBody	BOUND	ZJoltCharacterContact
+Physics/Character	ListenerContactValue	EXTENSION	ZJoltCharacterContactListenerCallbacks ZJoltCharacterContactSettings
+Physics/Character	MoveShape	INTERNAL	no public declaration
+Physics/Character	MoveToContact	INTERNAL	no public declaration
+Physics/Character	OnAdjustBodyVelocity	EXTENSION	ZJoltCharacterContactListenerCallbacks zjoltCharacterContactListenerCreate zjoltCharacterSetListener
+Physics/Character	OnCharacterContactAdded	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnCharacterContactPersisted	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnCharacterContactRemoved	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnCharacterContactSolve	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnCharacterContactValidate	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnContactAdded	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnContactPersisted	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnContactRemoved	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnContactSolve	EXTENSION	ZJoltCharacterContactListenerCallbacks
+Physics/Character	OnContactValidate	EXTENSION	ZJoltContactListener zjoltPhysicsSystemSetContactListener
+Physics/Character	RemoveConflictingContacts	INTERNAL	no public declaration
+Physics/Character	SolveConstraints	INTERNAL	no public declaration
+Physics/Character	StoreActiveContacts	INTERNAL	no public declaration
+Physics/Character	UpdateInnerBodyTransform	INTERNAL	no public declaration
+Physics/Character	UpdateSupportingContact	INTERNAL	no public declaration
+Physics/Character	ValidateContact	INTERNAL	no public declaration
+Physics/Character	ValidateMovement	INTERNAL	no public declaration

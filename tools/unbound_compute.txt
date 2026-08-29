@@ -1,0 +1,87 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Compute	Barrier	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Compute	ComputeBuffer	EXTENSION	ZJoltComputeInterface ZJoltComputeBufferType ZJoltComputeMapMode
+Compute	ComputeBufferCPU	BOUND	zjolt zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported
+Compute	ComputeBufferDX12	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeBufferMTL	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeBufferVK	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeQueue	EXTENSION	ZJoltComputeInterface
+Compute	ComputeQueueCPU	BOUND	zjoltComputeSystemCreateCpu
+Compute	ComputeQueueDX12	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeQueueMTL	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeQueueVK	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeShader	EXTENSION	ZJoltComputeInterface
+Compute	ComputeShaderCPU	BOUND	zjoltComputeSystemCreateCpu
+Compute	ComputeShaderDX12	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeShaderMTL	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeShaderVK	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeSystemDX12Impl	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeSystemMTLImpl	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ComputeSystemVKImpl	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateBuffer	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateComputeBuffer	EXTENSION	ZJoltComputeInterface
+Compute	CreateComputeQueue	EXTENSION	ZJoltComputeInterface
+Compute	CreateComputeShader	EXTENSION	ZJoltComputeInterface
+Compute	CreateComputeSystem	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateComputeSystemCPU	BOUND	zjoltComputeSystemCreateCpu
+Compute	CreateComputeSystemDX12	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateComputeSystemMTL	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateComputeSystemVK	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateD3DResource	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	CreateReadBackBuffer	EXTENSION	ZJoltComputeInterface ZJOLT_COMPUTE_BUFFER_TYPE_READBACK
+Compute	CreateWrapper	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	Dispatch	EXTENSION	ZJoltComputeInterface
+Compute	Execute	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost
+Compute	ExecuteAndWait	EXTENSION	ZJoltComputeInterface
+Compute	FreeBuffer	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetBuffer	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetBufferCPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetBufferGPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetBufferInfos	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetDXGIFactory	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetDescriptorSetLayout	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetDevice	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetGroupSizeX	BOUND	ZJoltComputeInterface
+Compute	GetGroupSizeY	BOUND	ZJoltComputeInterface
+Compute	GetGroupSizeZ	BOUND	ZJoltComputeInterface
+Compute	GetLayoutBindings	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetPipeline	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetPipelineLayout	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetPipelineState	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetResourceCPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetResourceGPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetRootSignature	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	GetStride	LANGUAGE	std.ArrayList and Zig slices
+Compute	HRFailed	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	Main	BOUND	zjoltComputeSystemCreateCpu zjoltComputeIsCpuSupported zjoltHairCreateFromGroom
+Compute	MapBuffer	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	MemoryVK	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	NameToBindingIndex	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	NameToBufferInfoIndex	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	NameToIndex	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	RWBarrier	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	RegisterShader	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ReleaseBufferCPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ReleaseResourceCPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	ScheduleReadback	EXTENSION	ZJoltComputeInterface
+Compute	SetBuffer	EXTENSION	ZJoltComputeInterface
+Compute	SetConstantBuffer	EXTENSION	ZJoltComputeInterface
+Compute	SetRWBuffer	EXTENSION	ZJoltComputeInterface ZJoltComputeBarrier
+Compute	SetShader	EXTENSION	ZJoltComputeInterface
+Compute	ShaderWrapper	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	StringFormat	LANGUAGE	std.fmt.allocPrint
+Compute	SyncCPUToGPU	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	Trace	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Compute	UnmapBuffer	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	VKFailed	EXTENSION	ZJoltComputeInterface zjoltComputeSystemCreate
+Compute	Wait	EXTENSION	ZJoltHostJobSystem zjoltJobSystemCreateHost

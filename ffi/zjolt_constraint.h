@@ -1,47 +1,23 @@
 //===----------------------------------------------------------------------===//
 // zjolt — constraints: the joints between two bodies.
 //
-// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part; this
-// file is split out so that no single header has to carry the whole surface.
+// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part.
 //
-// ## Ownership
+// Reference counted like a shape: zjoltConstraintCreate* hands back one
+// reference; zjoltConstraintAdd/Remove take/drop an independent reference.
 //
-// A constraint is REFERENCE COUNTED, like a shape. `zjoltConstraintCreate*`
-// hands back a handle carrying one reference, which is yours: release it with
-// `zjoltConstraintRelease` exactly once.
-//
-// `zjoltConstraintAdd` takes a reference OF ITS OWN, and
-// `zjoltConstraintRemove` drops that one. So the two lifetimes are
-// independent and the order does not matter — releasing a constraint that is
-// still added leaves the system's reference holding it, and removing one you
-// already released destroys it there and then.
-//
-// ## Lifetime against the bodies
-//
-// A constraint stores raw pointers to its two bodies, exactly as Jolt does.
-// Destroying a body that a live constraint still names leaves that constraint
-// pointing at freed memory, and nothing in Jolt or here detects it. Remove and
-// release the constraints on a body before destroying it.
-//
-// ## Preconditions
-//
-// This subsystem has more caller-trippable preconditions than any other in
-// the library: limits with a required sign, angles with a required range,
-// axes that have to be a frame rather than three arbitrary vectors, motors
-// whose settings must be valid before they can be switched on. Every one of
-// them is an assertion inside Jolt — an abort in an asserts-on build — and
-// every one of them is checked here and reported as
-// ZJOLT_RESULT_INVALID_ARGUMENT instead, with `zjoltLastError` naming which.
-// Nothing in this header forwards a call that would abort.
-//
-// The exceptions, which are caller obligations because no check can see them,
-// are named in the comments where they apply.
+// Stores raw pointers to its two bodies, like Jolt: destroying a body a
+// live constraint still names leaves it dangling, undetected. Remove and
+// release constraints on a body before destroying it. Every Jolt
+// precondition here is checked and reported as ZJOLT_RESULT_INVALID_ARGUMENT
+// rather than forwarded to an abort.
 //===----------------------------------------------------------------------===//
 
 #ifndef ZJOLT_CONSTRAINT_H_
 #define ZJOLT_CONSTRAINT_H_
 
 #include "zjolt_core.h"
+#include "zjolt_debug.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,29 +30,24 @@ extern "C" {
 /// A joint between two bodies. Reference counted; see Ownership above.
 typedef struct ZJoltConstraint ZJoltConstraint;
 
-/// The body id that means "the world" — an implicit, infinitely heavy static
-/// body at the origin with identity rotation.
+/// The body id that means "the world": an implicit, infinitely heavy
+/// static body at the origin with identity rotation. Pass as `body1` or
+/// `body2` to any zjoltConstraintCreate* to bolt the other body to it.
 ///
-/// Pass it as `body1` or `body2` to any `zjoltConstraintCreate*` to bolt the
-/// other body to the world. It is spelled as the invalid body id because that
-/// is exactly what Jolt's own fixed-to-world body carries, and because a real
-/// body can never collide with the value.
-///
-/// Not both at once: two world bodies would be a constraint between two things
-/// that cannot move, which is refused.
+/// Not both at once: two world bodies would constrain two things that
+/// cannot move, which is refused.
 #define ZJOLT_BODY_ID_WORLD ZJOLT_BODY_ID_INVALID
 
 //===----------------------------------------------------------------------===//
 // Enumerations
 //===----------------------------------------------------------------------===//
 
-/// Which kind of joint a handle actually is. Every accessor below that names a
-/// kind checks this first, so asking a hinge for its slider position is a
-/// returned error rather than a reinterpreted object.
+/// Which kind of joint a handle actually is. Every accessor below checks
+/// this first, so asking a hinge for its slider position is a returned
+/// error, not a reinterpreted object.
 ///
-/// OTHER covers what this ABI cannot produce: Jolt's vehicle constraint, and
-/// the four `User*` slots reserved for constraint types registered by C++
-/// outside this library.
+/// OTHER covers what this ABI cannot produce: Jolt's vehicle constraint,
+/// and three of the four `User*` slots for external constraint types.
 typedef enum ZJoltConstraintSubType {
   ZJOLT_CONSTRAINT_SUB_TYPE_OTHER = 0,
   ZJOLT_CONSTRAINT_SUB_TYPE_FIXED = 1,
@@ -91,6 +62,8 @@ typedef enum ZJoltConstraintSubType {
   ZJOLT_CONSTRAINT_SUB_TYPE_GEAR = 10,
   ZJOLT_CONSTRAINT_SUB_TYPE_RACK_AND_PINION = 11,
   ZJOLT_CONSTRAINT_SUB_TYPE_PULLEY = 12,
+  /// A constraint created by zjoltConstraintCreateCustom.
+  ZJOLT_CONSTRAINT_SUB_TYPE_CUSTOM = 13,
 } ZJoltConstraintSubType;
 
 /// Which space a descriptor's points and axes are expressed in.
@@ -175,27 +148,22 @@ typedef enum ZJoltPathRotationConstraintType {
 
 /// A linear or angular spring.
 ///
-/// All-zero means HARD: `frequency_or_stiffness <= 0` disables the spring and
-/// the limit becomes as rigid as the solver's step count allows. That is the
-/// right default and it is why a zeroed descriptor is a usable one.
-///
-/// Both numbers must be >= 0 and finite. A negative one is refused rather than
-/// clamped: it is the sign of a unit mix-up, not of an intent.
+/// All-zero means HARD: `frequency_or_stiffness <= 0` disables the spring,
+/// as rigid as the solver's step count allows — a zeroed descriptor is a
+/// usable one. Both numbers must be >= 0 and finite; negative is refused
+/// (sign of a unit mix-up, not intent).
 typedef struct ZJoltSpringSettings {
   ZJoltSpringMode mode;
   float frequency_or_stiffness;
   float damping;
 } ZJoltSpringSettings;
 
-/// What a powered joint may apply.
+/// What a powered joint may apply. Limits are asymmetric on purpose (a
+/// push-only motor is `min = 0`); a zeroed struct applies NOTHING — set
+/// the limits, or -FLT_MAX/FLT_MAX for unlimited, before switching on.
 ///
-/// The limits are asymmetric on purpose — a motor that can push but not pull
-/// is `min = 0`. A zeroed struct is therefore a motor that can apply NOTHING,
-/// which is not usually what a host means: set the limits, or set them to
-/// -FLT_MAX and FLT_MAX for unlimited, before switching a motor on.
-///
-/// `min_* <= max_*` and a valid spring are Jolt preconditions
-/// (`MotorSettings::IsValid`), checked wherever these cross the boundary.
+/// `min_* <= max_*` and a valid spring are Jolt preconditions, checked
+/// wherever these cross the boundary.
 typedef struct ZJoltMotorSettings {
   /// Used when the motor is driving to a POSITION. Ignored by a velocity
   /// motor.
@@ -213,14 +181,8 @@ typedef struct ZJoltMotorSettings {
 //===----------------------------------------------------------------------===//
 // Descriptors
 //
-// Flat plain data in, Jolt's settings objects built on the stack inside. A
-// descriptor is NOT a Jolt `*Settings` object: it does not serialise, it is
-// not reference counted, and nothing keeps a pointer to it past the call.
-//
-// There is deliberately no `*DescInit` for these. Jolt's defaults for an axis
-// are unit vectors, and a zeroed axis is not a degenerate default that quietly
-// misbehaves — it is refused with ZJOLT_RESULT_INVALID_ARGUMENT naming the
-// field. The defaults each field would take are written next to it.
+// Flat plain data, not a Jolt `*Settings` object: not reference counted,
+// no pointer kept past the call, no `*DescInit` (a zeroed axis is refused).
 //===----------------------------------------------------------------------===//
 
 /// Welds two bodies together, removing all six degrees of freedom.
@@ -375,18 +337,11 @@ typedef struct ZJoltSixDofConstraintDesc {
   /// Indexed by ZJoltSixDofAxis. Newtons for a translation, newton metres for
   /// a rotation. 0 = none.
   float max_friction[ZJOLT_SIX_DOF_AXIS_COUNT];
-  /// Indexed by ZJoltSixDofAxis. Metres for a translation, radians for a
-  /// rotation.
-  ///
-  ///  * FREE is `min = -FLT_MAX, max = FLT_MAX`, which is the default.
-  ///  * FIXED is `min > max` — Jolt's own spelling is `FLT_MAX, -FLT_MAX` —
-  ///    and drives that axis to zero.
-  ///  * anything else is a limited range.
-  ///
-  /// A rotation limit is clamped to [-pi, pi] and, for a CONE swing, forced
-  /// symmetric. That is Jolt sanitising its own input rather than asserting,
-  /// so it is not an error here either — but it means what you read back from
-  /// `zjoltSixDofConstraintGetLimits` may not be what you wrote.
+  /// Indexed by ZJoltSixDofAxis. Metres for translation, radians for
+  /// rotation. FREE is `min = -FLT_MAX, max = FLT_MAX` (default); FIXED is
+  /// `min > max`, driving that axis to zero; anything else is limited.
+  /// Rotation limits are clamped to [-pi, pi] and, for CONE swing, forced
+  /// symmetric — read-back may not match what was written.
   float limit_min[ZJOLT_SIX_DOF_AXIS_COUNT];
   float limit_max[ZJOLT_SIX_DOF_AXIS_COUNT];
   /// Soft limits, translations only. Jolt has no soft rotation limits.
@@ -446,10 +401,8 @@ typedef struct ZJoltPulleyConstraintDesc {
 //===----------------------------------------------------------------------===//
 // Paths
 //
-// A path constraint needs a path, and a path is an object with a lifetime of
-// its own — one path is normally shared by every cart on one track. It is
-// therefore a second reference-counted handle rather than an array inside the
-// descriptor.
+// A path has a lifetime of its own, normally shared by every cart on one
+// track: a second reference-counted handle, not an array in the descriptor.
 //===----------------------------------------------------------------------===//
 
 /// A curve a path constraint follows. Reference counted, and shareable between
@@ -525,12 +478,8 @@ typedef struct ZJoltPathConstraintDesc {
 //===----------------------------------------------------------------------===//
 // Construction
 //
-// Every one takes the system the two bodies live in, because that is where a
-// body id is resolved. The constraint is NOT added to the system by creating
-// it — call zjoltConstraintAdd, which is what makes it simulate.
-//
-// A body id that names no body in `system` is ZJOLT_RESULT_BODY_NOT_FOUND.
-// ZJOLT_BODY_ID_WORLD names the world instead, for either body but not both.
+// Creating a constraint does NOT add it — call zjoltConstraintAdd. A body
+// id naming nothing in `system` is ZJOLT_RESULT_BODY_NOT_FOUND; ZJOLT_BODY_ID_WORLD names the world.
 //===----------------------------------------------------------------------===//
 
 ZJOLT_API ZJoltResult zjoltConstraintCreateFixed(
@@ -601,10 +550,9 @@ ZJOLT_API uint32_t zjoltConstraintGetRefCount(const ZJoltConstraint *constraint)
 /// Starts simulating `constraint` in `system`, and takes a reference of its
 /// own — see Ownership at the top of this file.
 ///
-/// Refuses, rather than aborting, when the constraint is already in a system
-/// (Jolt asserts on a second add) or when its bodies do not belong to this
-/// system (Jolt would index the wrong body manager). Both are exact checks,
-/// not heuristics: the constraint list is what is asked.
+/// Refuses, rather than aborting, when the constraint is already in a
+/// system (Jolt asserts on a second add) or its bodies are not part of
+/// this system (Jolt would index the wrong body manager).
 ZJOLT_API ZJoltResult zjoltConstraintAdd(ZJoltPhysicsSystem *system,
                                          ZJoltConstraint *constraint);
 
@@ -645,13 +593,11 @@ ZJOLT_API bool zjoltConstraintIsEnabled(const ZJoltConstraint *constraint);
 ZJOLT_API bool zjoltConstraintIsActive(const ZJoltConstraint *constraint);
 
 /// Wakes both of `constraint`'s bodies — the pairwise counterpart of
-/// zjoltBodyActivate, for when what a caller has in hand is the joint rather
-/// than either body it names.
+/// zjoltBodyActivate, for when the caller has the joint rather than
+/// either body it names.
 ///
-/// Same two refusals as zjoltConstraintAdd, and for the same reason: a
-/// constraint that is not a two-body constraint has no bodies for this to
-/// wake, and one whose bodies do not belong to `system` would wake whatever
-/// body that system happens to have at the same numeric id.
+/// Same two refusals as zjoltConstraintAdd: no bodies to wake if not a
+/// two-body constraint, and a body mismatch would wake the wrong body.
 ZJOLT_API ZJoltResult zjoltConstraintActivate(ZJoltPhysicsSystem *system,
                                               ZJoltConstraint *constraint);
 
@@ -682,37 +628,22 @@ ZJOLT_API ZJoltResult zjoltConstraintGetBodies(const ZJoltConstraint *constraint
                                                ZJoltBodyId *out_body1,
                                                ZJoltBodyId *out_body2);
 
-/// The constraint's own frame, as a transform from constraint space into the
-/// body's CENTRE-OF-MASS space — not its origin space. Compose with the body's
-/// centre-of-mass transform to get to the world.
+/// The constraint's own frame: transform from constraint space into the
+/// body's CENTRE-OF-MASS space, not its origin. Compose with the body's
+/// centre-of-mass transform to reach world space.
 ///
-/// This is the only frame accessor every kind has, and it is what turns a
-/// constraint-space quantity into a body-space one: the target orientations
-/// and angular velocities the swing-twist and six-DOF motors take are in
-/// constraint space, and this is the rotation that relates the two.
-///
-/// Two caveats, both Jolt's and both in its own comments. A kind that does not
-/// constrain rotation — point, distance, pulley, and the cone about its twist
-/// axis — does not track the original rotation difference, so the rotation
-/// part of what comes back is arbitrary rather than wrong-but-meaningful. And
-/// a gear or rack and pinion constrains no position at all, so its translation
-/// column is zero rather than an attachment point.
-///
-/// The one handle this refuses is a vehicle constraint, reachable through
-/// zjoltVehicleConstraintAsConstraint: Jolt derives that one from Constraint
-/// directly rather than from TwoBodyConstraint, and it has no such frame.
+/// A kind that does not constrain rotation returns an arbitrary rotation
+/// part; a gear or rack-and-pinion returns a zero translation column. Refused for a vehicle constraint.
 ZJOLT_API ZJoltResult zjoltConstraintGetConstraintToBody1Matrix(
     const ZJoltConstraint *constraint, ZJoltMat44 *out);
 ZJOLT_API ZJoltResult zjoltConstraintGetConstraintToBody2Matrix(
     const ZJoltConstraint *constraint, ZJoltMat44 *out);
 
 /// How large Jolt draws this constraint through
-/// zjoltPhysicsSystemDrawConstraints and friends. Metres; Jolt's default is 1.
+/// zjoltPhysicsSystemDrawConstraints. Metres; Jolt's default is 1.
 ///
-/// Both report ZJOLT_RESULT_UNSUPPORTED when this library was built without
-/// -Ddebug_renderer=true, because Jolt keeps the field itself behind that
-/// flag. The declaration is here either way — a header whose contents move
-/// with a build option is one that cannot be checked.
+/// Both report ZJOLT_RESULT_UNSUPPORTED unless built with
+/// -Ddebug_renderer=true — the declaration stays either way.
 ZJOLT_API ZJoltResult zjoltConstraintSetDrawSize(ZJoltConstraint *constraint,
                                                  float size);
 ZJOLT_API ZJoltResult zjoltConstraintGetDrawSize(
@@ -724,17 +655,69 @@ ZJOLT_API ZJoltResult zjoltConstraintGetDrawSize(
 ZJOLT_API void zjoltConstraintResetWarmStart(ZJoltConstraint *constraint);
 
 //===----------------------------------------------------------------------===//
+// Constraint settings: the read-back half of constraint authoring. Every
+// constraint kind (including one reached through
+// zjoltVehicleConstraintAsConstraint) overrides GetConstraintSettings, so
+// one binding here covers all of them.
+//
+// Does not record which bodies `constraint` joins — Jolt's own doc comment
+// on GetConstraintSettings. Recreating an equivalent constraint from
+// zjoltConstraintSettingsRestoreBinaryState still needs body ids from
+// elsewhere.
+//===----------------------------------------------------------------------===//
+
+/// A constraint's configuration, snapshotted from a live constraint or
+/// restored from a stream. Reference counted like a shape.
+typedef struct ZJoltConstraintSettings ZJoltConstraintSettings;
+
+/// Snapshots `constraint`'s current settings. ZJOLT_RESULT_OUT_OF_MEMORY if
+/// Jolt could not build the settings object.
+ZJOLT_API ZJoltResult zjoltConstraintGetConstraintSettings(
+    const ZJoltConstraint *constraint, ZJoltConstraintSettings **out);
+
+ZJOLT_API void zjoltConstraintSettingsAddRef(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API void zjoltConstraintSettingsRelease(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API uint32_t zjoltConstraintSettingsGetRefCount(
+    const ZJoltConstraintSettings *settings);
+
+/// The same five base fields zjoltConstraintIsActive,
+/// zjoltConstraintGetPriority, zjoltConstraintGetNumVelocityStepsOverride,
+/// zjoltConstraintGetNumPositionStepsOverride and zjoltConstraintGetDrawSize
+/// read off a live constraint, plus zjoltConstraintGetUserData — read here
+/// too since a settings object restored from a stream has no live
+/// constraint to ask. False/0 if `settings` is NULL.
+ZJOLT_API bool zjoltConstraintSettingsGetEnabled(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API uint32_t zjoltConstraintSettingsGetConstraintPriority(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API uint32_t zjoltConstraintSettingsGetNumVelocityStepsOverride(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API uint32_t zjoltConstraintSettingsGetNumPositionStepsOverride(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API float zjoltConstraintSettingsGetDrawConstraintSize(
+    const ZJoltConstraintSettings *settings);
+ZJOLT_API uint64_t zjoltConstraintSettingsGetUserData(
+    const ZJoltConstraintSettings *settings);
+
+/// Jolt's own binary stream, over the same ZJoltStream seam as
+/// zjoltSkeletalAnimationSaveBinaryState — the type tag travels with the
+/// bytes, so zjoltConstraintSettingsRestoreBinaryState rebuilds whichever
+/// concrete kind was saved, vehicle included. Does not write user_data;
+/// Jolt's own ConstraintSettings::SaveBinaryState does not either.
+ZJOLT_API ZJoltResult zjoltConstraintSettingsSaveBinaryState(
+    const ZJoltConstraintSettings *settings, const ZJoltStream *stream);
+
+/// Release the result with zjoltConstraintSettingsRelease.
+ZJOLT_API ZJoltResult zjoltConstraintSettingsRestoreBinaryState(
+    const ZJoltStream *stream, ZJoltConstraintSettings **out);
+
+//===----------------------------------------------------------------------===//
 // Per-kind state
 //
-// Each of these narrows the handle to one kind first, and reports
-// ZJOLT_RESULT_INVALID_ARGUMENT when it is a different one. That check is not
-// defensive tidiness: without it, asking a slider for its hinge angle is a
-// cast to the wrong type and a read through it.
-//
-// The lambda accessors report the impulse the solver applied over the last
-// step, in the constraint's own frame. They are what a breakable joint is
-// built from — compare against a budget, and disable the constraint when it is
-// exceeded.
+// Each narrows the handle to one kind first (ZJOLT_RESULT_INVALID_ARGUMENT
+// otherwise). Lambda accessors report the solver's last-step impulse.
 //===----------------------------------------------------------------------===//
 
 //===----------------------------------------------------------------------===//
@@ -750,8 +733,8 @@ ZJOLT_API ZJoltResult zjoltFixedConstraintGetTotalLambdaRotation(
 // Point
 //===----------------------------------------------------------------------===//
 
-/// Moves the attachment point on body 1. Note that the constraint keeps no
-/// record of the rotation between the bodies, so moving a point does not
+/// Moves the attachment point on body 1. The constraint keeps no record
+/// of the rotation between the bodies, so moving a point does not
 /// disturb anything else.
 ZJOLT_API ZJoltResult zjoltPointConstraintSetPoint1(ZJoltConstraint *constraint,
                                                     ZJoltConstraintSpace space,
@@ -774,15 +757,12 @@ ZJOLT_API ZJoltResult zjoltPointConstraintGetTotalLambdaPosition(
 // Hinge
 //===----------------------------------------------------------------------===//
 
-/// The hinge's frame, read back in each body's CENTRE-OF-MASS space — the
-/// same space the descriptor's LOCAL_TO_BODY_COM takes, and not what a WORLD
-/// descriptor was given. Whichever space it was built in, this is what Jolt
-/// resolved it to.
+/// The hinge's frame, read back in each body's CENTRE-OF-MASS space —
+/// what Jolt resolved to, whichever space (LOCAL_TO_BODY_COM or WORLD) it
+/// was built in.
 ///
-/// There is no setter for any of these. Jolt has none: a hinge recomputes its
-/// rest orientation from the frame at construction and never revisits it, so
-/// moving one axis afterwards would leave the zero angle pointing somewhere
-/// the constraint no longer believes in. Rebuild the constraint instead.
+/// No setter: a hinge recomputes its rest orientation once at construction
+/// and never revisits it. Rebuild the constraint to change the frame.
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpacePoint1(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetLocalSpacePoint2(
@@ -852,17 +832,12 @@ ZJOLT_API ZJoltResult zjoltHingeConstraintSetTargetAngle(
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetTargetAngle(
     const ZJoltConstraint *constraint, float *out);
 
-/// The same target given as an orientation of body 2 relative to body 1,
-/// which is projected onto the hinge axis and then clamped as above.
+/// The same target as an orientation of body 2 relative to body 1,
+/// projected onto the hinge axis and clamped as above.
 ///
-/// No getter, and this is a recorded decision, not an oversight:
-/// SetTargetOrientationBS does not keep `orientation` anywhere — it derives
-/// an angle from it and hands that to SetTargetAngle, which overwrites the
-/// same mTargetAngle a direct call would. Once that happens the quaternion is
-/// gone; Jolt has nothing left to read it back from. Read
-/// zjoltHingeConstraintGetTargetAngle instead, which is exactly what this
-/// call itself reduces to. Reconstructing an orientation from that angle, if
-/// the caller needs one, is on the caller — Jolt never had it to give back.
+/// No getter: Jolt derives an angle from `orientation` and stores only
+/// that, overwriting the same field a direct SetTargetAngle would. Read
+/// zjoltHingeConstraintGetTargetAngle instead; the quaternion itself is gone.
 ZJOLT_API ZJoltResult zjoltHingeConstraintSetTargetOrientation(
     ZJoltConstraint *constraint, const ZJoltQuat *orientation);
 
@@ -875,14 +850,12 @@ ZJOLT_API ZJoltResult zjoltHingeConstraintGetMaxFrictionTorque(
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaPosition(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
 
-/// The impulse that held the two bodies to the hinge AXIS — two numbers,
-/// because a hinge takes away exactly two rotational degrees of freedom.
-/// Either out-parameter may be NULL.
+/// The impulse holding the two bodies to the hinge AXIS — two numbers,
+/// one per rotational DOF the hinge removes. Either out-parameter may be
+/// NULL. Watch this for a hinge that should snap sideways.
 ///
-/// This is the one to watch for a hinge that should snap sideways. It is
-/// separate from the LIMITS impulse below, which is what a door being forced
-/// past its stop applies, and from the MOTOR impulse, which is what the motor
-/// itself is spending.
+/// Separate from the LIMITS impulse (a door forced past its stop) and the
+/// MOTOR impulse (what the motor itself spends).
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaRotation(
     const ZJoltConstraint *constraint, float *out_x, float *out_y);
 ZJOLT_API ZJoltResult zjoltHingeConstraintGetTotalLambdaRotationLimits(
@@ -1029,11 +1002,10 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetPlaneHalfConeAngle(
 
 /// Both twist limits at once, in radians, both in [-pi, pi] and ordered.
 ///
-/// Deliberately not two setters. Jolt has one per limit, and each recomputes
-/// the constraint part immediately — so moving a range upwards by setting the
-/// minimum first passes through a state where the minimum exceeds the maximum,
-/// which is the assertion. Setting both in one call lets the order be chosen
-/// so that the intermediate state is always valid.
+/// Deliberately not two setters: Jolt recomputes the constraint part on
+/// each individual setter, so setting the minimum first while raising a
+/// range would pass through minimum > maximum. One call keeps every
+/// intermediate state valid.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTwistLimits(
     ZJoltConstraint *constraint, float min, float max);
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTwistLimits(
@@ -1064,24 +1036,20 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetMaxFrictionTorque(
 
 /// Radians per second, in CONSTRAINT space: x is twist, y and z are swing.
 ///
-/// Setting a target while the motor is OFF is not an error and does nothing:
-/// the value is stored and takes effect when
-/// zjoltSwingTwistConstraintSetSwingMotorState or ...TwistMotorState turns the
-/// motor on. Setting it every frame on an off motor is a silent no-op, which
-/// is the usual way this looks like the motor is broken.
+/// Setting a target while the motor is OFF is not an error: the value is
+/// stored and takes effect once ...SwingMotorState or ...TwistMotorState
+/// turns the motor on — a silent no-op until then.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetAngularVelocity(
     ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity);
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTargetAngularVelocity(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
 
 /// The same target expressed in BODY 2's own space, converted through the
-/// constraint frame and stored as the constraint-space one above — so the
-/// getter for both is zjoltSwingTwistConstraintGetTargetAngularVelocity, and
-/// what it returns is the converted value, not what was passed here.
-///
-/// Which one a caller wants is not a matter of taste: an angular velocity
-/// derived from a body's own motion is in body space, and passing it to the
-/// constraint-space setter rotates it by the constraint frame's error.
+/// constraint frame and stored as the constraint-space one above — the
+/// getter for both is zjoltSwingTwistConstraintGetTargetAngularVelocity,
+/// returning the converted value, not what was passed here. An angular
+/// velocity derived from a body's own motion is in body space; using the
+/// constraint-space setter instead rotates it by the frame's error.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace(
     ZJoltConstraint *constraint, const ZJoltVec3 *angular_velocity);
 
@@ -1092,14 +1060,12 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetOrientation(
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTargetOrientation(
     const ZJoltConstraint *constraint, ZJoltQuat *out);
 
-/// The same target given as the rotation of body 2 RELATIVE TO BODY 1 — that
-/// is, the `q` in `world_rotation2 = world_rotation1 * q`. This is the shape a
-/// pose comes in: an animated ragdoll knows each bone's rotation relative to
-/// its parent, and this is the call that takes it without the caller having to
-/// compose the constraint frame in by hand.
+/// The same target as the rotation of body 2 RELATIVE TO BODY 1 — the `q`
+/// in `world_rotation2 = world_rotation1 * q`, the shape an animated
+/// ragdoll's per-bone pose comes in, without composing the frame by hand.
 ///
-/// It reduces to the constraint-space setter and is clamped identically, so
-/// the getter for both is zjoltSwingTwistConstraintGetTargetOrientation.
+/// Reduces to the constraint-space setter and is clamped identically; the
+/// getter for both is zjoltSwingTwistConstraintGetTargetOrientation.
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintSetTargetOrientationBodySpace(
     ZJoltConstraint *constraint, const ZJoltQuat *orientation);
 
@@ -1112,13 +1078,9 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaPosition(
     const ZJoltConstraint *constraint, ZJoltVec3 *out);
 
 /// The torque each LIMIT applied over the last step, one per limited axis.
-/// Zero while the joint is inside its cone and inside its twist range — these
-/// only become non-zero when something is pushing the joint past a limit,
-/// which is exactly the signal a ragdoll uses to decide a bone has been forced
-/// and should break or go limp.
-///
-/// Distinct from zjoltSwingTwistConstraintGetTotalLambdaMotor, which is what
-/// the motors are spending to hold their own targets.
+/// Zero inside the cone and twist range; non-zero only when pushed past a
+/// limit. Distinct from zjoltSwingTwistConstraintGetTotalLambdaMotor
+/// (what the motors spend holding their own targets).
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaTwist(
     const ZJoltConstraint *constraint, float *out);
 ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaSwingY(
@@ -1132,10 +1094,8 @@ ZJOLT_API ZJoltResult zjoltSwingTwistConstraintGetTotalLambdaMotor(
 //===----------------------------------------------------------------------===//
 // Six degrees of freedom
 //
-// Every one of these takes an axis, and every one refuses an axis outside
-// ZJoltSixDofAxis. That is not pedantry: the limits, frictions and motors are
-// plain arrays of six, indexed by the enumerator with no bounds check of
-// Jolt's own, so a seventh axis is an out-of-bounds read or write.
+// Every call refuses an axis outside ZJoltSixDofAxis: limits, frictions
+// and motors are plain arrays of six with no bounds check of Jolt's own.
 //===----------------------------------------------------------------------===//
 
 /// Metres. See ZJoltSixDofConstraintDesc::limit_min for how free, fixed and
@@ -1212,14 +1172,12 @@ ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetOrientation(
 ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTargetOrientation(
     const ZJoltConstraint *constraint, ZJoltQuat *out);
 
-/// The same target given as the rotation of body 2 RELATIVE TO BODY 1, as
-/// zjoltSwingTwistConstraintSetTargetOrientationBodySpace is. Reduces to the
-/// constraint-space setter above, so that is where it reads back from.
+/// The same target as the rotation of body 2 RELATIVE TO BODY 1, as
+/// zjoltSwingTwistConstraintSetTargetOrientationBodySpace is. Reduces to
+/// the constraint-space setter above.
 ///
-/// Note the asymmetry Jolt documents on this constraint and nowhere else: its
-/// TRANSLATION motors work in body 1's constraint space and its ROTATION
-/// motors in body 2's. That applies to the constraint-space accessors; this
-/// call takes body space and does the conversion itself.
+/// Asymmetric, unlike other constraints: TRANSLATION motors work in body
+/// 1's space, ROTATION motors in body 2's; this call takes body space.
 ZJOLT_API ZJoltResult zjoltSixDofConstraintSetTargetOrientationBodySpace(
     ZJoltConstraint *constraint, const ZJoltQuat *orientation);
 
@@ -1239,14 +1197,10 @@ ZJOLT_API ZJoltResult zjoltSixDofConstraintGetTotalLambdaMotorRotation(
 // Gear
 //===----------------------------------------------------------------------===//
 
-/// Hands the gear the two HINGES its bodies are mounted on, so it can correct
-/// positional drift instead of matching velocities only. NULL for both clears
-/// them again.
-///
-/// Both must be hinge constraints. Jolt reads the pair during position solving
-/// and asserts `false, "Unsupported"` on anything else — an abort one frame
-/// later, with nothing at the stack naming this call. It is checked here
-/// instead.
+/// Hands the gear the two HINGES its bodies are mounted on, correcting
+/// positional drift instead of matching velocities only. NULL for both
+/// clears them. Both must be hinge constraints — checked here rather than
+/// left to Jolt's `assert(false, "Unsupported")` during position solving.
 ZJOLT_API ZJoltResult zjoltGearConstraintSetConstraints(
     ZJoltConstraint *constraint, ZJoltConstraint *gear1, ZJoltConstraint *gear2);
 
@@ -1272,7 +1226,7 @@ ZJOLT_API ZJoltResult zjoltRackAndPinionConstraintGetTotalLambda(
 /// Metres of rope. `min` must be non-negative and no greater than `max` —
 /// Jolt asserts both.
 ///
-/// Note that the negative sentinel the descriptor accepts does NOT apply here:
+/// The negative sentinel the descriptor accepts does NOT apply here:
 /// "use the current length" exists only at creation.
 ZJOLT_API ZJoltResult zjoltPulleyConstraintSetLength(ZJoltConstraint *constraint,
                                                      float min, float max);
@@ -1301,15 +1255,12 @@ ZJOLT_API ZJoltResult zjoltPathConstraintSetPath(
     ZJoltConstraint *constraint, const ZJoltPathConstraintPath *path,
     float fraction);
 
-/// The path this constraint follows, BORROWED — it is valid only while the
-/// constraint holds it. Call zjoltPathConstraintPathAddRef to keep it.
+/// The path this constraint follows, BORROWED — valid only while the
+/// constraint holds it. zjoltPathConstraintPathAddRef to keep it.
 ///
-/// A result rather than a plain returned pointer, because NULL would
-/// otherwise mean two unrelated things: a constraint with no path set, which
-/// is a normal state a caller may want to act on, and a handle that is not a
-/// path constraint at all, which is a programming error. `*out` NULL is the
-/// first; ZJOLT_RESULT_INVALID_ARGUMENT is the second, as for every other
-/// zjoltPathConstraint* accessor.
+/// A result, not a plain pointer: NULL is ambiguous between "no path set"
+/// and "not a path constraint". `*out` NULL means the former;
+/// ZJOLT_RESULT_INVALID_ARGUMENT means the latter.
 ZJOLT_API ZJoltResult zjoltPathConstraintGetPath(
     const ZJoltConstraint *constraint, const ZJoltPathConstraintPath **out);
 
@@ -1369,6 +1320,93 @@ ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaRotation(
 ZJOLT_API ZJoltResult zjoltPathConstraintGetTotalLambdaMotor(
     const ZJoltConstraint *constraint, float *out);
 
+//===----------------------------------------------------------------------===//
+// Custom constraints
+//
+// A C++ host subclasses JPH::Constraint; a Zig one cannot. One crossing per
+// solver callback instead, with body state passed by value in ZJoltSolverBody.
+//===----------------------------------------------------------------------===//
+
+/// Body state a custom constraint's solver callbacks read and write.
+/// `position_delta`/`rotation_delta` start at zero each call and are
+/// applied as a rotation vector when the callback returns. `linear_velocity`/
+/// `angular_velocity` read and write ONLY in `warm_start_velocity`/
+/// `solve_velocity` — zero and discarded elsewhere. `inverse_mass`/
+/// `inverse_inertia` (world space) are zero for a non-dynamic body.
+typedef struct ZJoltSolverBody {
+  ZJoltVec3 linear_velocity;
+  ZJoltVec3 angular_velocity;
+  ZJoltVec3 position_delta;        // accumulated by a position-solve callback
+  ZJoltVec3 rotation_delta;        // ditto, as a rotation vector
+  float     inverse_mass;
+  float     inverse_inertia[9];    // world space, row major
+  ZJoltVec3 center_of_mass;        // world space
+  ZJoltQuat rotation;              // world space
+  bool      is_dynamic;
+} ZJoltSolverBody;
+
+typedef struct ZJoltSolverBodyPair {
+  ZJoltSolverBody body1;
+  ZJoltSolverBody body2;
+} ZJoltSolverBodyPair;
+
+/// What a custom constraint's SaveState / RestoreState virtuals talk to. Not
+/// a ZJoltStream: Jolt hands the shim a live JPH::StateRecorder& during a
+/// step, not a stream the shim built itself, so there is nothing here to
+/// adapt from a host's function-pointer table — only to forward to.
+typedef struct ZJoltStateRecorder ZJoltStateRecorder;
+
+ZJOLT_API void zjoltStateRecorderWriteBytes(ZJoltStateRecorder *recorder,
+                                            const void *data, size_t size);
+ZJOLT_API void zjoltStateRecorderReadBytes(ZJoltStateRecorder *recorder,
+                                           void *data, size_t size);
+
+/// The solver virtuals of a custom TwoBodyConstraint, one function pointer
+/// per Jolt virtual. Every one but `draw` and `destroy` is required: Jolt
+/// declares the virtual it stands in for pure, so a NULL here is refused at
+/// zjoltConstraintCreateCustom rather than reaching Jolt as an unimplemented
+/// call.
+typedef struct ZJoltCustomConstraintCallbacks {
+  void (*setup_velocity)(void *user, ZJoltSolverBodyPair *bodies, float delta_time);
+  void (*warm_start_velocity)(void *user, ZJoltSolverBodyPair *bodies, float warm_start_impulse_ratio);
+  bool (*solve_velocity)(void *user, ZJoltSolverBodyPair *bodies, float delta_time);
+  bool (*solve_position)(void *user, ZJoltSolverBodyPair *bodies, float delta_time, float baumgarte);
+  void (*reset_warm_start)(void *user);
+  bool (*is_active)(const void *user);
+  void (*notify_shape_changed)(void *user, ZJoltBodyId body, ZJoltVec3 delta_center_of_mass);
+  void (*save_state)(const void *user, ZJoltStateRecorder *recorder);
+  void (*restore_state)(void *user, ZJoltStateRecorder *recorder);
+  void (*draw)(const void *user, ZJoltDebugRenderer *renderer);   // may be NULL
+  void (*destroy)(void *user);                                    // may be NULL
+} ZJoltCustomConstraintCallbacks;
+
+typedef struct ZJoltCustomConstraintDesc {
+  ZJoltBodyId body1;
+  ZJoltBodyId body2;
+  ZJoltMat44  constraint_to_body1;
+  ZJoltMat44  constraint_to_body2;
+  bool        enabled;
+  uint32_t    num_velocity_steps_override;
+  uint32_t    num_position_steps_override;
+  float       draw_constraint_size;
+  ZJoltCustomConstraintCallbacks callbacks;
+  void       *user;
+} ZJoltCustomConstraintDesc;
+
+/// Builds a TwoBodyConstraint whose solver virtuals forward to `desc`'s
+/// callbacks. Same body rules as every zjoltConstraintCreate*: a body id
+/// naming nothing in `system` is ZJOLT_RESULT_BODY_NOT_FOUND,
+/// ZJOLT_BODY_ID_WORLD names the world for either but not both, and the
+/// two bodies must differ. `GetSubType` on the result is
+/// ZJOLT_CONSTRAINT_SUB_TYPE_CUSTOM.
+ZJOLT_API ZJoltResult zjoltConstraintCreateCustom(
+    ZJoltPhysicsSystem *system, const ZJoltCustomConstraintDesc *desc,
+    ZJoltConstraint **out);
+
+/// The `user` pointer a custom constraint was created with.
+/// ZJOLT_RESULT_INVALID_ARGUMENT on a constraint that is not one.
+ZJOLT_API ZJoltResult zjoltConstraintGetCustomUserData(
+    const ZJoltConstraint *constraint, void **out);
 
 #ifdef __cplusplus
 }  // extern "C"

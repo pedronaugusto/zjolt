@@ -10,6 +10,10 @@
 const std = @import("std");
 const zjolt = @import("zjolt.zig");
 const fixture = @import("integration_test.zig");
+const constraint_mod = @import("constraint.zig");
+const cp = @import("constraint_part.zig");
+const tree = @import("tree.zig");
+const system_mod = @import("system.zig");
 
 const Layers = fixture.Layers;
 const World = fixture.World;
@@ -70,6 +74,222 @@ test "a distance constraint holds two bodies at a fixed separation under gravity
     // It actually swung — a rod that never moved would pass the distance
     // check by doing nothing at all.
     try std.testing.expect(fell);
+}
+
+//=============================================================================
+// Constraint settings
+//=============================================================================
+
+test "constraintSettings reads back the live constraint's own base fields" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 10, 0),
+    }, .activate);
+
+    var rod = try zjolt.Constraint.initDistance(world.system, zjolt.world_body, ball, .{
+        .point1 = zjolt.rvec3(0, 10, 0),
+        .point2 = zjolt.rvec3(0, 10, 0),
+        .min_distance = 0,
+        .max_distance = 0,
+    });
+    defer rod.release();
+
+    rod.setEnabled(false);
+    rod.setUserData(0xC0FFEE);
+    rod.setPriority(7);
+    try rod.setNumVelocityStepsOverride(3);
+    try rod.setNumPositionStepsOverride(5);
+
+    var settings = try rod.constraintSettings();
+    defer settings.deinit();
+
+    try std.testing.expectEqual(@as(u32, 1), settings.refCount());
+    try std.testing.expectEqual(false, settings.enabled());
+    try std.testing.expectEqual(@as(u64, 0xC0FFEE), settings.userData());
+    try std.testing.expectEqual(@as(u32, 7), settings.constraintPriority());
+    try std.testing.expectEqual(@as(u32, 3), settings.numVelocityStepsOverride());
+    try std.testing.expectEqual(@as(u32, 5), settings.numPositionStepsOverride());
+}
+
+test "constraint settings round-trip through saveBinaryState/restoreBinaryState" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 10, 0),
+    }, .activate);
+
+    var rod = try zjolt.Constraint.initDistance(world.system, zjolt.world_body, ball, .{
+        .point1 = zjolt.rvec3(0, 10, 0),
+        .point2 = zjolt.rvec3(0, 10, 0),
+        .min_distance = 1,
+        .max_distance = 2,
+    });
+    defer rod.release();
+    rod.setEnabled(false);
+    rod.setPriority(9);
+    try rod.setNumVelocityStepsOverride(4);
+    try rod.setNumPositionStepsOverride(6);
+
+    var settings = try rod.constraintSettings();
+    defer settings.deinit();
+
+    var stream_buffer: [4096]u8 = undefined;
+    var writer: zjolt.StreamBufferWriter = .{ .buffer = &stream_buffer };
+    try settings.saveBinaryState(zjolt.hostStream(zjolt.StreamBufferWriter, &writer));
+
+    var reader: zjolt.StreamBufferReader = .{ .buffer = writer.slice() };
+    var restored = try constraint_mod.ConstraintSettings.restoreBinaryState(
+        zjolt.hostStream(zjolt.StreamBufferReader, &reader),
+    );
+    defer restored.deinit();
+
+    // Jolt's own ConstraintSettings::SaveBinaryState writes mEnabled,
+    // mDrawConstraintSize, mConstraintPriority and the two step overrides —
+    // not mUserData, which is an application tag it never round-trips.
+    try std.testing.expectEqual(settings.enabled(), restored.enabled());
+    try std.testing.expectEqual(settings.constraintPriority(), restored.constraintPriority());
+    try std.testing.expectEqual(settings.numVelocityStepsOverride(), restored.numVelocityStepsOverride());
+    try std.testing.expectEqual(settings.numPositionStepsOverride(), restored.numPositionStepsOverride());
+    try std.testing.expectEqual(settings.drawConstraintSize(), restored.drawConstraintSize());
+}
+
+//=============================================================================
+// Island building
+//=============================================================================
+
+/// The same shape `tree_test.zig` uses for `IslandBuilder`'s temp-allocator
+/// seam.
+const PageTempAllocator = struct {
+    pub fn allocate(self: *PageTempAllocator, size: u32) ?*anyopaque {
+        _ = self;
+        const slice = std.heap.page_allocator.alloc(u8, size) catch return null;
+        return slice.ptr;
+    }
+    pub fn free(self: *PageTempAllocator, address: ?*anyopaque, size: u32) void {
+        _ = self;
+        const ptr = address orelse return;
+        const bytes: [*]u8 = @ptrCast(ptr);
+        std.heap.page_allocator.free(bytes[0..size]);
+    }
+};
+
+test "Constraint.buildIslands links the constraint to whichever body is dynamic" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var page: PageTempAllocator = .{};
+    const temp_allocator = system_mod.hostTempAllocator(PageTempAllocator, &page);
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const wbodies = world.system.bodies();
+    const ball = try wbodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 10, 0),
+    }, .activate);
+
+    var rod = try zjolt.Constraint.initDistance(world.system, zjolt.world_body, ball, .{
+        .point1 = zjolt.rvec3(0, 10, 0),
+        .point2 = zjolt.rvec3(0, 10, 0),
+        .min_distance = 0,
+        .max_distance = 0,
+    });
+    defer rod.release();
+
+    var builder = try tree.IslandBuilder.init();
+    defer builder.deinit();
+    try builder.reserve(1);
+    try builder.prepareNonContactConstraints(1, &temp_allocator);
+
+    // body1 (`world_body`) is not dynamic; body2 (the ball) is the only
+    // active body, at index 0. Only the ball's index gets the constraint
+    // link — linking two bodies together needs both to be dynamic, which
+    // this pair never is.
+    try rod.buildIslands(0, builder, 0, false, 0, true);
+
+    const active_bodies = [_]tree.BodyId{100};
+    try builder.finalize(&active_bodies, 0, &temp_allocator);
+
+    try std.testing.expectEqual(@as(u32, 1), builder.numIslands());
+    var constraints: [1]u32 = undefined;
+    const count = try builder.constraintsInIsland(0, &constraints);
+    try std.testing.expectEqual(@as(u32, 1), count);
+    try std.testing.expectEqual(@as(u32, 0), constraints[0]);
+}
+
+test "Constraint.buildIslands links both bodies when both are dynamic" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var page: PageTempAllocator = .{};
+    const temp_allocator = system_mod.hostTempAllocator(PageTempAllocator, &page);
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const wbodies = world.system.bodies();
+    const a = try wbodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 10, 0),
+    }, .activate);
+    const b = try wbodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(3, 10, 0),
+    }, .activate);
+
+    var rod = try zjolt.Constraint.initDistance(world.system, a, b, .{
+        .point1 = zjolt.rvec3(0, 10, 0),
+        .point2 = zjolt.rvec3(3, 10, 0),
+        .min_distance = 3,
+        .max_distance = 3,
+    });
+    defer rod.release();
+
+    var builder = try tree.IslandBuilder.init();
+    defer builder.deinit();
+    try builder.reserve(2);
+    try builder.prepareNonContactConstraints(1, &temp_allocator);
+
+    try rod.buildIslands(0, builder, 0, true, 1, true);
+
+    const active_bodies = [_]tree.BodyId{ 100, 200 };
+    try builder.finalize(&active_bodies, 0, &temp_allocator);
+
+    // Both bodies are dynamic, so linkBodies ran too: one island, not two.
+    try std.testing.expectEqual(@as(u32, 1), builder.numIslands());
+    var members: [2]tree.BodyId = undefined;
+    try std.testing.expectEqual(@as(u32, 2), try builder.bodiesInIsland(0, &members));
 }
 
 //=============================================================================
@@ -755,16 +975,13 @@ test "a body-space target orientation drives a swing-twist to that relative rota
 
     // Body 1 is the world at identity, so this is where the bone should end up
     // in world space too.
-    const target = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), 0.4);
+    const target = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 0, 1), 0.4);
     try joint.swingTwistSetTargetOrientationBodySpace(target);
 
     // Stored in CONSTRAINT space: conj(toBody1) * target * toBody2, which is
     // not the quaternion that went in.
     const stored = try joint.swingTwistTargetOrientation();
-    const expected = zjolt.quatMultiply(
-        zjolt.quatMultiply(zjolt.quatConjugate(to_body1), target),
-        to_body2,
-    );
+    const expected = to_body1.conjugate().multiply(target).multiply(to_body2);
     try std.testing.expect(quatAngle(stored, expected) < 1e-3);
     try std.testing.expect(quatAngle(stored, target) > 1e-3);
 
@@ -837,6 +1054,331 @@ test "a body-space angular velocity target is converted, not stored as given" {
     const verbatim = try joint.swingTwistTargetAngularVelocity();
     try std.testing.expectApproxEqAbs(@as(f32, 0), verbatim.x, 1e-4);
     try std.testing.expectApproxEqAbs(@as(f32, 2), verbatim.z, 1e-4);
+}
+
+//=============================================================================
+// Custom constraints
+//
+// A Zig host builds its own solver through `Constraint.initCustom` and `src/constraint_part.zig`'s ported `ConstraintPart`s. `PointJoint` below is a ball joint built entirely from `PointConstraintPart` — the same math `PointConstraint` itself runs, reached through the callback seam instead of compiled into this library.
+//=============================================================================
+
+/// A ball joint, built from the ported `PointConstraintPart` rather than
+/// Jolt's own `PointConstraint`. `point1_local` / `point2_local` are in each
+/// body's centre-of-mass space, exactly as `PointConstraintPart` itself
+/// wants them.
+const PointJoint = struct {
+    part: cp.PointConstraintPart = .{},
+    point1_local: zjolt.Vec3,
+    point2_local: zjolt.Vec3,
+    destroy_count: *u32,
+
+    fn selfOf(user: ?*anyopaque) *PointJoint {
+        return @ptrCast(@alignCast(user.?));
+    }
+
+    fn setupVelocity(user: ?*anyopaque, bodies: *constraint_mod.SolverBodyPair, delta_time: f32) callconv(.c) void {
+        _ = delta_time;
+        const self = selfOf(user);
+        self.part.calculateConstraintProperties(&bodies.body1, self.point1_local, &bodies.body2, self.point2_local);
+    }
+
+    fn warmStartVelocity(user: ?*anyopaque, bodies: *constraint_mod.SolverBodyPair, warm_start_impulse_ratio: f32) callconv(.c) void {
+        selfOf(user).part.warmStart(bodies, warm_start_impulse_ratio);
+    }
+
+    fn solveVelocity(user: ?*anyopaque, bodies: *constraint_mod.SolverBodyPair, delta_time: f32) callconv(.c) bool {
+        _ = delta_time;
+        return selfOf(user).part.solveVelocityConstraint(bodies);
+    }
+
+    fn solvePosition(user: ?*anyopaque, bodies: *constraint_mod.SolverBodyPair, delta_time: f32, baumgarte: f32) callconv(.c) bool {
+        _ = delta_time;
+        // Recalculated every call, exactly as `PointConstraint::SolvePositionConstraint`
+        // does: bodies may have moved since `setupVelocity` ran, or since the
+        // previous position iteration this same step.
+        const self = selfOf(user);
+        self.part.calculateConstraintProperties(&bodies.body1, self.point1_local, &bodies.body2, self.point2_local);
+        return self.part.solvePositionConstraint(bodies, baumgarte);
+    }
+
+    fn resetWarmStart(user: ?*anyopaque) callconv(.c) void {
+        selfOf(user).part.deactivate();
+    }
+
+    fn isActive(user: ?*anyopaque) callconv(.c) bool {
+        _ = user;
+        return true;
+    }
+
+    fn notifyShapeChanged(user: ?*anyopaque, body: zjolt.BodyId, delta_center_of_mass: zjolt.Vec3) callconv(.c) void {
+        _ = .{ user, body, delta_center_of_mass };
+    }
+
+    fn saveState(user: ?*anyopaque, recorder: *constraint_mod.StateRecorder) callconv(.c) void {
+        selfOf(user).part.saveState(recorder);
+    }
+
+    fn restoreState(user: ?*anyopaque, recorder: *constraint_mod.StateRecorder) callconv(.c) void {
+        selfOf(user).part.restoreState(recorder);
+    }
+
+    fn destroy(user: ?*anyopaque) callconv(.c) void {
+        selfOf(user).destroy_count.* += 1;
+    }
+
+    const callbacks: constraint_mod.CustomCallbacks = .{
+        .setup_velocity = setupVelocity,
+        .warm_start_velocity = warmStartVelocity,
+        .solve_velocity = solveVelocity,
+        .solve_position = solvePosition,
+        .reset_warm_start = resetWarmStart,
+        .is_active = isActive,
+        .notify_shape_changed = notifyShapeChanged,
+        .save_state = saveState,
+        .restore_state = restoreState,
+        .destroy = destroy,
+    };
+};
+
+fn makeCustomDesc(body2: zjolt.BodyId, joint: *PointJoint) constraint_mod.CustomDesc {
+    return .{
+        .body1 = zjolt.world_body,
+        .body2 = body2,
+        .constraint_to_body1 = zjolt.mat44_identity,
+        .constraint_to_body2 = zjolt.mat44_identity,
+        .callbacks = PointJoint.callbacks,
+        .user = joint,
+    };
+}
+
+test "a custom constraint built from PointConstraintPart reproduces PointConstraint's own motion" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    // Same pendulum as the distance-constraint test above: the ball starts
+    // three metres from the anchor, level with it, so a rigid point joint
+    // holds it at a fixed separation and gravity does the rest.
+    const anchor_r = zjolt.rvec3(0, 10, 0);
+    const start_r = zjolt.rvec3(3, 10, 0);
+    const dt: f32 = 1.0 / 60.0;
+
+    const reference_position = blk: {
+        var world = try World.init();
+        defer world.deinit();
+
+        const bodies = world.system.bodies();
+        const ball = try bodies.createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = start_r,
+        }, .activate);
+
+        var joint = try zjolt.Constraint.initPoint(world.system, zjolt.world_body, ball, .{
+            .point1 = anchor_r,
+            .point2 = start_r,
+        });
+        defer joint.release();
+        try joint.addTo(world.system);
+
+        var elapsed: f32 = 0;
+        while (elapsed < 1.0) : (elapsed += dt) _ = try world.system.step(dt, 1, world.jobs);
+        break :blk bodies.getPosition(ball);
+    };
+
+    const under_test_position = blk: {
+        var world = try World.init();
+        defer world.deinit();
+
+        const bodies = world.system.bodies();
+        const ball = try bodies.createAndAdd(.{
+            .shape = shape,
+            .object_layer = Layers.moving,
+            .position = start_r,
+        }, .activate);
+
+        // world_body's centre-of-mass transform is the identity, so its
+        // local-space point is the world-space anchor unchanged; the ball's
+        // centre of mass starts exactly at `start_r`, so its local point is
+        // the origin. The same reduction `PointConstraint`'s own constructor
+        // performs when `space == WorldSpace`.
+        var destroy_count: u32 = 0;
+        var joint = PointJoint{
+            .point1_local = zjolt.vec3(0, 10, 0),
+            .point2_local = zjolt.vec3_zero,
+            .destroy_count = &destroy_count,
+        };
+
+        var custom = try zjolt.Constraint.initCustom(world.system, makeCustomDesc(ball, &joint));
+        defer custom.release();
+        try custom.addTo(world.system);
+
+        var elapsed: f32 = 0;
+        while (elapsed < 1.0) : (elapsed += dt) _ = try world.system.step(dt, 1, world.jobs);
+        break :blk bodies.getPosition(ball);
+    };
+
+    try expectRVec3Close(reference_position, under_test_position, 1.0e-4);
+}
+
+test "PointConstraintPart's warm start survives a step and scales the total lambda by the ratio" {
+    // Pure math: no zjolt.init, no bodies, no FFI -- exactly what this port
+    // exists so a custom constraint's inner loop never has to cross back
+    // into the C library.
+    var bodies = constraint_mod.SolverBodyPair{
+        .body1 = solverBody(zjolt.vec3(0, 0, 0), 1.0),
+        .body2 = solverBody(zjolt.vec3(1, 0, 0), 1.0),
+    };
+
+    var part: cp.PointConstraintPart = .{};
+    part.calculateConstraintProperties(&bodies.body1, zjolt.vec3_zero, &bodies.body2, zjolt.vec3(-1, 0, 0));
+
+    // Give the constraint something to solve: the two bodies moving apart
+    // along the axis between them.
+    bodies.body1.linear_velocity = zjolt.vec3(-1, 0, 0);
+    bodies.body2.linear_velocity = zjolt.vec3(1, 0, 0);
+    _ = part.solveVelocityConstraint(&bodies);
+
+    const lambda_before = part.getTotalLambda();
+    try std.testing.expect(@abs(lambda_before.x) + @abs(lambda_before.y) + @abs(lambda_before.z) > 0);
+
+    part.warmStart(&bodies, 0.5);
+    const lambda_after = part.getTotalLambda();
+
+    try expectVec3(zjolt.vec3(lambda_before.x * 0.5, lambda_before.y * 0.5, lambda_before.z * 0.5), lambda_after, 1.0e-5);
+}
+
+test "a custom constraint's save_state and restore_state round trip through ZJoltStateRecorder" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(3, 10, 0),
+    }, .activate);
+
+    var destroy_count: u32 = 0;
+    var joint = PointJoint{
+        .point1_local = zjolt.vec3(0, 10, 0),
+        .point2_local = zjolt.vec3_zero,
+        .destroy_count = &destroy_count,
+    };
+
+    var custom = try zjolt.Constraint.initCustom(world.system, makeCustomDesc(ball, &joint));
+    defer custom.release();
+    try custom.addTo(world.system);
+
+    // Gravity against the rod builds a nonzero impulse from the first step.
+    try world.stepFor(0.2);
+    const before = joint.part.getTotalLambda();
+    try std.testing.expect(@abs(before.x) + @abs(before.y) + @abs(before.z) > 0);
+
+    const state = world.system.state();
+    const saved = try state.saveAlloc(std.testing.allocator, .{ .state = .{ .constraints = true } });
+    defer std.testing.allocator.free(saved);
+
+    // Corrupt the live value directly. The only way `restore` can put it
+    // back is through the ZJoltStateRecorder this constraint's
+    // restore_state callback reads -- there is no other path.
+    joint.part.total_lambda = zjolt.vec3_zero;
+
+    try state.restore(saved, .{});
+
+    try expectVec3(before, joint.part.getTotalLambda(), 1.0e-6);
+}
+
+test "a custom constraint descriptor missing a required callback is refused at create time" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .activate);
+
+    var destroy_count: u32 = 0;
+    var joint = PointJoint{ .point1_local = zjolt.vec3_zero, .point2_local = zjolt.vec3_zero, .destroy_count = &destroy_count };
+
+    var desc = makeCustomDesc(ball, &joint);
+    desc.callbacks.is_active = null; // required; NULL must be refused, not crash later
+
+    try std.testing.expectError(zjolt.Error.InvalidArgument, zjolt.Constraint.initCustom(world.system, desc));
+
+    // Never reached Jolt: the destroy callback the (never-created) constraint
+    // would have run has not run either.
+    try std.testing.expectEqual(@as(u32, 0), destroy_count);
+}
+
+test "a custom constraint's destroy callback runs exactly once, when the last reference goes" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .activate);
+
+    var destroy_count: u32 = 0;
+    var joint = PointJoint{ .point1_local = zjolt.vec3_zero, .point2_local = zjolt.vec3_zero, .destroy_count = &destroy_count };
+
+    var custom = try zjolt.Constraint.initCustom(world.system, makeCustomDesc(ball, &joint));
+    try custom.addTo(world.system);
+    try std.testing.expectEqual(@as(u32, 0), destroy_count);
+
+    // The caller's own reference going does not destroy it -- the system
+    // still holds one.
+    custom.release();
+    try std.testing.expectEqual(@as(u32, 0), destroy_count);
+
+    // The system's reference going is what finally does.
+    try custom.removeFrom(world.system);
+    try std.testing.expectEqual(@as(u32, 1), destroy_count);
+}
+
+fn solverBody(position: zjolt.Vec3, inverse_mass: f32) constraint_mod.SolverBody {
+    return .{
+        .linear_velocity = zjolt.vec3_zero,
+        .angular_velocity = zjolt.vec3_zero,
+        .position_delta = zjolt.vec3_zero,
+        .rotation_delta = zjolt.vec3_zero,
+        .inverse_mass = inverse_mass,
+        .inverse_inertia = .{ 1, 0, 0, 0, 1, 0, 0, 0, 1 },
+        .center_of_mass = position,
+        .rotation = zjolt.quat_identity,
+        .is_dynamic = true,
+    };
+}
+
+fn expectRVec3Close(expected: zjolt.RVec3, actual: zjolt.RVec3, tolerance: f64) !void {
+    try std.testing.expectApproxEqAbs(@as(f64, @floatCast(expected.x)), @as(f64, @floatCast(actual.x)), tolerance);
+    try std.testing.expectApproxEqAbs(@as(f64, @floatCast(expected.y)), @as(f64, @floatCast(actual.y)), tolerance);
+    try std.testing.expectApproxEqAbs(@as(f64, @floatCast(expected.z)), @as(f64, @floatCast(actual.z)), tolerance);
 }
 
 //=============================================================================

@@ -1,0 +1,104 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Geometry	AABox4DistanceSqToPoint	ZIG	src/math.zig:AABox4.distanceSqToPoint
+Geometry	AABox4EnlargeWithExtent	ZIG	src/math.zig:AABox4.enlargeWithExtent
+Geometry	AABox4Scale	ZIG	src/math.zig:AABox4.scale
+Geometry	AABox4VsBox	ZIG	src/math.zig:AABox4.vsBox
+Geometry	AABox4VsPoint	ZIG	src/math.zig:AABox4.vsPoint
+Geometry	AABox4VsSphere	ZIG	src/math.zig:AABox4.vsSphere
+Geometry	AssignPointToEdge	INTERNAL	no public declaration
+Geometry	AssignPointToFace	INTERNAL	no public declaration
+Geometry	BinaryHeapPop	LANGUAGE	std.sort.pdq and std.PriorityQueue
+Geometry	BinaryHeapPush	LANGUAGE	std.sort.pdq and std.PriorityQueue
+Geometry	CalculateNormalAndCenter	ZIG	src/geometry.zig:calculateNormalAndCenter2D
+Geometry	CalculateNormalAndCentroid	ZIG	src/geometry.zig:calculateNormalAndCentroid
+Geometry	CalculatePointAAndB	BOUND	zjoltGJKCalculatePointAAndB
+Geometry	ConvexHullBuilder2D	BOUND	zjoltConvexHullBuilder2DCreate zjoltConvexHullBuilder2DInitialize
+Geometry	CreateFace	INTERNAL	no public declaration
+Geometry	DetermineCoplanarDistance	INTERNAL	no public declaration
+Geometry	DifferenceOfProducts	LANGUAGE	@mulAdd for the fused difference of products
+Geometry	DrawGeometry	EXTENSION	ZJoltDebugBatchCallbacks zjoltDebugRendererSetBatchCallbacks
+Geometry	DrawLabel	INTERNAL	only declared under JPH_EPA_CONVEX_BUILDER_DRAW, whose sole #define upstream is commented out
+Geometry	DrawState	INTERNAL	only declared under JPH_CONVEX_BUILDER_2D_DEBUG, whose sole #define upstream is commented out
+Geometry	DrawWireFace	INTERNAL	no public declaration
+Geometry	DumpFace	INTERNAL	no public declaration
+Geometry	DumpFaces	INTERNAL	no public declaration
+Geometry	DumpShape	INTERNAL	no public declaration
+Geometry	Encapsulate	ZIG	src/c/core.zig:AABox.encapsulatePoint
+Geometry	EncapsulatePoint	BOUND	zjoltShapeGetCenterOfMass zjoltShapeGetRadius
+Geometry	EnsureMinimalEdgeLength	BOUND	ZJoltAABox zjoltShapeGetLocalBounds
+Geometry	ExpandBy	BOUND	ZJoltAABox
+Geometry	FindEdge	INTERNAL	no public declaration
+Geometry	Float2	LANGUAGE	@Vector(4, f32) and @Vector(4, u32) are the same registers
+Geometry	FreeEdges	INTERNAL	no public declaration
+Geometry	FreeFace	INTERNAL	no public declaration
+Geometry	FreeFaces	INTERNAL	no public declaration
+Geometry	GarbageCollectFaces	INTERNAL	no public declaration
+Geometry	GetCentroid	BOUND	zjoltShapeGetTrianglesNext zjoltShapeCreateMesh zjoltShapeCreateTriangle
+Geometry	GetClosestPoints	BOUND	zjoltGJKGetClosestPoints
+Geometry	GetClosestPointsSimplex	BOUND	zjoltGJKGetClosestPointsSimplex
+Geometry	GetConstant	BOUND	ZJoltPlane zjoltShapeGetPlane zjoltShapeGetPlanes
+Geometry	GetDistanceToEdgeSq	INTERNAL	no public declaration
+Geometry	GetFaceForPoint	INTERNAL	no public declaration
+Geometry	GetHash	LANGUAGE	std.hash.Wyhash
+Geometry	GetLowestIndexFirst	ZIG	src/math.zig:IndexedTriangle.lowestIndexFirst
+Geometry	GetPenetrationDepth	BOUND	zjoltEPAGetPenetrationDepth
+Geometry	GetPenetrationDepthStepEPA	BOUND	zjoltEPAGetPenetrationDepthStepEPA
+Geometry	GetPenetrationDepthStepGJK	BOUND	zjoltEPAGetPenetrationDepthStepGJK
+Geometry	GetPreviousEdge	ZIG	src/geometry.zig:previousVertexInLoop
+Geometry	GetSizeRef	BOUND	zjoltEPAConvexHullBuilderCreate
+Geometry	GetSqDistanceTo	BOUND	ZJoltAABox
+Geometry	GetSurfaceArea	BOUND	ZJoltAABox
+Geometry	HashBytes	LANGUAGE	std.hash.Wyhash
+Geometry	IndexedTriangle	ZIG	src/math.zig:IndexedTriangle
+Geometry	IndexedTriangleNoMaterial	ZIG	src/geometry.zig:IndexedTriangleNoMaterial
+Geometry	Intersect	BOUND	ZJoltAABox zjoltShapeGetLocalBounds
+Geometry	Intersects	ZIG	src/c/core.zig:AABox.intersect
+Geometry	IsDegenerate	ZIG	src/math.zig:IndexedTriangle.isDegenerate
+Geometry	IsEquivalent	ZIG	src/math.zig:IndexedTriangle.isEquivalent
+Geometry	IsInside	ZIG	src/geometry.zig:Ellipse.isInside
+Geometry	IsOpposite	ZIG	src/geometry.zig:IndexedTriangleNoMaterial.isOpposite
+Geometry	Library	INTERNAL	no public declaration
+Geometry	MergeCoplanarOrConcaveFaces	INTERNAL	no public declaration
+Geometry	MergeDegenerateFace	INTERNAL	no public declaration
+Geometry	MergeFaces	INTERNAL	no public declaration
+Geometry	OriginOutsideOfPlane	ZIG	src/geometry.zig:originOutsideOfPlane
+Geometry	OriginOutsideOfTetrahedronPlanes	ZIG	src/geometry.zig:originOutsideOfTetrahedronPlanes
+Geometry	PeekClosestTriangleInQueue	BOUND	zjoltEPAConvexHullBuilderPeekClosestTriangle
+Geometry	PolygonConvexSupport	BOUND	zjoltConvexSupportCreatePolygon
+Geometry	PopClosestTriangleFromQueue	BOUND	zjoltEPAConvexHullBuilderPopClosestTriangle
+Geometry	ProjectPointOnPlane	BOUND	ZJoltPlane zjoltShapeGetPlane
+Geometry	RayAABox4	ZIG	src/math.zig:ray.aabox4
+Geometry	RayInvDirection	ZIG	src/math.zig:RayInvDirection
+Geometry	RayTriangle4	ZIG	src/math.zig:ray.triangle4
+Geometry	RemoveInvalidEdges	INTERNAL	no public declaration
+Geometry	RemoveTwoEdgeFace	INTERNAL	no public declaration
+Geometry	SetConstant	BOUND	ZJoltPlane zjoltShapeCreatePlane
+Geometry	SetEmpty	BOUND	ZJoltAABox
+Geometry	SignedDistance	ZIG	src/math.zig:planeSignedDistance
+Geometry	Sqrt	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Geometry	Square	LANGUAGE	std.math and @Vector arithmetic
+Geometry	StoreFloat4	LANGUAGE	@ptrCast plus assignment; Zig has no aliasing store intrinsic
+Geometry	Trace	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Geometry	TransformedConvexObject	BOUND	zjoltConvexSupportCreateTransformed
+Geometry	Translate	BOUND	ZJoltAABox
+Geometry	TriangleConvexSupport	BOUND	zjoltConvexSupportCreateTriangle
+Geometry	UnlinkTriangle	INTERNAL	no public declaration
+Geometry	UpdatePointSetP	ZIG	src/geometry.zig:Simplex.updatePointSetP
+Geometry	UpdatePointSetPQ	ZIG	src/geometry.zig:Simplex.updatePointSetPQ
+Geometry	UpdatePointSetY	ZIG	src/geometry.zig:Simplex.updatePointSetY
+Geometry	UpdatePointSetYPQ	ZIG	src/geometry.zig:Simplex.updatePointSetYPQ
+Geometry	ValidateEdges	INTERNAL	no public declaration
+Geometry	ValidateFace	INTERNAL	no public declaration
+Geometry	ValidateFaces	INTERNAL	no public declaration
+Geometry	ValidateTriangle	INTERNAL	no public declaration
+Geometry	ValidateTriangles	INTERNAL	only declared under JPH_EPA_CONVEX_BUILDER_VALIDATE, whose sole #define upstream is commented out

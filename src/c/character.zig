@@ -23,6 +23,7 @@ pub const ObjectLayer = core.ObjectLayer;
 pub const PhysicsMaterial = core.PhysicsMaterial;
 pub const PhysicsSystem = core.PhysicsSystem;
 pub const Quat = core.Quat;
+pub const RMat44 = core.RMat44;
 pub const RVec3 = core.RVec3;
 pub const Result = core.Result;
 pub const Shape = core.Shape;
@@ -107,6 +108,10 @@ pub extern fn zjoltCharacterGetGroundBodyId(character: *const Character) BodyId;
 pub extern fn zjoltCharacterGetGroundUserData(character: *const Character) u64;
 
 pub extern fn zjoltCharacterUpdateGroundVelocity(character: *Character) void;
+
+pub extern fn zjoltCharacterGetAdjustedBodyVelocity(character: *const Character, body_b: BodyId, out_linear_velocity: *Vec3, out_angular_velocity: *Vec3) Result;
+
+pub extern fn zjoltCharacterCalculateGroundVelocity(character: *const Character, center_of_mass: *const RVec3, linear_velocity: *const Vec3, angular_velocity: *const Vec3, delta_time: f32, out: *Vec3) void;
 
 pub extern fn zjoltCharacterSetShape(character: *Character, shape: *const Shape, max_penetration_depth: f32, filters: ?*const QueryFilters, out_changed: ?*bool) Result;
 
@@ -268,6 +273,22 @@ pub extern fn zjoltCharacterVsCharacterCollisionAdd(collision: *CharacterVsChara
 pub extern fn zjoltCharacterVsCharacterCollisionRemove(collision: *CharacterVsCharacterCollision, character: *const Character) void;
 
 pub extern fn zjoltCharacterSetCharacterVsCharacterCollision(character: *Character, collision: ?*CharacterVsCharacterCollision) void;
+
+/// `candidate` is a character the host itself created and still holds.
+/// Returns whether to keep visiting.
+pub const CharacterVsCharacterVisitFn = *const fn (visit_user: ?*anyopaque, candidate: *Character) callconv(.c) bool;
+
+pub const CollideCharacterFn = *const fn (user: ?*anyopaque, character: CharacterId, center_of_mass_transform: *const RMat44, visit: CharacterVsCharacterVisitFn, visit_user: ?*anyopaque) callconv(.c) void;
+
+pub const CastCharacterFn = *const fn (user: ?*anyopaque, character: CharacterId, center_of_mass_transform: *const RMat44, direction: *const Vec3, visit: CharacterVsCharacterVisitFn, visit_user: ?*anyopaque) callconv(.c) void;
+
+pub const CharacterVsCharacterCollisionCallbacks = extern struct {
+    collide_character: ?CollideCharacterFn = null,
+    cast_character: ?CastCharacterFn = null,
+    user: ?*anyopaque = null,
+};
+
+pub extern fn zjoltCharacterVsCharacterCollisionCreateCustom(callbacks: *const CharacterVsCharacterCollisionCallbacks, out: **CharacterVsCharacterCollision) Result;
 
 pub const RigidCharacterDesc = extern struct {
     shape: ?*const Shape,

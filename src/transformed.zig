@@ -1,26 +1,15 @@
 //! A shape, placed in the world, queried on its own.
 //!
-//! `Queries` answers "what does this system's geometry look like from here",
-//! and every call on it takes a `PhysicsSystem`. This is the other half: a
-//! shape the caller already holds, a world transform for it, and the same
-//! kinds of query run against that alone. There is no broad phase to walk,
-//! because there is nothing to find but the one shape already named.
+//! `Queries` answers "what does this system's geometry look like from
+//! here", against a `PhysicsSystem`. This is the other half: a shape
+//! the caller already holds, a world transform for it, the same query
+//! kinds run against that alone — no broad phase to walk, since there
+//! is nothing to find but the one shape already named. Produced from a
+//! broad-phase hit carried past its body lock, or
+//! `Shape.subShapeTransformedShape` drilling into a compound's child.
 //!
-//! Two things produce one. A broad-phase hit read under a body lock and then
-//! carried past the point where holding that lock is safe — which is what
-//! Jolt's own `TransformedShape` exists FOR — and
-//! `Shape.subShapeTransformedShape`, drilling into a compound's child.
-//!
-//! Queries here come in the `...Closest` and `count.../...All` forms
-//! `query.zig` describes, and in neither of its streaming `...Each` forms.
-//! That is deliberate rather than unfinished: the result set behind one
-//! already-resolved shape is bounded by its own leaf count, not by however
-//! much of a world a broad phase might hand back, so the allocation-avoidance
-//! the streaming form buys matters far less on this side.
-//!
-//! Unlike a `Shape`, one of these is a plain owning handle rather than a
-//! reference-counted object — `deinit` it, and it counts towards
-//! `liveHandleCount` until you do.
+//! `...Closest`/`count.../...All` only, no streaming `...Each`:
+//! deliberate — one shape's result set is leaf-bounded, not broad-phase-bounded, so streaming buys much less. Unlike a `Shape`, a plain owning handle, not reference-counted — `deinit` it; it counts towards `liveHandleCount` until you do.
 
 const std = @import("std");
 const c = @import("c/transformed.zig");
@@ -149,12 +138,11 @@ pub const TransformedShape = struct {
     }
 
     /// The FACE normal at world-space `position` on the leaf named by
-    /// `sub_shape_id`. @see `Shape.surfaceNormal` for what this is — and is
-    /// not — a substitute for: for a hit's contact normal use
-    /// `-penetration_axis` from the hit itself.
+    /// `sub_shape_id`. @see `Shape.surfaceNormal` for what this is — and
+    /// is not — a substitute for (a hit's contact normal is
+    /// `-penetration_axis` from the hit itself).
     ///
-    /// `sub_shape_id` follows `material`'s rule: `sub_shape_id_empty` for a
-    /// shape with no leaves.
+    /// `sub_shape_id` follows `material`'s rule: `sub_shape_id_empty` for a shape with no leaves.
     pub fn worldSpaceSurfaceNormal(
         self: TransformedShape,
         sub_shape_id: c.SubShapeId,
@@ -170,14 +158,12 @@ pub const TransformedShape = struct {
         return out;
     }
 
-    /// The material of the leaf named by `sub_shape_id`. Never null for a
-    /// valid handle. @see `Shape.material` for the whole of it, including why
-    /// a shape with no leaves must be asked with `sub_shape_id_empty` — Jolt
-    /// asserts otherwise — and why a shape built without a material answers
-    /// with the shared default rather than null.
+    /// The material of the leaf named by `sub_shape_id`. Never null for
+    /// a valid handle. @see `Shape.material` for the whole of it,
+    /// including why a leafless shape must use `sub_shape_id_empty`
+    /// (Jolt asserts otherwise) and the no-material default.
     ///
-    /// The material is borrowed from the wrapped shape; `addRef` it to outlive
-    /// one.
+    /// Borrowed from the wrapped shape; `addRef` it to outlive one.
     pub fn material(self: TransformedShape, sub_shape_id: c.SubShapeId) ?PhysicsMaterial {
         const handle = c.zjoltTransformedShapeGetMaterial(self.handle, sub_shape_id) orelse
             return null;
@@ -190,18 +176,12 @@ pub const TransformedShape = struct {
         return c.zjoltTransformedShapeGetSubShapeUserData(self.handle, sub_shape_id);
     }
 
-    /// The face of the leaf named by `sub_shape_id` that faces `direction` the
-    /// most. `out_vertices` must hold `max_supporting_face_vertices` entries;
-    /// the returned slice is a view into it. Only convex shapes and triangles
-    /// have one — a sphere, an empty shape and so on report an empty slice,
-    /// which is Jolt's own answer and not a failure of this call.
+    /// The face of the leaf named by `sub_shape_id` that faces
+    /// `direction` most. `out_vertices` must hold
+    /// `max_supporting_face_vertices` entries; the returned slice views
+    /// it. Only convex shapes/triangles have one — others report an empty slice, Jolt's own answer, not a failure.
     ///
-    /// `direction` is in WORLD space here, unlike `Shape.supportingFace`,
-    /// which takes it in the shape's own. `base_offset` is subtracted from
-    /// each vertex before it is returned: pass `rvec3_zero` for world-space
-    /// vertices, or a point near them — this shape's own position is usually
-    /// right — for the precision a double-precision world needs far from the
-    /// origin.
+    /// `direction` is WORLD space here, unlike `Shape.supportingFace`. `base_offset` is subtracted from each vertex — zero for world-space, or a nearby point (this shape's position usually works) for precision far from the origin.
     pub fn supportingFace(
         self: TransformedShape,
         sub_shape_id: c.SubShapeId,
@@ -219,6 +199,63 @@ pub const TransformedShape = struct {
             &count,
         ));
         return out_vertices[0..count];
+    }
+
+    //=========================================================================
+    // Decomposing a compound
+    //
+    // `Shape.subShapeTransformedShape` addresses a DIRECT child only; a
+    // `SubShapeId` always "comes from a hit", with no way to synthesize one for an arbitrary compound child. This is the other way in: hand Jolt a box, walk the tree to any depth, and report each LEAF overlapping it.
+    //=========================================================================
+
+    /// Every leaf of this shape whose world-space bounds overlap `box`,
+    /// each a fresh, owned handle — `deinit` every one, free the slice
+    /// with `allocator`. A childless shape reports one handle, itself.
+    /// Each carries its own root path, baked in at collection time, so
+    /// a query against one of THEM resolves sub-shape ids/materials/
+    /// normals without reconstructing that path by hand. `filter` may be null; the body id it sees is always `invalid_body_id`.
+    pub fn collectTransformedShapes(
+        self: TransformedShape,
+        allocator: std.mem.Allocator,
+        box: math.AABox,
+        filter: ?*const ShapeFilter,
+    ) (err.Error || std.mem.Allocator.Error)![]TransformedShape {
+        var count: u32 = 0;
+        try err.check(c.zjoltTransformedShapeCollectTransformedShapes(
+            self.handle,
+            &box,
+            filter,
+            null,
+            0,
+            &count,
+        ));
+        if (count == 0) return &.{};
+
+        const raw = try allocator.alloc(?*c.TransformedShape, count);
+        defer allocator.free(raw);
+
+        var written: u32 = 0;
+        try err.check(c.zjoltTransformedShapeCollectTransformedShapes(
+            self.handle,
+            &box,
+            filter,
+            raw.ptr,
+            count,
+            &written,
+        ));
+
+        // Each entry in raw[0..written] is a handle THIS call produced and
+        // this function now owns. If wrapping them fails partway, every one
+        // of them is released here rather than leaked — the same "leave
+        // nothing behind" rule the C entry point itself follows on its own
+        // out-of-memory path.
+        const out = allocator.alloc(TransformedShape, written) catch |alloc_err| {
+            for (raw[0..written]) |handle| c.zjoltTransformedShapeDestroy(handle);
+            return alloc_err;
+        };
+        for (out, raw[0..written]) |*shape, handle|
+            shape.* = .{ .handle = handle.? };
+        return out;
     }
 
     //=========================================================================
@@ -327,9 +364,7 @@ pub const TransformedShape = struct {
     //=========================================================================
     // Point
     //
-    // Every leaf the point is inside, all of them treated as solid. A mesh
-    // answers this usefully only if it is a closed manifold — an open mesh has
-    // no inside for a point to be in.
+    // Every leaf the point is inside, treated as solid. A mesh answers usefully only if it is a closed manifold — an open mesh has no inside.
     //=========================================================================
 
     pub fn countPointHits(
@@ -542,25 +577,21 @@ pub const TransformedShape = struct {
     }
 };
 
-/// One `TransformedShape.triangleWalk` in progress. `shape` must outlive it,
-/// and it must not be moved or reused for a second walk once started.
+/// One `TransformedShape.triangleWalk` in progress. `shape` must
+/// outlive it, and it must not be moved or reused for a second walk once started.
 ///
-/// A separate type from `shape.zig`'s `TriangleWalk` even though the protocol
-/// is identical, because the scratch buffer is: the two query surfaces are
-/// independent on the C side, and nothing here assumes they share a layout
-/// merely because they happen to today.
+/// A separate type from `shape.zig`'s `TriangleWalk`, same protocol
+/// but a different scratch buffer — the two query surfaces are independent on the C side, sharing no assumed layout.
 pub const TriangleWalk = struct {
     shape: TransformedShape,
     context: c.TransformedShapeTrianglesContext,
 
-    /// Continues the walk into `out_vertices` (three consecutive vertices per
-    /// triangle) and, if not null, `out_materials` (one per triangle, borrowed
-    /// from the wrapped shape). Both must hold at least `out_vertices.len / 3`
-    /// triangles' worth — the request is taken from `out_vertices.len / 3`,
-    /// and it must be at least `min_triangles_requested`, because Jolt asserts
-    /// on a smaller one rather than honouring it. Returns the vertices
-    /// actually written; an empty result means the walk is over, not "call
-    /// again with a bigger buffer".
+    /// Continues the walk into `out_vertices` (three consecutive
+    /// vertices per triangle) and, if not null, `out_materials` (one
+    /// per triangle, borrowed from the wrapped shape). The request
+    /// comes from `out_vertices.len / 3`, which must be at least
+    /// `min_triangles_requested` (Jolt asserts on a smaller one). An
+    /// empty result means the walk is over, not "call again with a bigger buffer".
     pub fn next(
         self: *TriangleWalk,
         out_vertices: []math.Vec3,
@@ -630,4 +661,91 @@ test "a transformed shape reports the placement it was given" {
     );
     try std.testing.expect(hit != null);
     try std.testing.expectEqual(body_mod.invalid_body_id, hit.?.body);
+}
+
+test "collectTransformedShapes decomposes a compound into its known leaves" {
+    const zjolt = @import("zjolt.zig");
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const sphere = try shape_mod.Shape.initSphere(0.5, .{});
+    defer sphere.release();
+    const box = try shape_mod.Shape.initBox(math.vec3(0.5, 0.5, 0.5), .{});
+    defer box.release();
+
+    // Two children ten metres apart, each at a position this test already
+    // knows by construction -- the thing a whole-body handle cannot report
+    // and a per-child sub-shape id cannot be synthesized to ask for.
+    const compound = try shape_mod.Shape.initStaticCompound(&.{
+        shape_mod.compoundChild(sphere, .{ .position = math.vec3(-5, 0, 0) }),
+        shape_mod.compoundChild(box, .{ .position = math.vec3(5, 0, 0) }),
+    });
+    defer compound.release();
+
+    const ts = try TransformedShape.init(compound, math.rvec3(0, 0, 0), .{});
+    defer ts.deinit();
+
+    // A box spanning both children's known positions finds exactly two
+    // leaves -- the compound's two actual children, each reported at the
+    // position it was built with, not the whole compound reported twice.
+    const covers_both: math.AABox = .{
+        .min = math.vec3(-6, -1, -1),
+        .max = math.vec3(6, 1, 1),
+    };
+    const leaves = try ts.collectTransformedShapes(std.testing.allocator, covers_both, null);
+    defer {
+        for (leaves) |leaf| leaf.deinit();
+        std.testing.allocator.free(leaves);
+    }
+    try std.testing.expectEqual(@as(usize, 2), leaves.len);
+
+    var saw_sphere_side = false;
+    var saw_box_side = false;
+    for (leaves) |leaf| {
+        const placement = leaf.worldTransform();
+        if (std.math.approxEqAbs(math.Real, placement.position.x, -5, 1.0e-3))
+            saw_sphere_side = true;
+        if (std.math.approxEqAbs(math.Real, placement.position.x, 5, 1.0e-3))
+            saw_box_side = true;
+
+        // Each leaf is queryable on its own, at the path Jolt baked into it
+        // during collection -- not the empty sub-shape id a whole-body
+        // handle would report for a shape it cannot decompose.
+        const leaf_hit = try leaf.castRayClosest(
+            math.rvec3(placement.position.x, placement.position.y, -10),
+            math.vec3(0, 0, 20),
+            null,
+            null,
+        );
+        try std.testing.expect(leaf_hit != null);
+    }
+    try std.testing.expect(saw_sphere_side);
+    try std.testing.expect(saw_box_side);
+
+    // A box overlapping only one child's known position finds exactly that
+    // one, not both.
+    const covers_sphere_only: math.AABox = .{
+        .min = math.vec3(-6, -1, -1),
+        .max = math.vec3(-4, 1, 1),
+    };
+    const one = try ts.collectTransformedShapes(std.testing.allocator, covers_sphere_only, null);
+    defer {
+        for (one) |leaf| leaf.deinit();
+        std.testing.allocator.free(one);
+    }
+    try std.testing.expectEqual(@as(usize, 1), one.len);
+    try std.testing.expectApproxEqAbs(
+        @as(math.Real, -5),
+        one[0].worldTransform().position.x,
+        1.0e-3,
+    );
+
+    // A box nowhere near either child finds nothing, and the empty result
+    // needs no handle destroyed and no allocation freed.
+    const covers_neither: math.AABox = .{
+        .min = math.vec3(90, 90, 90),
+        .max = math.vec3(91, 91, 91),
+    };
+    const none = try ts.collectTransformedShapes(std.testing.allocator, covers_neither, null);
+    try std.testing.expectEqual(@as(usize, 0), none.len);
 }

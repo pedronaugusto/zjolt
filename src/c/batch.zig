@@ -6,6 +6,7 @@
 //! the ABI cross-check and the misuse sweep walk.
 
 const std = @import("std");
+const body_mod = @import("body.zig");
 const broadphase = @import("broadphase.zig");
 const core = @import("core.zig");
 
@@ -18,6 +19,7 @@ pub const BodyAddBatch = core.BodyAddBatch;
 pub const BodyId = core.BodyId;
 pub const PhysicsSystem = core.PhysicsSystem;
 pub const Result = core.Result;
+pub const UnassignedBody = body_mod.UnassignedBody;
 
 pub extern fn zjoltBodyAddBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32, activation: Activation) Result;
 
@@ -30,6 +32,8 @@ pub extern fn zjoltBodyAddBatchAbort(system: *PhysicsSystem, batch: *BodyAddBatc
 pub extern fn zjoltBodyRemoveBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
 
 pub extern fn zjoltBodyDestroyBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
+
+pub extern fn zjoltBodyUnassignIds(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32, out_bodies: ?[*]?*UnassignedBody) Result;
 
 pub extern fn zjoltBodyActivateBatch(system: *PhysicsSystem, bodies: ?[*]const BodyId, count: u32) Result;
 

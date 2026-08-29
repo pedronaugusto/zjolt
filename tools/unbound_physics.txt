@@ -1,0 +1,68 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Physics	AssignSplit	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	AssignToNonParallelSplit	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	CCDBody	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/PhysicsUpdateContext.h:26 (file)
+Physics	CheckSleepAndUpdateBounds	INTERNAL	no public declaration
+Physics	ConnectedConstraint	BOUND	zjoltSceneAddConstraint zjoltSceneGetConstraint ZJoltSceneConstraint
+Physics	EStateRecorderState	BOUND	ZJoltStateRecorderState
+Physics	FetchNextBatch	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetBodyInterface	BOUND	zjoltBody* zjoltPhysicsSystemGetBodies
+Physics	GetBodyInterfaceNoLock	BOUND	zjoltPhysicsSystemTryGetBodyNoLock ZJoltBody* zjoltBody*
+Physics	GetBodyLockInterface	BOUND	zjoltBodyLockRead zjoltBodyLockWrite ZJoltBodyLock
+Physics	GetBodyLockInterfaceNoLock	BOUND	zjoltPhysicsSystemTryGetBodyNoLock zjoltBodyLockRead zjoltBodyLockWrite
+Physics	GetBroadPhaseQuery	BOUND	zjoltBroadPhase* zjoltBroadPhaseCastRay zjoltBroadPhaseCollideAABox
+Physics	GetConstraintsInSplit	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetContactsInSplit	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetDataSize	BOUND	zjoltPhysicsSystemSaveState
+Physics	GetDefaultBroadPhaseLayerFilter	BOUND	zjoltPhysicsSystemCreate ZJoltBroadPhaseLayerFilter
+Physics	GetDefaultLayerFilter	BOUND	ZJoltObjectLayerFilter
+Physics	GetIslandIndex	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetIslandStats	BOUND	zjoltIslandBuilderGetStats
+Physics	GetNarrowPhaseQuery	BOUND	zjoltCastRay* zjoltCastShape* zjoltCollideShape* zjoltCollidePoint*
+Physics	GetNarrowPhaseQueryNoLock	BOUND	zjoltCastRayClosestNoLock zjoltCastRayAllNoLock zjoltCastRayEachNoLock zjoltCastShapeClosestNoLock zjoltCastShapeAllNoLock zjoltCastShapeEachNoLock zjoltCollideShapeClosestNoLock zjoltCollideShapeAllNoLock zjoltCollideShapeEachNoLock zjoltCollideShapeWithInternalEdgeRemovalClosestNoLock zjoltCollideShapeWithInternalEdgeRemovalAllNoLock zjoltCollideShapeWithInternalEdgeRemovalEachNoLock zjoltCollidePointAllNoLock zjoltCollidePointEachNoLock zjoltPhysicsSystemTryGetBodyNoLock
+Physics	GetNumContacts	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetNumItems	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetNumSplits	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	GetPhysicsSettings	BOUND	ZJoltPhysicsSettings zjoltPhysicsSystemGetSettings zjoltPhysicsSystemSetSettings
+Physics	IsEOF	EXTENSION	ZJoltStream zjoltPhysicsSystemRestoreStateStream
+Physics	IsEqual	BOUND	zjoltPhysicsSystemSaveState
+Physics	IsFailed	EXTENSION	ZJoltStream is_failed
+Physics	IsLastPart	BOUND	zjoltPhysicsSystemRestoreState
+Physics	IsValidating	BOUND	zjoltPhysicsSystemCompareState zjoltPhysicsSystemSaveState
+Physics	LargeIslandSplitter	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	MarkBatchProcessed	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	OnStep	EXTENSION	zjolt ZJoltStepListenerFn zjoltPhysicsSystemAddStepListener
+Physics	Open	BOUND	zjoltReflectObjectSaveStream zjoltReflectObjectRestoreStream
+Physics	PhysicsUpdateContext	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/PhysicsUpdateContext.h:26 (file)
+Physics	PrepareForSolvePositions	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	RemoveConstraint	BOUND	zjoltConstraintRemove
+Physics	RemoveConstraints	BOUND	zjoltConstraintRemove
+Physics	ReportSimulationStats	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Body/BodyManager.h:44 (file)
+Physics	ResetStatus	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	Rewind	ZIG	src/stream.zig:RewindableBuffer
+Physics	SetIsLastPart	BOUND	zjoltPhysicsSystemRestoreState
+Physics	SetPhysicsSettings	BOUND	zjoltPhysicsSystemSetSettings ZJoltPhysicsSettings
+Physics	SetSoftBodyContactListener	BOUND	zjoltSoftBodySetContactListener ZJoltSoftBodyContactListener
+Physics	SetValidating	BOUND	zjoltPhysicsSystemCompareState
+Physics	SharedLock	BOUND	zjoltBodyLockRead zjoltBodyLockReadRelease zjoltBodyLockMultiRead zjoltBodyLockMultiReadRelease
+Physics	ShouldRestoreContact	BOUND	ZJoltStateFilter zjoltPhysicsSystemRestoreState
+Physics	ShouldSaveBody	BOUND	ZJoltStateFilter zjoltPhysicsSystemSaveState
+Physics	ShouldSaveConstraint	BOUND	ZJoltStateFilter
+Physics	ShouldSaveContact	BOUND	ZJoltStateFilter
+Physics	SplitIsland	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	Square	LANGUAGE	std.math and @Vector arithmetic
+Physics	StartFirstBatch	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/LargeIslandSplitter.h:25 (file)
+Physics	StateRecorderFilter	BOUND	ZJoltStateFilter zjoltPhysicsSystemSaveState zjoltPhysicsSystemRestoreState
+Physics	StateRecorderImpl	BOUND	zjolt zjoltPhysicsSystemSaveState
+Physics	Trace	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
+Physics	UniqueLock	BOUND	zjoltBodyLockWrite zjoltBodyLockWriteRelease zjoltBodyLockMultiWrite zjoltBodyLockMultiWriteRelease

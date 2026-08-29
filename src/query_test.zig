@@ -267,6 +267,260 @@ test "a query filtered to one object layer misses a body in another" {
     try std.testing.expectEqual(world.floor, static_hit.body);
 }
 
+test "the unlocked query path finds exactly what the locked path finds" {
+    // GetNarrowPhaseQueryNoLock differs from GetNarrowPhaseQuery in exactly
+    // one thing: whether it locks each body it visits. Outside a step,
+    // nothing is contending for those locks, so a *NoLock query run against
+    // the same scene the locked form already sees must agree on every hit --
+    // this is the check for that, on both a ray cast and an overlap.
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const target_shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer target_shape.release();
+    const spheres = try sphereColumn(world.system, target_shape);
+
+    const queries = world.system.queries();
+    const origin = zjolt.rvec3(0, 10, 0);
+    const direction = zjolt.vec3(0, -20, 0);
+
+    var locked_buf: [8]zjolt.RayCastHit = undefined;
+    var unlocked_buf: [8]zjolt.RayCastHit = undefined;
+    const locked = try queries.castRayAll(origin, direction, null, null, &locked_buf);
+    const unlocked = try queries.castRayAllNoLock(origin, direction, null, null, &unlocked_buf);
+
+    // The four spheres, plus the floor underneath them -- same as
+    // `castShapeClosest and castShapeAll agree about the nearest hit`.
+    try std.testing.expectEqual(@as(usize, 5), locked.len);
+    try std.testing.expectEqual(locked.len, unlocked.len);
+    for (locked) |hit| {
+        var found = false;
+        for (unlocked) |other| {
+            if (hit.body == other.body and
+                @abs(hit.fraction - other.fraction) < 1.0e-5)
+            {
+                found = true;
+            }
+        }
+        try std.testing.expect(found);
+    }
+
+    // And the closest-hit forms agree on the same, single, topmost sphere.
+    const locked_closest = (try queries.castRayClosest(origin, direction, null, null)) orelse
+        return error.TestUnexpectedResult;
+    const unlocked_closest = (try queries.castRayClosestNoLock(origin, direction, null, null)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(spheres[3], locked_closest.body);
+    try std.testing.expectEqual(locked_closest.body, unlocked_closest.body);
+    try std.testing.expectApproxEqAbs(locked_closest.fraction, unlocked_closest.fraction, 1.0e-5);
+}
+
+/// Tracks, in order, every body `onBody` announces and the body each
+/// following `onHit` reports -- so a test can check the two line up, rather
+/// than just that both eventually fire.
+const BodyTrace = struct {
+    body_events: [8]zjolt.BodyId = undefined,
+    body_event_count: usize = 0,
+    hit_bodies: [8]zjolt.BodyId = undefined,
+    hit_preceding_body: [8]zjolt.BodyId = undefined,
+    hit_count: usize = 0,
+
+    pub fn onBody(self: *BodyTrace, body: zjolt.Body) void {
+        self.body_events[self.body_event_count] = body.id();
+        self.body_event_count += 1;
+    }
+
+    pub fn onHit(self: *BodyTrace, hit: zjolt.CollideShapeHit) zjolt.HitAction {
+        self.hit_bodies[self.hit_count] = hit.body;
+        self.hit_preceding_body[self.hit_count] = if (self.body_event_count > 0)
+            self.body_events[self.body_event_count - 1]
+        else
+            zjolt.invalid_body_id;
+        self.hit_count += 1;
+        return .@"continue";
+    }
+};
+
+test "collideShapeEachWithBody announces each body immediately before its own hits" {
+    // CollisionCollector::OnBody fires once per body, under the same lock
+    // the traversal already holds, strictly before any of that body's
+    // hits reach AddHit. Checks both halves: three overlapping bodies
+    // produce three OnBody calls and three hits, and each hit's body is
+    // exactly the one OnBody most recently announced -- never the next
+    // one's (too late) and never a stale one (no OnBody for it at all).
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(1.0, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const a = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(1, 30, 0),
+    }, .dont_activate);
+    const b = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(-1, 30, 0.5),
+    }, .dont_activate);
+    const c = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 30, -1),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const probe = try zjolt.Shape.initSphere(2.5, .{});
+    defer probe.release();
+
+    var trace: BodyTrace = .{};
+    try world.system.queries().collideShapeEachWithBody(
+        .{ .shape = probe, .position = zjolt.rvec3(0, 30, 0) },
+        null,
+        &trace,
+    );
+
+    try std.testing.expectEqual(@as(usize, 3), trace.hit_count);
+    try std.testing.expectEqual(@as(usize, 3), trace.body_event_count);
+    for (0..trace.hit_count) |i| {
+        try std.testing.expectEqual(trace.hit_bodies[i], trace.hit_preceding_body[i]);
+    }
+
+    const announced = trace.body_events[0..trace.body_event_count];
+    try std.testing.expect(containsBody(announced, a));
+    try std.testing.expect(containsBody(announced, b));
+    try std.testing.expect(containsBody(announced, c));
+}
+
+//=============================================================================
+// Predicting a contact's response
+//=============================================================================
+
+test "estimateCollisionResponse predicts an exact elastic bounce off an immovable body" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    // A known mass rather than a density-derived one, so the impulse this
+    // predicts can be checked by number and not just by direction.
+    const mass: f32 = 2.0;
+    const moving = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 20, 0),
+        .linear_velocity = zjolt.vec3(-5, 0, 0),
+        .override_mass_properties = .calculate_inertia,
+        .mass = mass,
+    }, .dont_activate);
+
+    // An immovable body: STATIC, so its own inverse mass is zero regardless
+    // of what CalculateInertia would have given it.
+    const wall = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(-1, 20, 0),
+    }, .dont_activate);
+
+    // The one contact point, on the line joining the two centres of mass --
+    // exactly where two spheres colliding head-on always touch. That is
+    // what makes the result below a PURE one-dimensional collision: the
+    // lever arm from each body's centre to this point is parallel to the
+    // normal, so no rotation enters the answer no matter what the shape's
+    // own inertia happens to be.
+    const points_1 = [_]zjolt.Vec3{zjolt.vec3(-0.5, 20, 0)};
+    const points_2 = [_]zjolt.Vec3{zjolt.vec3(-0.5, 20, 0)};
+
+    const queries = world.system.queries();
+
+    // Restitution 1, no friction: elastic collision with an immovable body
+    // conserves both momentum and kinetic energy, which for a single moving
+    // body has exactly one solution -- its velocity reverses outright. That
+    // is true by the physics alone, independent of anything this predicts
+    // about impulses or how many iterations it runs.
+    const bounced = try queries.estimateCollisionResponse(
+        moving,
+        wall,
+        .{
+            .world_space_normal = zjolt.vec3(-1, 0, 0),
+            .points_on_1 = &points_1,
+            .points_on_2 = &points_2,
+        },
+        0.0,
+        1.0,
+        0.0,
+        10,
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 5), bounced.linear_velocity1.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bounced.linear_velocity1.y, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bounced.linear_velocity1.z, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bounced.linear_velocity2.x, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), bounced.angular_velocity1.x, 1.0e-4);
+
+    // No friction was asked for.
+    try std.testing.expectEqual(@as(f32, 0), bounced.friction_impulse1);
+    try std.testing.expectEqual(@as(f32, 0), bounced.friction_impulse2);
+
+    // The moving body's momentum changed by mass * (5 - (-5)) = 20 kg m/s,
+    // carried entirely by the one contact point since it is the only one.
+    try std.testing.expectEqual(@as(u32, 1), bounced.num_contact_impulses);
+    try std.testing.expectApproxEqAbs(mass * 10, bounced.contact_impulses[0], 0.05);
+
+    // A fully inelastic collision (restitution 0) instead brings the
+    // approach velocity to exactly zero: the moving body stops dead, since
+    // the wall cannot move to carry any momentum away and there is nothing
+    // elastic to bounce it back with.
+    const absorbed = try queries.estimateCollisionResponse(
+        moving,
+        wall,
+        .{
+            .world_space_normal = zjolt.vec3(-1, 0, 0),
+            .points_on_1 = &points_1,
+            .points_on_2 = &points_2,
+        },
+        0.0,
+        0.0,
+        0.0,
+        10,
+    );
+    try std.testing.expectApproxEqAbs(@as(f32, 0), absorbed.linear_velocity1.x, 0.01);
+    try std.testing.expectApproxEqAbs(mass * 5, absorbed.contact_impulses[0], 0.05);
+
+    // A stale or mismatched body id is refused rather than read as garbage.
+    try std.testing.expectError(
+        error.BodyNotFound,
+        queries.estimateCollisionResponse(
+            moving,
+            zjolt.invalid_body_id,
+            .{
+                .world_space_normal = zjolt.vec3(-1, 0, 0),
+                .points_on_1 = &points_1,
+                .points_on_2 = &points_2,
+            },
+            0.0,
+            1.0,
+            0.0,
+            10,
+        ),
+    );
+}
+
 //=============================================================================
 // TransformedShape
 //=============================================================================
@@ -284,7 +538,7 @@ test "a ray against a transformed shape agrees with the same ray against the bod
     const position = zjolt.rvec3(3, 4, -2);
     // Rotated off-axis, so a bug that only shows up once rotation enters the
     // picture cannot hide behind a lucky symmetry.
-    const rotation = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 1, 0), 0.4);
+    const rotation = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 1, 0), 0.4);
 
     const body = try world.system.bodies().createAndAdd(.{
         .shape = shape,
@@ -386,16 +640,7 @@ test "worldSpaceBounds tracks the placement" {
 //=============================================================================
 // Broad phase
 //
-// `BroadPhase.bounds()` turns out to track every add and remove immediately
-// — verified against this binding directly, rather than assumed: even a
-// system on which `optimizeBroadPhase` has never once been called reports
-// correct bounds for what it holds, and a query finds a body added to it with
-// no optimize call at all. `optimizeBroadPhase` is a tree-balance operation,
-// not a step this correctness depends on — which is worth pinning down
-// precisely because every OTHER test in this package calls it out of habit
-// right after adding static geometry. What these two tests check is the
-// thing that IS true unconditionally: the bounds match what is actually in
-// the system, growing and shrinking with it.
+// `BroadPhase.bounds()` tracks every add/remove immediately, verified directly here: even with `optimizeBroadPhase` never called, bounds and queries are correct — it is a tree-balance operation, not a correctness dependency, worth pinning down since every OTHER test in this package calls it out of habit. These two tests check the bounds match what is actually in the system unconditionally.
 //=============================================================================
 
 test "the broad phase's bounds cover every body added" {
@@ -584,4 +829,178 @@ test "aborting a staged batch leaves the system exactly as it was" {
     const staged_again = try world.system.batch().prepare(&ids);
     try world.system.batch().finalize(staged_again, .dont_activate);
     for (ids) |id| try std.testing.expect(bodies.isAdded(id));
+}
+
+test "collideShapeWithInternalEdgeRemoval runs Jolt's real ghost-collision suppression, not a stand-in" {
+    // A flat square split into two coplanar triangles along its diagonal is
+    // the textbook case internal edge removal exists for: a box resting on
+    // either triangle must feel one continuous surface, not the seam. For a
+    // box lying flat, Jolt's box-vs-triangle EPA already finds the true
+    // face normal on both triangles regardless of diagonal position, so
+    // this proves the new entry points run Jolt's actual InternalEdgeRemovingCollector end to end, forcing active_edge_mode/collect_faces_mode regardless of `settings`, agreeing with the plain query where Jolt guarantees they must.
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    // Well above the fixture's floor, so it plays no part.
+    const vertices = [_]zjolt.Vec3{
+        zjolt.vec3(-1, 10, -1), zjolt.vec3(1, 10, -1),
+        zjolt.vec3(-1, 10, 1),  zjolt.vec3(1, 10, 1),
+    };
+    const indices = [_]u32{ 0, 2, 1, 1, 2, 3 };
+    const mesh = try zjolt.Shape.initMesh(&vertices, &indices, .{});
+    defer mesh.release();
+
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = mesh,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 0, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(0.3, 0.3, 0.3), .{});
+    defer box.release();
+
+    // Deliberately the OPPOSITE of what internal edge removal needs --
+    // active_edge_mode left at Jolt's own default and faces not collected --
+    // to check that the *WithInternalEdgeRemoval* family forces both fields
+    // itself rather than silently doing nothing because the caller forgot.
+    const overlap: zjolt.Queries.Overlap = .{
+        .shape = box,
+        .position = zjolt.rvec3(0, 10.25, 0),
+    };
+
+    const queries = world.system.queries();
+
+    const closest = (try queries.collideShapeWithInternalEdgeRemovalClosest(overlap, null)) orelse
+        return error.TestUnexpectedResult;
+    // A box resting on a flat mesh is pushed straight up, never sideways --
+    // the seam contributing a horizontal component is exactly the ghost
+    // collision this exists to prevent, so this holds even though this
+    // configuration does not exercise the voiding path itself.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), closest.penetration_axis.x, 1.0e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), closest.penetration_axis.z, 1.0e-3);
+    try std.testing.expect(@abs(closest.penetration_axis.y) > 1.0e-3);
+
+    var buf: [8]zjolt.CollideShapeHit = undefined;
+    const removed = try queries.collideShapeWithInternalEdgeRemoval(overlap, null, &buf);
+    try std.testing.expect(removed.len >= 1);
+
+    var plain_buf: [8]zjolt.CollideShapeHit = undefined;
+    const plain = try queries.collideShape(overlap, null, &plain_buf);
+
+    // Internal edge removal only ever drops hits, never invents one the
+    // plain traversal did not already find.
+    try std.testing.expect(removed.len <= plain.len);
+    for (removed) |r| {
+        try std.testing.expectApproxEqAbs(@as(f32, 0), r.penetration_axis.x, 1.0e-3);
+        try std.testing.expectApproxEqAbs(@as(f32, 0), r.penetration_axis.z, 1.0e-3);
+    }
+}
+
+//=============================================================================
+// Body filters, both halves
+//=============================================================================
+
+/// Rejects one body by its user data, but only from `should_collide_locked`,
+/// where the body itself is readable. `should_collide` accepts everything, so
+/// a hit that disappears proves the second callback ran and was obeyed.
+const LockedFilter = struct {
+    reject_user_data: u64,
+    unlocked_calls: u32 = 0,
+    locked_calls: u32 = 0,
+
+    fn acceptAll(user: ?*anyopaque, body: zjolt.BodyId) callconv(.c) bool {
+        _ = body;
+        const self: *LockedFilter = @ptrCast(@alignCast(user.?));
+        self.unlocked_calls += 1;
+        return true;
+    }
+
+    fn rejectByUserData(user: ?*anyopaque, body: *const zjolt.c.core.Body) callconv(.c) bool {
+        const self: *LockedFilter = @ptrCast(@alignCast(user.?));
+        self.locked_calls += 1;
+        const b: zjolt.Body = .{ .handle = @constCast(body) };
+        return b.userData() != self.reject_user_data;
+    }
+};
+
+test "a body filter's locked half rejects on a body member the unlocked half cannot see" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const marker = 0xBEEF_CAFE;
+    const sphere = try zjolt.Shape.initSphere(0.5, .{});
+    defer sphere.release();
+    const target = try world.system.bodies().createAndAdd(.{
+        .shape = sphere,
+        .position = zjolt.rvec3(0, 4, 0),
+        .motion_type = .static,
+        .object_layer = Layers.static,
+        .user_data = marker,
+    }, .dont_activate);
+
+    const queries = world.system.queries();
+    const origin = zjolt.rvec3(0, 10, 0);
+    const direction = zjolt.vec3(0, -20, 0);
+
+    // Unfiltered, the sphere is nearer than the floor and wins.
+    const plain = (try queries.castRayClosest(origin, direction, null, null)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(target, plain.body);
+
+    var filter: LockedFilter = .{ .reject_user_data = marker };
+    const filters: zjolt.QueryFilters = .{ .body = .{
+        .should_collide = LockedFilter.acceptAll,
+        .should_collide_locked = LockedFilter.rejectByUserData,
+        .user = &filter,
+    } };
+
+    const filtered = (try queries.castRayClosest(origin, direction, null, &filters)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expect(filtered.body != target);
+    try std.testing.expectEqual(world.floor, filtered.body);
+    try std.testing.expect(filter.unlocked_calls > 0);
+    try std.testing.expect(filter.locked_calls > 0);
+}
+
+test "a body filter with only the locked half set still filters" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const marker = 0x1234_5678;
+    const sphere = try zjolt.Shape.initSphere(0.5, .{});
+    defer sphere.release();
+    _ = try world.system.bodies().createAndAdd(.{
+        .shape = sphere,
+        .position = zjolt.rvec3(0, 4, 0),
+        .motion_type = .static,
+        .object_layer = Layers.static,
+        .user_data = marker,
+    }, .dont_activate);
+
+    var filter: LockedFilter = .{ .reject_user_data = marker };
+    const filters: zjolt.QueryFilters = .{ .body = .{
+        .should_collide_locked = LockedFilter.rejectByUserData,
+        .user = &filter,
+    } };
+
+    const hit = (try world.system.queries().castRayClosest(
+        zjolt.rvec3(0, 10, 0),
+        zjolt.vec3(0, -20, 0),
+        null,
+        &filters,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(world.floor, hit.body);
+    try std.testing.expectEqual(@as(u32, 0), filter.unlocked_calls);
+    try std.testing.expect(filter.locked_calls > 0);
 }

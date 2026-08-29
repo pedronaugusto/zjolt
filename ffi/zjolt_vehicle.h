@@ -1,21 +1,15 @@
 //===----------------------------------------------------------------------===//
 // zjolt — wheeled and tracked vehicles.
 //
-// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part; this
-// file is split out so that no single header has to carry the whole surface.
-//
 // A vehicle is one constraint (`ZJoltVehicleConstraint`) tying a body to a set
-// of wheels and one controller. The controller decides what "accelerate" and
-// "steer" mean: wheeled, tracked, or (wheeled plus a lean spring) motorcycle.
-// Which one a constraint has is fixed at creation and reported by
-// `zjoltVehicleConstraintGetControllerKind`; calling a wheeled-only or
-// tracked-only entry point against the other kind returns
-// ZJOLT_RESULT_INVALID_ARGUMENT rather than reinterpreting memory.
-//
-// As everywhere in this ABI, engine/transmission/differential/wheel settings
-// do not cross as Jolt objects: a descriptor is filled in, Jolt's own
-// `*Settings` types are built on the stack inside zjoltVehicleConstraintCreate,
-// and only the constraint handle comes back out.
+// of wheels and one controller — wheeled, tracked, or (wheeled plus a lean
+// spring) motorcycle — fixed at creation, reported by
+// zjoltVehicleConstraintGetControllerKind. A wheeled-only or tracked-only
+// entry point against the other kind returns ZJOLT_RESULT_INVALID_ARGUMENT
+// rather than reinterpreting memory. Engine/transmission/differential/wheel
+// settings do not cross as Jolt objects: a descriptor is filled in,
+// `*Settings` types are built on the stack inside
+// zjoltVehicleConstraintCreate, and only the constraint handle comes back out.
 //===----------------------------------------------------------------------===//
 
 #ifndef ZJOLT_VEHICLE_H_
@@ -23,6 +17,8 @@
 
 #include "zjolt_constraint.h"
 #include "zjolt_core.h"
+// For ZJoltDebugRenderer, which zjoltVehicleConstraintEngineDrawRPM draws into.
+#include "zjolt_debug.h"
 // For ZJoltBroadPhaseLayerFilter / ZJoltObjectLayerFilter / ZJoltBodyFilter,
 // which ZJoltVehicleWheelFilters below reuses rather than respelling: a wheel's
 // ground test is a ray or shape cast like any other, so it filters like one.
@@ -52,6 +48,11 @@ typedef enum ZJoltVehicleCollisionTesterKind {
   ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_SPHERE = 1,
   /// Tests the wheel's own cylinder. Most accurate and most expensive.
   ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_CYLINDER = 2,
+  /// Set by zjoltVehicleConstraintSetCollisionTesterCallback rather than
+  /// zjoltVehicleConstraintSetCollisionTester; there is no matching
+  /// ZJoltVehicleCollisionTesterDesc field because a callback is not one of
+  /// the three built-in shapes.
+  ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CALLBACK = 3,
 } ZJoltVehicleCollisionTesterKind;
 
 typedef enum ZJoltVehicleTransmissionMode {
@@ -213,8 +214,8 @@ typedef struct ZJoltVehicleCollisionTesterDesc {
   /// Used only when the constraint's PhysicsSystem has no per-wheel filters
   /// overriding it; every wheel of one vehicle shares one tester.
   ZJoltObjectLayer object_layer;
-  /// World-space up, used to reject near-vertical surfaces. RAY and
-  /// CAST_SPHERE only.
+  /// World-space up; rejects near-vertical surfaces. RAY and CAST_SPHERE
+  /// only.
   ZJoltVec3 up;
   /// Radians. Surfaces steeper than this do not count as ground. RAY and
   /// CAST_SPHERE only.
@@ -309,12 +310,10 @@ ZJOLT_API void zjoltVehicleConstraintDescInit(ZJoltVehicleConstraintDesc *desc);
 
 /// Builds the constraint, attaches it to `body`, and both adds it to `system`
 /// as a constraint and registers it as a physics step listener — a vehicle
-/// constraint that is not stepped never moves its wheels.
-///
-/// `body` must already be added to `system`. The constraint keeps a raw
-/// pointer to that body for its own lifetime; destroying the body while the
-/// constraint is still alive is the caller's mistake, not this ABI's to
-/// detect.
+/// constraint that is not stepped never moves its wheels. `body` must
+/// already be added to `system`. The constraint keeps a raw pointer to that
+/// body for its own lifetime; destroying the body while the constraint is
+/// still alive is the caller's mistake, not this ABI's to detect.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintCreate(
     ZJoltPhysicsSystem *system, ZJoltBodyId body,
     const ZJoltVehicleConstraintDesc *desc, ZJoltVehicleConstraint **out);
@@ -408,18 +407,13 @@ ZJOLT_API void zjoltVehicleConstraintGetWheelContactPointVelocity(
     ZJoltVec3 *out);
 
 //===----------------------------------------------------------------------===//
-// Driver input and drivetrain readback — every controller kind
-//
-// forward/brake, engine RPM, current gear, clutch friction and gear ratio
-// mean the same thing whichever controller a constraint has (a
-// WheeledVehicleController and a TrackedVehicleController each carry their
-// own VehicleEngine and VehicleTransmission), so each is one entry point
-// that switches on zjoltVehicleConstraintGetControllerKind internally rather
-// than two spellings a caller could pick the wrong one of. Called against a
-// constraint with no driveable controller (there is none today, but the
-// check is here for whatever is added next) each returns
-// ZJOLT_RESULT_INVALID_ARGUMENT, or the same default a NULL constraint would
-// give for the infallible readbacks.
+// Driver input and drivetrain readback — every controller kind. forward/
+// brake, engine RPM, gear, clutch friction and gear ratio mean the same
+// thing under any controller, so each is one entry point that switches on
+// zjoltVehicleConstraintGetControllerKind internally rather than two
+// spellings a caller could pick the wrong one of. Against a constraint with
+// no driveable controller, each returns ZJOLT_RESULT_INVALID_ARGUMENT (or
+// the infallible readbacks' default).
 //===----------------------------------------------------------------------===//
 
 ZJOLT_API float
@@ -443,14 +437,103 @@ zjoltVehicleConstraintGetGearRatio(const ZJoltVehicleConstraint *constraint);
 
 /// Drives a manual transmission (ZJOLT_VEHICLE_TRANSMISSION_MODE_MANUAL):
 /// sets the current gear and the clutch's friction fraction directly,
-/// bypassing auto mode's shift points and timers entirely. Also accepted
-/// (harmlessly overwritten on the next auto shift) against an auto
-/// transmission.
+/// bypassing auto mode's shift points and timers. Also accepted (harmlessly
+/// overwritten on the next auto shift) against an auto transmission.
 /// @param gear -1 = reverse, 0 = neutral, 1 = 1st gear, etc.
-/// @param clutch_friction [0, 1]: 0 = clutch fully disengaged (no torque
-/// reaches the wheels), 1 = fully engaged.
+/// @param clutch_friction [0, 1]: 0 = disengaged, 1 = fully engaged.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintSetGear(
     ZJoltVehicleConstraint *constraint, int32_t gear, float clutch_friction);
+
+//===----------------------------------------------------------------------===//
+// Engine and transmission — runtime operations
+//
+// VehicleEngine and VehicleTransmission themselves, reached through
+// EngineOf/TransmissionOf exactly as the readbacks above do: neither cares
+// which of the two driveable controller kinds owns them. Each returns
+// ZJOLT_RESULT_INVALID_ARGUMENT against a constraint with no driveable
+// controller.
+//===----------------------------------------------------------------------===//
+
+/// Applies `torque` (N m) to the engine's own rotation speed over
+/// `delta_time` — VehicleEngine::ApplyTorque.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineApplyTorque(
+    ZJoltVehicleConstraint *constraint, float torque, float delta_time);
+/// Applies the engine's angular damping over `delta_time` —
+/// VehicleEngine::ApplyDamping.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineApplyDamping(
+    ZJoltVehicleConstraint *constraint, float delta_time);
+/// Clamps the engine's current RPM between its min and max —
+/// VehicleEngine::ClampRPM. Every other engine entry point that changes RPM
+/// already does this; exposed for a host that pokes zjoltVehicleConstraintGetEngineDesc's
+/// min_rpm/max_rpm at runtime and wants the current RPM to respect the change immediately.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineClampRPM(
+    ZJoltVehicleConstraint *constraint);
+/// True when the engine is idle enough to allow the vehicle to sleep —
+/// VehicleEngine::AllowSleep.
+ZJOLT_API bool zjoltVehicleConstraintEngineAllowSleep(
+    const ZJoltVehicleConstraint *constraint);
+/// True when the transmission is idle enough to allow the vehicle to sleep
+/// (not mid-shift and not in the post-shift clutch/latency window) —
+/// VehicleTransmission::AllowSleep.
+ZJOLT_API bool zjoltVehicleConstraintTransmissionAllowSleep(
+    const ZJoltVehicleConstraint *constraint);
+
+/// `rpm` converted to the angle an RPM-meter needle would point at, for
+/// custom debug drawing — VehicleEngine::ConvertRPMToAngle. Radians, 0 at
+/// idle. ZJOLT_RESULT_UNSUPPORTED without -Ddebug_renderer=true: Jolt
+/// declares this method itself only under JPH_DEBUG_RENDERER.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineConvertRPMToAngle(
+    const ZJoltVehicleConstraint *constraint, float rpm, float *out_angle);
+
+/// Draws an RPM meter at `position` — VehicleEngine::DrawRPM.
+/// ZJOLT_RESULT_UNSUPPORTED without -Ddebug_renderer=true, exactly as
+/// ffi/zjolt_debug.cpp's own entry points are.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineDrawRPM(
+    ZJoltVehicleConstraint *constraint, ZJoltDebugRenderer *renderer,
+    const ZJoltRVec3 *position, const ZJoltVec3 *forward, const ZJoltVec3 *up,
+    float size, float shift_down_rpm, float shift_up_rpm);
+
+/// Everything about the engine EXCEPT the current RPM (already
+/// zjoltVehicleConstraintGetEngineRpm), read from the live VehicleEngine — a
+/// full round-trip of what zjoltVehicleConstraintCreate's ZJoltVehicleEngineDesc set.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintGetEngineDesc(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleEngineDesc *out);
+
+/// Everything about the transmission except its gear ratio arrays (see
+/// zjoltVehicleConstraintGetGearRatios), read from the live
+/// VehicleTransmission. `out->forward_gear_ratios`/`reverse_gear_ratios` are
+/// always written NULL with a 0 count: they are borrowed-pointer fields this
+/// entry point has no caller buffer to point them at.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintGetTransmissionDesc(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleTransmissionDesc *out);
+
+/// The transmission's forward and reverse gear ratios, count-then-fill:
+/// `out_forward`/`out_reverse` NULL (or a short capacity) reports the true
+/// counts in `*out_forward_count`/`*out_reverse_count` and
+/// ZJOLT_RESULT_BUFFER_TOO_SMALL rather than failing outright.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintGetGearRatios(
+    const ZJoltVehicleConstraint *constraint, float *out_forward,
+    uint32_t forward_capacity, uint32_t *out_forward_count, float *out_reverse,
+    uint32_t reverse_capacity, uint32_t *out_reverse_count);
+
+/// Splits torque between the two wheels of differential `differential_index`
+/// given their current angular velocities (rad/s) —
+/// VehicleDifferentialSettings::CalculateTorqueRatio. Wheeled and motorcycle
+/// only; ZJOLT_RESULT_INVALID_ARGUMENT against a tracked constraint or an
+/// out-of-range index.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintCalculateDifferentialTorqueRatio(
+    const ZJoltVehicleConstraint *constraint, uint32_t differential_index,
+    float left_angular_velocity, float right_angular_velocity,
+    float *out_left_torque_fraction, float *out_right_torque_fraction);
+
+/// Recomputes `wheel_index`'s angular velocity from its track's angular
+/// velocity and the two wheel radii — WheelTV::CalculateAngularVelocity.
+/// Call after zjoltVehicleConstraintSetTrackAngularVelocity to see the wheel
+/// value update immediately rather than waiting for the next step.
+/// ZJOLT_RESULT_INVALID_ARGUMENT against a wheeled/motorcycle constraint, an
+/// out-of-range index, or before this constraint has ever been stepped.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintCalculateTrackedWheelAngularVelocity(
+    ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
 
 //===----------------------------------------------------------------------===//
 // Wheeled and motorcycle controller — driver input and readback
@@ -578,6 +661,15 @@ ZJOLT_API float zjoltVehicleConstraintGetWheelLongitudinalLambda(
 ZJOLT_API float zjoltVehicleConstraintGetWheelLateralLambda(
     const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
 
+/// The impulse (N s) this wheel's brakes are set up to push into the floor
+/// this step (WheelWV::mBrakeImpulse) — computed from brake/hand-brake input
+/// in PostCollide, before the velocity solve, unlike the three lambdas above.
+/// Non-zero only once brake+hand-brake torque fully locks the wheel; what the
+/// solver actually applies may be lower (tire grip caps it — see
+/// ZJoltVehicleTireMaxImpulseCallback). 0 for tracked/NULL or an out-of-range wheel.
+ZJOLT_API float zjoltVehicleConstraintGetWheelBrakeImpulse(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+
 /// The wheel's forward/up/right axes in the vehicle body's local space,
 /// after steering — feed `out_up`/`out_right` into the two transforms below
 /// to place a wheel mesh whose own local axes do not match theirs. All-zero
@@ -603,6 +695,77 @@ ZJOLT_API void zjoltVehicleConstraintGetWheelWorldTransform(
     const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
     const ZJoltVec3 *wheel_right, const ZJoltVec3 *wheel_up,
     ZJoltRVec3 *out_position, ZJoltQuat *out_rotation);
+
+//===----------------------------------------------------------------------===//
+// Tracked wheels — WheelTV-only state. TrackedVehicleController gives each
+// wheel a combined friction and brake impulse spread across a track's
+// wheels, rather than computed per wheel as WheeledVehicleController does
+// for WheelWV. All four return the same default (0, or -1 for the track
+// index) for a NULL/non-tracked constraint or an out-of-range wheel index.
+//===----------------------------------------------------------------------===//
+
+/// The impulse (N s) this wheel's own brakes are set up to push into the
+/// floor this step (WheelTV::mBrakeImpulse) — spread from its track's own
+/// brake impulse (TrackedVehicleController.cpp) rather than computed per
+/// wheel the way a wheeled controller's WheelWV is. Distinct from
+/// zjoltVehicleConstraintGetWheelBrakeImpulse, which reads WheelWV and is 0
+/// on a tracked constraint.
+ZJOLT_API float zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+
+/// Tire friction combined with whatever this wheel is standing on this step
+/// (WheelTV::mCombinedLongitudinalFriction/mCombinedLateralFriction) — see
+/// zjoltVehicleConstraintSetCombineFrictionCallback, which can change either
+/// from the wheel's own tracked_longitudinal_friction/tracked_lateral_friction
+/// (ZJoltVehicleWheelDesc). Both are 0 without contact: only a wheel that
+/// found the ground this step gets combined friction.
+ZJOLT_API float zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+ZJOLT_API float zjoltVehicleConstraintGetWheelCombinedLateralFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+
+/// Which track this wheel was built into (WheelTV::mTrackIndex), fixed at
+/// creation by left_track_wheels/right_track_wheels but not written into
+/// the wheel until TrackedVehicleController's first PreCollide — so this
+/// is -1 before the vehicle has ever been stepped, in addition to the
+/// cases above. ZJOLT_VEHICLE_TRACK_SIDE_LEFT/RIGHT match 0/1 exactly, so
+/// the result casts straight to ZJoltVehicleTrackSide once it is no longer -1.
+ZJOLT_API int32_t zjoltVehicleConstraintGetWheelTrackIndex(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+
+//===----------------------------------------------------------------------===//
+// Wheel and engine curves — read-back
+//
+// ZJoltVehicleWheelDesc/ZJoltVehicleEngineDesc take these curves at creation
+// and nothing reads one back afterward — not even Jolt's own built-in
+// default a 0-count desc left in place. Each of these hands back the WHOLE
+// curve, every point up to ZJOLT_VEHICLE_CURVE_MAX_POINTS, rather than only
+// LinearCurve::GetMaxX's domain upper bound: ZJoltVehicleCurveDesc already
+// promises to carry that many points on the way in, so a getter answering
+// with only where the curve ends would tell a caller retuning grip less than
+// it handed over building the vehicle in the first place. A caller who only
+// wants the domain reads `out.points[out.count - 1].x` itself once — cheaper
+// than this ABI guessing which callers want which and offering both.
+//===----------------------------------------------------------------------===//
+
+/// False (leaving `out` all-zero) for a NULL, tracked or motorcycle-with-no-
+/// wheeled-controller constraint, or a wheel index at or past the wheel
+/// count. Tracked wheels (WheelSettingsTV) carry no curve at all — see
+/// ZJoltVehicleWheelDesc's tracked_longitudinal_friction/
+/// tracked_lateral_friction, one coefficient rather than a slip-dependent
+/// profile.
+ZJOLT_API bool zjoltVehicleConstraintGetWheelLongitudinalFrictionCurve(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    ZJoltVehicleCurveDesc *out);
+ZJOLT_API bool zjoltVehicleConstraintGetWheelLateralFrictionCurve(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index,
+    ZJoltVehicleCurveDesc *out);
+
+/// False for a NULL constraint or one with no engine (there is none today,
+/// but every other engine accessor above carries the same guard for
+/// whatever is added next).
+ZJOLT_API bool zjoltVehicleConstraintGetEngineNormalizedTorqueCurve(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleCurveDesc *out);
 
 //===----------------------------------------------------------------------===//
 // Anti-roll bars — runtime
@@ -638,6 +801,13 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintSetAntiRollBarStiffness(
 // Creation fixes how many differentials a vehicle has and which wheels each
 // one drives; everything else about them is live. Retuning takes effect on
 // the next step, so a mid-corner change is applied to that corner.
+//
+// One rule zjoltVehicleConstraintSetDifferential cannot check on its own:
+// `engine_torque_ratio` must sum to 1 ACROSS every differential, a property
+// of the set, not of one member. Moving torque between axles needs two
+// calls and is momentarily out of balance in between — fine as long as the
+// vehicle is not stepped until both land. Jolt asserts the sum next step in
+// an asserts-on build, and quietly scales the engine's output oddly without.
 //===----------------------------------------------------------------------===//
 
 /// 0 against a tracked constraint, which has tracks instead.
@@ -652,18 +822,10 @@ ZJOLT_API bool zjoltVehicleConstraintGetDifferential(
 
 /// Replaces the differential at `index` whole, so read it first and change
 /// the field you mean. `left_wheel`/`right_wheel` are validated against the
-/// vehicle's wheel count (-1 = no wheel on that side), and the same numeric
-/// ranges zjoltVehicleConstraintCreate enforces apply: differential_ratio > 0,
-/// left_right_split in [0, 1], engine_torque_ratio >= 0, limited_slip_ratio
-/// > 1. Nothing is applied when any of them fails.
-///
-/// The one rule that cannot be checked here: `engine_torque_ratio` must sum
-/// to 1 ACROSS every differential the vehicle has. That is a property of the
-/// set, not of one member, so moving torque from one axle to another needs
-/// two calls and is momentarily out of balance in between — which is fine, as
-/// long as the vehicle is not stepped until both have landed. Jolt asserts
-/// the sum at the top of the next step in an asserts-on build, and quietly
-/// scales the engine's output oddly in one without.
+/// vehicle's wheel count (-1 = no wheel on that side); differential_ratio > 0,
+/// left_right_split in [0, 1], engine_torque_ratio >= 0, limited_slip_ratio >
+/// 1 — nothing applied when any fails. The one rule not checked here (the
+/// cross-differential engine_torque_ratio sum) is in this section's banner.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintSetDifferential(
     ZJoltVehicleConstraint *constraint, uint32_t index,
     const ZJoltVehicleDifferentialDesc *desc);
@@ -700,6 +862,36 @@ ZJOLT_API float zjoltVehicleConstraintGetTrackAngularVelocity(
 ZJOLT_API ZJoltResult zjoltVehicleConstraintSetTrackAngularVelocity(
     ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side,
     float angular_velocity);
+
+/// A track's tunable properties — everything about it besides which wheels
+/// belong to it and which one is driven, which are fixed at creation
+/// (ZJoltVehicleConstraintDesc's left/right_track_wheels and
+/// left/right_track_driven_wheel) and have no live counterpart, the same way
+/// an anti-roll bar's own two wheels cannot be moved after the fact.
+typedef struct ZJoltVehicleTrackDesc {
+  float inertia;             ///< kg m^2, of the track and its wheels, as seen
+                              ///< on the driven wheel. >= 0.
+  float angular_damping;     ///< dw/dt = -c * w, again at the driven wheel. >= 0.
+  float max_brake_torque;    ///< Nm the brakes can apply to the driven wheel. >= 0.
+  float differential_ratio;  ///< Gear box speed over driven wheel speed. > 0.
+} ZJoltVehicleTrackDesc;
+
+/// As zjoltVehicleConstraintGetAntiRollBar: false and an all-zero `out` for a
+/// NULL or non-tracked constraint, since `side` is a two-member enum rather
+/// than an index there is no separate "out of range" to report.
+ZJOLT_API bool zjoltVehicleConstraintGetTrack(
+    const ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side,
+    ZJoltVehicleTrackDesc *out);
+
+/// Replaces the track's tunable properties whole, so read it with
+/// zjoltVehicleConstraintGetTrack first and change the field you mean. Takes
+/// effect on the next step. Validated like zjoltVehicleConstraintCreate's
+/// track_inertia/track_angular_damping/track_max_brake_torque/
+/// track_differential_ratio: inertia, angular_damping and max_brake_torque
+/// must be >= 0, differential_ratio > 0; nothing applied on failure.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintSetTrack(
+    ZJoltVehicleConstraint *constraint, ZJoltVehicleTrackSide side,
+    const ZJoltVehicleTrackDesc *desc);
 
 //===----------------------------------------------------------------------===//
 // Engine and clutch — runtime
@@ -765,25 +957,18 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintSetMotorcycleLeanSpring(
     const ZJoltVehicleMotorcycleLeanSpring *spring);
 
 //===----------------------------------------------------------------------===//
-// Wheel-ground collision filtering
+// Wheel-ground collision filtering: the tester's `object_layer`
+// (ZJoltVehicleCollisionTesterDesc) is the wheel casts' default. Each filter
+// here OVERRIDES that default for its level rather than narrowing it (a
+// broad-phase-layer filter replaces the layer-pair check entirely); a NULL
+// function pointer leaves the default installed.
 //
-// The tester's `object_layer` (ZJoltVehicleCollisionTesterDesc) is what the
-// wheel casts use by default. Each filter here OVERRIDES that default for its
-// own level rather than narrowing it: a broad-phase-layer filter replaces the
-// layer pair check entirely, and a member whose function pointer is NULL is
-// not installed at all, so the default stays.
-//
-// One thing Jolt gets subtly wrong for a caller and this ABI does not: in
-// Jolt, installing a body filter REPLACES the built-in "ignore the vehicle's
-// own body" filter, so a filter that says yes to everything makes the wheels
-// collide with the chassis they hang off and the vehicle tears itself apart.
-// Here the vehicle's own body is rejected before `body.should_collide` is
-// consulted, so a filter can only ever narrow the set — which is what every
-// caller of this wanted anyway.
-//
-// Filters are consulted from inside PhysicsSystem::Update, on whichever job
-// thread is stepping this vehicle. See the step callbacks below for what that
-// means; the same rules apply.
+// Unlike Jolt itself — where installing a body filter REPLACES the built-in
+// "ignore the vehicle's own body" filter, making an accept-everything filter
+// collide the wheels with their own chassis — here the vehicle's own body is
+// rejected before `body.should_collide` runs, so a filter can only narrow
+// the set. Filters run inside PhysicsSystem::Update, on whichever job thread
+// is stepping this vehicle; the step-callback rules below apply.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltVehicleWheelFilters {
@@ -813,30 +998,91 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintSetCollisionTester(
     const ZJoltVehicleCollisionTesterDesc *desc);
 
 //===----------------------------------------------------------------------===//
-// Step callbacks
-//
-// Three points inside the vehicle's own slice of a physics step. They are the
-// only places where a host can act on wheel contacts in the same step that
-// found them: reading them afterwards, from between two
-// zjoltPhysicsSystemStep calls, is always one step stale.
-//
-// What is running when these fire is unusual and worth stating plainly. They
-// are called from PhysicsSystem::Update, while every body and constraint
-// mutex is held, on whichever job thread is stepping this vehicle — several
-// vehicles' callbacks can run at once. So:
-//
-//   * Read and write bodies and constraints; do NOT add or remove them, and
-//     do not destroy this vehicle from inside its own callback.
-//   * Do not assume single-threading. Two vehicles sharing a `user` pointer
-//     is the caller's race to avoid.
-//   * Nothing may unwind out of the callback. Jolt is built without
-//     exceptions and this one is called with locks held; a throw is
-//     std::terminate and an escape past the lock is a permanent deadlock in
-//     the next update.
-//
-// `context.delta_time` is the sub-step's, not the whole update's:
-// zjoltPhysicsSystemStep with N collision steps calls each of these N
-// times, with `is_first_step`/`is_last_step` marking the ends.
+// A custom wheel-ground collision tester: the general case beside the three
+// built-ins, a host's own VehicleCollisionTester subclass reached as a callback
+// pair (not a mirrored vtable). Both hooks run once per wheel inside
+// VehicleConstraint::OnStep, under the step-callback rules below — job
+// thread, every body/constraint locked, nothing may unwind. Installing
+// either kind clears the other; GetCollisionTesterKind reports CALLBACK
+// while this is active. Both test against a suspension ray (`origin` world
+// space, `direction` a world-space unit vector) like the built-ins, and
+// report the ground by body id, not a live Body* (no raw Jolt pointer
+// crosses this ABI). Neither gets a ZJoltPhysicsSystem*: test against
+// whatever your own tester needs (a heightfield, a spline, a pre-step
+// snapshot) rather than calling back in.
+//===----------------------------------------------------------------------===//
+
+/// What VehicleConstraint::OnStep already knows before it asks the tester:
+/// which wheel, and the suspension ray to test.
+typedef struct ZJoltVehicleGroundTestInput {
+  uint32_t wheel_index;
+  ZJoltRVec3 origin;
+  ZJoltVec3 direction;
+  /// Excluded from a test of your own the way the three built-ins exclude
+  /// it — this ABI does not do that exclusion for you.
+  ZJoltBodyId vehicle_body;
+} ZJoltVehicleGroundTestInput;
+
+/// What a collision test reports, or — for the `predict_contact_properties`
+/// field of ZJoltVehicleCollisionTesterCallback below — the previous step's
+/// contact going in and the extrapolated one coming out.
+typedef struct ZJoltVehicleGroundContact {
+  ZJoltBodyId body;
+  ZJoltSubShapeId sub_shape_id;
+  ZJoltRVec3 position;
+  ZJoltVec3 normal;
+  /// Metres, clamped into [0, suspension_max_length] the way Jolt's own
+  /// testers clamp it.
+  float suspension_length;
+} ZJoltVehicleGroundContact;
+
+typedef struct ZJoltVehicleCollisionTesterCallback {
+  /// A full test, on the steps zjoltVehicleConstraintSetNumStepsBetween-
+  /// CollisionTestActive/Inactive schedule for one rather than a prediction.
+  /// `out_contact` arrives zeroed; return false (leaving it untouched) to
+  /// report no contact, matching what HasWheelContact reads afterward.
+  bool (*collide)(void *user, const ZJoltVehicleGroundTestInput *input,
+                  ZJoltVehicleGroundContact *out_contact);
+  /// A cheap update on the steps the schedule skips a full test — Jolt's own
+  /// three testers extrapolate the suspension length from the unchanged
+  /// contact normal rather than searching again. `contact` arrives holding
+  /// the previous step's result and is written back whole; leaving a field
+  /// unchanged is answered by copying it through.
+  void (*predict_contact_properties)(void *user,
+                                     const ZJoltVehicleGroundTestInput *input,
+                                     ZJoltVehicleGroundContact *contact);
+  void *user;
+} ZJoltVehicleCollisionTesterCallback;
+
+/// Both fields are required — Jolt calls PredictContactProperties on any step
+/// it skips a full test (zjoltVehicleConstraintSetNumStepsBetweenCollision-
+/// TestActive/Inactive), so a NULL there leaves a wheel's contact stale
+/// rather than updating it. Filters set through
+/// zjoltVehicleConstraintSetWheelFilters are irrelevant here — they narrow
+/// the built-in testers' own query, which this one has none of — and are left as they were, not cleared.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintSetCollisionTesterCallback(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleCollisionTesterCallback *callback);
+/// Exactly what was last set through either this or
+/// zjoltVehicleConstraintSetCollisionTester (all-NULL in that case), never
+/// both — installing one clears the other.
+ZJOLT_API void zjoltVehicleConstraintGetCollisionTesterCallback(
+    const ZJoltVehicleConstraint *constraint,
+    ZJoltVehicleCollisionTesterCallback *out);
+
+//===----------------------------------------------------------------------===//
+// Step callbacks: the only place a host can act on wheel contacts in the
+// step that found them — reading afterward is always stale. Called from
+// PhysicsSystem::Update, every body/constraint mutex held, on whichever job
+// thread steps this vehicle (several vehicles' callbacks can run at once):
+//   * Read/write bodies and constraints; do not add/remove them or destroy
+//     this vehicle from its own callback.
+//   * Do not assume single-threading — a shared `user` pointer's race is
+//     the caller's to avoid.
+//   * NOTHING MAY UNWIND OUT: a throw is std::terminate; an escape past the
+//     lock deadlocks the next update.
+// `context.delta_time` is the sub-step's: N collision steps means N calls,
+// `is_first_step`/`is_last_step` mark the ends.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltVehicleStepContext {
@@ -889,13 +1135,11 @@ ZJOLT_API void zjoltVehicleConstraintGetPostStepCallback(
 //===----------------------------------------------------------------------===//
 
 /// Combines a tire's own friction with the friction of the surface it is
-/// standing on, once per wheel per step. This is where a per-material road —
-/// ice, gravel, a wet patch — is implemented: `body`/`sub_shape_id` name what
-/// the wheel is touching, and the two friction values arrive holding the
-/// TIRE's numbers for the caller to overwrite with the combined ones.
-///
-/// Jolt's default, which a NULL callback restores, is the geometric mean:
-/// sqrt(tire_friction * body_friction) for each direction.
+/// standing on, once per wheel per step — where a per-material road (ice,
+/// gravel, a wet patch) is implemented: `body`/`sub_shape_id` name what the
+/// wheel is touching, and the two friction values arrive holding the TIRE's
+/// numbers for the caller to overwrite with the combined ones. Jolt's
+/// default, which a NULL callback restores, is sqrt(tire * body) per direction.
 typedef struct ZJoltVehicleCombineFrictionCallback {
   void (*combine)(void *user, uint32_t wheel_index, ZJoltBodyId body,
                   ZJoltSubShapeId sub_shape_id, float *longitudinal_friction,
@@ -928,15 +1172,12 @@ typedef struct ZJoltVehicleTireImpulseInputs {
   float delta_time;
 } ZJoltVehicleTireImpulseInputs;
 
-/// Caps how much grip a tire is allowed to use this step, per wheel. Jolt's
-/// default — restored by a NULL callback — is
-/// `friction * suspension_impulse` in each direction, an uncoupled friction
-/// circle that lets a tire brake and corner at full strength at once;
-/// replacing it is how a proper elliptical friction circle, an ABS or a
-/// traction-control system gets written.
-///
-/// The actual impulse applied may be lower than what is returned here: this
-/// is a ceiling, not a demand.
+/// Caps how much grip a tire may use this step, per wheel. Jolt's default —
+/// restored by a NULL callback — is `friction * suspension_impulse` per
+/// direction, an uncoupled friction circle letting a tire brake and corner
+/// at full strength at once; replacing it is how a proper elliptical
+/// friction circle, an ABS or traction control gets written. The actual
+/// impulse applied may be lower than returned here: a ceiling, not a demand.
 typedef struct ZJoltVehicleTireMaxImpulseCallback {
   void (*compute)(void *user, uint32_t wheel_index,
                   const ZJoltVehicleTireImpulseInputs *inputs,
@@ -960,11 +1201,9 @@ ZJOLT_API void zjoltVehicleConstraintGetTireMaxImpulseCallback(
 /// A vehicle constraint IS a JPH::Constraint underneath — it sits in the
 /// same system constraint list zjoltPhysicsSystemGetNumConstraints counts
 /// and zjoltPhysicsSystemDrawConstraints draws — so the generic accessors
-/// (zjoltConstraintSetEnabled, zjoltConstraintGetSubType,
-/// zjoltConstraintIsAdded, zjoltConstraintSetPriority, ...) work on it
-/// through this borrowed view. Borrowed: never zjoltConstraintRelease it,
-/// and it is valid only as long as `constraint` is — do not use it past
-/// zjoltVehicleConstraintDestroy. NULL for a NULL constraint.
+/// (zjoltConstraintSetEnabled, zjoltConstraintGetSubType, ...) work through
+/// this borrowed view. Borrowed: never zjoltConstraintRelease it, and it is
+/// valid only as long as `constraint` is. NULL for a NULL constraint.
 ZJOLT_API ZJoltConstraint *zjoltVehicleConstraintAsConstraint(
     const ZJoltVehicleConstraint *constraint);
 

@@ -8,6 +8,7 @@
 const std = @import("std");
 const constraint = @import("constraint.zig");
 const core = @import("core.zig");
+const debug = @import("debug.zig");
 const query = @import("query.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
@@ -21,6 +22,9 @@ pub const RVec3 = core.RVec3;
 pub const Result = core.Result;
 pub const SubShapeId = core.SubShapeId;
 pub const Vec3 = core.Vec3;
+// For zjoltVehicleConstraintEngineDrawRPM, which zjolt_vehicle.h reuses
+// zjolt_debug.h's opaque handle for rather than respelling it.
+pub const DebugRenderer = debug.DebugRenderer;
 
 // A wheel's ground test filters like any other cast, so `zjolt_vehicle.h`
 // reuses the query header's three filter tables rather than respelling them.
@@ -38,6 +42,9 @@ pub const VehicleCollisionTesterKind = enum(c_int) {
     ray = 0,
     cast_sphere = 1,
     cast_cylinder = 2,
+    /// Set by zjoltVehicleConstraintSetCollisionTesterCallback rather than
+    /// zjoltVehicleConstraintSetCollisionTester.
+    callback = 3,
 };
 
 pub const VehicleTransmissionMode = enum(c_int) {
@@ -130,6 +137,50 @@ pub const VehicleCollisionTesterDesc = extern struct {
     convex_radius_fraction: f32,
 };
 
+/// What VehicleConstraint::OnStep already knows before it asks a custom
+/// tester: which wheel, and the suspension ray to test.
+pub const VehicleGroundTestInput = extern struct {
+    wheel_index: u32,
+    origin: RVec3,
+    direction: Vec3,
+    /// Excluded from a test of your own the way the three built-in testers
+    /// exclude it — this ABI does not do that exclusion for you.
+    vehicle_body: BodyId,
+};
+
+/// What a collision test reports, or — for
+/// VehicleCollisionTesterCallback.predict_contact_properties — the previous
+/// step's contact going in and the extrapolated one coming out.
+pub const VehicleGroundContact = extern struct {
+    body: BodyId,
+    sub_shape_id: SubShapeId,
+    position: RVec3,
+    normal: Vec3,
+    /// Metres, clamped into [0, suspension_max_length] the way Jolt's own
+    /// testers clamp it.
+    suspension_length: f32,
+};
+
+/// A custom wheel-ground collision tester, reached as a callback pair rather
+/// than a mirrored C++ vtable. Both fields run once per wheel from inside
+/// VehicleConstraint::OnStep — job thread, every body and constraint locked,
+/// nothing may unwind — under the same rules as the step callbacks below, and
+/// neither is handed a system to query with; see `ffi/zjolt_vehicle.h` for
+/// why.
+pub const VehicleCollisionTesterCallback = extern struct {
+    collide: ?*const fn (
+        user: ?*anyopaque,
+        input: *const VehicleGroundTestInput,
+        out_contact: *VehicleGroundContact,
+    ) callconv(.c) bool = null,
+    predict_contact_properties: ?*const fn (
+        user: ?*anyopaque,
+        input: *const VehicleGroundTestInput,
+        contact: *VehicleGroundContact,
+    ) callconv(.c) void = null,
+    user: ?*anyopaque = null,
+};
+
 pub const VehicleMotorcycleDesc = extern struct {
     max_lean_angle: f32,
     lean_spring_constant: f32,
@@ -142,6 +193,13 @@ pub const VehicleMotorcycleDesc = extern struct {
 pub const VehicleTrackSide = enum(c_int) {
     left = 0,
     right = 1,
+};
+
+pub const VehicleTrackDesc = extern struct {
+    inertia: f32,
+    angular_damping: f32,
+    max_brake_torque: f32,
+    differential_ratio: f32,
 };
 
 pub const VehicleMotorcycleLeanSpring = extern struct {
@@ -319,6 +377,30 @@ pub extern fn zjoltVehicleConstraintGetGearRatio(constraint: *const VehicleConst
 
 pub extern fn zjoltVehicleConstraintSetGear(constraint: *VehicleConstraint, gear: i32, clutch_friction: f32) Result;
 
+pub extern fn zjoltVehicleConstraintEngineApplyTorque(constraint: *VehicleConstraint, torque: f32, delta_time: f32) Result;
+
+pub extern fn zjoltVehicleConstraintEngineApplyDamping(constraint: *VehicleConstraint, delta_time: f32) Result;
+
+pub extern fn zjoltVehicleConstraintEngineClampRPM(constraint: *VehicleConstraint) Result;
+
+pub extern fn zjoltVehicleConstraintEngineAllowSleep(constraint: *const VehicleConstraint) bool;
+
+pub extern fn zjoltVehicleConstraintTransmissionAllowSleep(constraint: *const VehicleConstraint) bool;
+
+pub extern fn zjoltVehicleConstraintEngineConvertRPMToAngle(constraint: *const VehicleConstraint, rpm: f32, out_angle: *f32) Result;
+
+pub extern fn zjoltVehicleConstraintEngineDrawRPM(constraint: *VehicleConstraint, renderer: *DebugRenderer, position: *const RVec3, forward: *const Vec3, up: *const Vec3, size: f32, shift_down_rpm: f32, shift_up_rpm: f32) Result;
+
+pub extern fn zjoltVehicleConstraintGetEngineDesc(constraint: *const VehicleConstraint, out: *VehicleEngineDesc) Result;
+
+pub extern fn zjoltVehicleConstraintGetTransmissionDesc(constraint: *const VehicleConstraint, out: *VehicleTransmissionDesc) Result;
+
+pub extern fn zjoltVehicleConstraintGetGearRatios(constraint: *const VehicleConstraint, out_forward: ?[*]f32, forward_capacity: u32, out_forward_count: *u32, out_reverse: ?[*]f32, reverse_capacity: u32, out_reverse_count: *u32) Result;
+
+pub extern fn zjoltVehicleConstraintCalculateDifferentialTorqueRatio(constraint: *const VehicleConstraint, differential_index: u32, left_angular_velocity: f32, right_angular_velocity: f32, out_left_torque_fraction: *f32, out_right_torque_fraction: *f32) Result;
+
+pub extern fn zjoltVehicleConstraintCalculateTrackedWheelAngularVelocity(constraint: *VehicleConstraint, wheel_index: u32) Result;
+
 pub extern fn zjoltVehicleConstraintSetWheeledDriverInput(constraint: *VehicleConstraint, forward: f32, right: f32, brake: f32, hand_brake: f32) Result;
 
 pub extern fn zjoltVehicleConstraintGetWheeledRightInput(constraint: *const VehicleConstraint) f32;
@@ -367,11 +449,27 @@ pub extern fn zjoltVehicleConstraintGetWheelLongitudinalLambda(constraint: *cons
 
 pub extern fn zjoltVehicleConstraintGetWheelLateralLambda(constraint: *const VehicleConstraint, wheel_index: u32) f32;
 
+pub extern fn zjoltVehicleConstraintGetWheelBrakeImpulse(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+
 pub extern fn zjoltVehicleConstraintGetWheelLocalBasis(constraint: *const VehicleConstraint, wheel_index: u32, out_forward: *Vec3, out_up: *Vec3, out_right: *Vec3) void;
 
 pub extern fn zjoltVehicleConstraintGetWheelLocalTransform(constraint: *const VehicleConstraint, wheel_index: u32, wheel_right: *const Vec3, wheel_up: *const Vec3, out_position: *Vec3, out_rotation: *Quat) void;
 
 pub extern fn zjoltVehicleConstraintGetWheelWorldTransform(constraint: *const VehicleConstraint, wheel_index: u32, wheel_right: *const Vec3, wheel_up: *const Vec3, out_position: *RVec3, out_rotation: *Quat) void;
+
+pub extern fn zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+
+pub extern fn zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+
+pub extern fn zjoltVehicleConstraintGetWheelCombinedLateralFriction(constraint: *const VehicleConstraint, wheel_index: u32) f32;
+
+pub extern fn zjoltVehicleConstraintGetWheelTrackIndex(constraint: *const VehicleConstraint, wheel_index: u32) i32;
+
+pub extern fn zjoltVehicleConstraintGetWheelLongitudinalFrictionCurve(constraint: *const VehicleConstraint, wheel_index: u32, out: *VehicleCurveDesc) bool;
+
+pub extern fn zjoltVehicleConstraintGetWheelLateralFrictionCurve(constraint: *const VehicleConstraint, wheel_index: u32, out: *VehicleCurveDesc) bool;
+
+pub extern fn zjoltVehicleConstraintGetEngineNormalizedTorqueCurve(constraint: *const VehicleConstraint, out: *VehicleCurveDesc) bool;
 
 pub extern fn zjoltVehicleConstraintGetAntiRollBarCount(constraint: *const VehicleConstraint) u32;
 
@@ -393,6 +491,10 @@ pub extern fn zjoltVehicleConstraintGetTrackAngularVelocity(constraint: *const V
 
 pub extern fn zjoltVehicleConstraintSetTrackAngularVelocity(constraint: *VehicleConstraint, side: VehicleTrackSide, angular_velocity: f32) Result;
 
+pub extern fn zjoltVehicleConstraintGetTrack(constraint: *const VehicleConstraint, side: VehicleTrackSide, out: *VehicleTrackDesc) bool;
+
+pub extern fn zjoltVehicleConstraintSetTrack(constraint: *VehicleConstraint, side: VehicleTrackSide, desc: *const VehicleTrackDesc) Result;
+
 pub extern fn zjoltVehicleConstraintSetEngineRpm(constraint: *VehicleConstraint, rpm: f32) Result;
 
 pub extern fn zjoltVehicleConstraintGetEngineTorque(constraint: *const VehicleConstraint, acceleration: f32) f32;
@@ -410,6 +512,10 @@ pub extern fn zjoltVehicleConstraintSetWheelFilters(constraint: *VehicleConstrai
 pub extern fn zjoltVehicleConstraintGetWheelFilters(constraint: *const VehicleConstraint, out: *VehicleWheelFilters) void;
 
 pub extern fn zjoltVehicleConstraintSetCollisionTester(constraint: *VehicleConstraint, desc: *const VehicleCollisionTesterDesc) Result;
+
+pub extern fn zjoltVehicleConstraintSetCollisionTesterCallback(constraint: *VehicleConstraint, callback: *const VehicleCollisionTesterCallback) Result;
+
+pub extern fn zjoltVehicleConstraintGetCollisionTesterCallback(constraint: *const VehicleConstraint, out: *VehicleCollisionTesterCallback) void;
 
 pub extern fn zjoltVehicleConstraintSetPreStepCallback(constraint: *VehicleConstraint, callback: ?*const VehicleStepCallback) Result;
 

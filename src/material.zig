@@ -1,26 +1,17 @@
 //! Physics materials.
 //!
-//! A material is an **identity**, not a property bag. It carries a debug name
-//! and a debug colour and nothing else — there is no friction, no restitution
-//! and no user data on one. Friction and restitution live on the body
-//! (`BodyInterface.setFriction`, `setRestitution`), and a contact combines the
-//! two bodies' values, never the two surfaces'.
+//! A material is an **identity**, not a property bag: a debug name and
+//! colour, nothing else. Friction/restitution live on the body
+//! (`BodyInterface.setFriction`/`setRestitution`); a contact combines the two bodies' values, never the two surfaces'.
 //!
-//! What a material is for is telling one surface apart from another *within*
-//! one shape. A mesh is built with a material per triangle and a height field
-//! with one per quad; a hit carries a sub-shape id, and `Shape.material` turns
-//! that id into the material of the exact triangle that was hit. That is how
-//! one terrain mesh is gravel here and metal there. Map the returned material
-//! to your own surface data by identity — `eql`, or a hash of `.handle` — and
-//! keep the properties on your side.
+//! What it is for: telling surfaces apart *within* one shape. A mesh has
+//! one material per triangle, a height field one per quad; a hit's
+//! sub-shape id (via `Shape.material`) gives the exact triangle/quad's
+//! material. Map the result to your own data by identity (`eql`, or a hash of `.handle`).
 //!
-//! A shape built with a material holds a reference on it, so the usual pattern
-//! is create, build the shapes, `release`. Two shapes may share one.
-//!
-//! Subclasses that carry real properties are a C++ affair and out of reach
-//! from here: Jolt finds a material's type through its own RTTI macros plus a
-//! `Factory::Register` call — its hand-rolled type system, not the language's,
-//! since zjolt compiles `-fno-rtti`.
+//! A shape holds a reference on its materials (create, build, `release`);
+//! two shapes may share one. Real-property subclasses are a C++ affair,
+//! out of reach here (Jolt's own RTTI macros, not the language's, since zjolt compiles `-fno-rtti`).
 
 const std = @import("std");
 const c = @import("c/material.zig");
@@ -33,6 +24,9 @@ pub const Color = c.Color;
 pub fn color(r: u8, g: u8, b: u8) Color {
     return .{ .r = r, .g = g, .b = b, .a = 255 };
 }
+
+/// @see `Color.toVec4`.
+pub const Vec4 = c.Color.Vec4;
 
 pub const PhysicsMaterial = struct {
     /// Const for the same reason a `Shape`'s handle is: every entry point that
@@ -62,9 +56,9 @@ pub const PhysicsMaterial = struct {
     /// The material every shape built without one reports.
     ///
     /// Shared and owned by the library, so it is valid between `init` and
-    /// `deinit` and null outside that window. It is a real material rather
-    /// than a null, which is why "did this leaf have a material of its own?"
-    /// is `!material.eql(PhysicsMaterial.default().?)` and not a null test.
+    /// `deinit` and null outside that window. A real material rather than
+    /// a null: test "did this leaf have a material of its own?" as
+    /// `!material.eql(PhysicsMaterial.default().?)`, not a null check.
     pub fn default() ?PhysicsMaterial {
         const handle = c.zjoltPhysicsMaterialDefault() orelse return null;
         return .{ .handle = handle };
@@ -103,3 +97,11 @@ pub const PhysicsMaterial = struct {
         return out;
     }
 };
+
+test "Color.toVec4 divides every channel by 255" {
+    const v = (Color{ .r = 255, .g = 0, .b = 128, .a = 64 }).toVec4();
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), v.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), v.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 128.0 / 255.0), v.z, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 64.0 / 255.0), v.w, 0.0001);
+}

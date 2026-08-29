@@ -11,9 +11,12 @@
 #include "zjolt_internal.h"
 #include "zjolt_transformed.h"
 
+#include <Jolt/Geometry/RayAABox.h>
 #include <Jolt/Physics/Character/Character.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 
 /// RigidCharacter — Jolt's Character, a rigid-body-backed character. Defined
@@ -47,7 +50,10 @@ const JPH::CharacterVirtual *Impl(const ZJoltCharacter *character) {
   return character != nullptr ? character->impl.GetPtr() : nullptr;
 }
 
-JPH::EActivation ToJoltActivation(ZJoltActivation activation) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Every entry point below converts once, at the boundary,
+// before the value ever reaches here.
+JPH::EActivation ToJoltActivation(int32_t activation) {
   return activation == ZJOLT_ACTIVATION_DONT_ACTIVATE
              ? JPH::EActivation::DontActivate
              : JPH::EActivation::Activate;
@@ -110,14 +116,8 @@ ZJoltResult OwnTransformedShape(const JPH::TransformedShape &ts,
 
 /// Collects zjoltCharacterCheckCollision's hits.
 ///
-/// Two of its three jobs arrive through the base class rather than through
-/// AddHit, and neither is optional. Jolt sets the collector's CONTEXT to the
-/// TransformedShape a body hit came from, which is the only place the hit's
-/// material can be read and is valid for exactly the duration of the call.
-/// And it sets the collector's USER DATA to the other CharacterVirtual when
-/// the hit came from the character-vs-character list instead of the broad
-/// phase — nothing else distinguishes the two, because a virtual character
-/// has no body id to report.
+/// Two of its three jobs arrive through the base class, not AddHit, neither optional: Jolt sets CONTEXT to the TransformedShape a body hit came from (the only place to read its material, valid only for the call).
+/// USER DATA becomes the other CharacterVirtual for a character-vs-character hit — nothing else distinguishes the two, since a virtual character has no body id.
 class CharacterHitCollector final : public JPH::CollideShapeCollector {
  public:
   CharacterHitCollector(ZJoltCharacterCollisionHit *out, uint32_t capacity)
@@ -201,9 +201,7 @@ const JPH::Character *Impl(const ZJoltRigidCharacter *character) {
 //===----------------------------------------------------------------------===//
 // CharacterContactListener
 //
-// Forwards Jolt's virtual callbacks to plain C function pointers. A field left
-// NULL in the callbacks struct behaves exactly as Jolt's own default override:
-// accept every contact, change nothing.
+// Forwards Jolt's virtual callbacks to plain C function pointers. A field left NULL behaves exactly as Jolt's own default override: accept every contact, change nothing.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltCharacterContactListener final : public JPH::CharacterContactListener {
@@ -367,13 +365,221 @@ struct ZJoltCharacterContactListener final : public JPH::CharacterContactListene
 //===----------------------------------------------------------------------===//
 // Character-vs-character collision
 //
-// CharacterVsCharacterCollisionSimple already implements everything; this
-// exists only to give the brute-force list its own C++ type name so the
-// opaque C handle has something distinct to be.
+// The opaque handle is JPH::CharacterVsCharacterCollision itself (the interface, not a fixed implementation), so the built-in brute-force list and a host's own callbacks come out of Create as the same C type.
+// Add/Remove are declared here, virtual (not part of Jolt's own interface), so the two concrete types below can give them their own meaning without a cast.
 //===----------------------------------------------------------------------===//
 
-struct ZJoltCharacterVsCharacterCollision final
-    : public JPH::CharacterVsCharacterCollisionSimple {};
+struct ZJoltCharacterVsCharacterCollision : public JPH::CharacterVsCharacterCollision {
+  virtual void Add(JPH::CharacterVirtual *character) { (void)character; }
+  virtual void Remove(const JPH::CharacterVirtual *character) { (void)character; }
+};
+
+/// The brute-force list. Composes JPH::CharacterVsCharacterCollisionSimple
+/// rather than inheriting it: that type already derives from
+/// JPH::CharacterVsCharacterCollision on its own path, and giving it
+/// ZJoltCharacterVsCharacterCollision as a second base to the same ancestor
+/// would need virtual inheritance Jolt's own class does not use.
+struct ZJoltCharacterVsCharacterCollisionSimple final
+    : public ZJoltCharacterVsCharacterCollision {
+  JPH::CharacterVsCharacterCollisionSimple list;
+
+  void Add(JPH::CharacterVirtual *character) override { list.Add(character); }
+  void Remove(const JPH::CharacterVirtual *character) override { list.Remove(character); }
+
+  void CollideCharacter(const JPH::CharacterVirtual *inCharacter,
+                        JPH::RMat44Arg inCenterOfMassTransform,
+                        const JPH::CollideShapeSettings &inCollideShapeSettings,
+                        JPH::RVec3Arg inBaseOffset,
+                        JPH::CollideShapeCollector &ioCollector) const override {
+    list.CollideCharacter(inCharacter, inCenterOfMassTransform,
+                          inCollideShapeSettings, inBaseOffset, ioCollector);
+  }
+
+  void CastCharacter(const JPH::CharacterVirtual *inCharacter,
+                     JPH::RMat44Arg inCenterOfMassTransform,
+                     JPH::Vec3Arg inDirection,
+                     const JPH::ShapeCastSettings &inShapeCastSettings,
+                     JPH::RVec3Arg inBaseOffset,
+                     JPH::CastShapeCollector &ioCollector) const override {
+    list.CastCharacter(inCharacter, inCenterOfMassTransform, inDirection,
+                       inShapeCastSettings, inBaseOffset, ioCollector);
+  }
+};
+
+//===----------------------------------------------------------------------===//
+// A custom character-vs-character broad phase
+//
+// ZJoltCharacterVsCharacterCollisionCustom asks the host's callback for candidates via a VISITOR, then runs exactly the narrow-phase test CharacterVsCharacterCollisionSimple runs against each accepted one — deciding nothing about HOW two characters collide, only WHO is offered.
+// The `ZJoltCharacterVsCharacterVisitFn` trampoline's context travels through `visit_user`, a stack struct built fresh per CollideCharacter/CastCharacter call.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+struct CollideVisitContext {
+  const JPH::CharacterVirtual *self;
+  JPH::Mat44 transform1;
+  const JPH::Shape *shape1;
+  JPH::AABox bounds1;
+  const JPH::CollideShapeSettings *original_settings;
+  JPH::CollideShapeSettings settings;
+  JPH::RVec3 base_offset;
+  JPH::CollideShapeCollector *collector;
+};
+
+/// Mirrors the body of CharacterVsCharacterCollisionSimple::CollideCharacter
+/// exactly, one candidate at a time instead of one iteration of `for (c :
+/// mCharacters)`.
+bool VisitCollideCandidate(void *raw, ZJoltCharacter *candidate) {
+  auto *ctx = static_cast<CollideVisitContext *>(raw);
+  if (ctx->collector->ShouldEarlyOut()) return false;
+
+  const JPH::CharacterVirtual *other = Impl(candidate);
+  if (other == nullptr || other == ctx->self) return true;
+
+  // Make shape 2 relative to the base offset, same as shape 1 already is.
+  const JPH::Mat44 transform2 =
+      other->GetCenterOfMassTransform().PostTranslated(-ctx->base_offset).ToMat44();
+
+  // Adds character 2's padding so collision with its outer shell is detected.
+  ctx->settings.mMaxSeparationDistance =
+      ctx->original_settings->mMaxSeparationDistance + other->GetCharacterPadding();
+
+  // Check if the bounding boxes of the characters overlap.
+  const JPH::Shape *shape2 = other->GetShape();
+  JPH::AABox bounds2 = shape2->GetWorldSpaceBounds(transform2, JPH::Vec3::sOne());
+  bounds2.ExpandBy(JPH::Vec3::sReplicate(ctx->settings.mMaxSeparationDistance));
+  if (!ctx->bounds1.Overlaps(bounds2)) return true;
+
+  // The collector needs to know which character this hit is against.
+  ctx->collector->SetUserData(reinterpret_cast<JPH::uint64>(other));
+
+  // The query below uses the character's shape with no padding;
+  // CharacterVirtual::GetContactsAtPosition corrects for that afterwards, the
+  // same as it does for the built-in list.
+  JPH::CollisionDispatch::sCollideShapeVsShape(
+      ctx->shape1, shape2, JPH::Vec3::sOne(), JPH::Vec3::sOne(), ctx->transform1,
+      transform2, JPH::SubShapeIDCreator(), JPH::SubShapeIDCreator(),
+      ctx->settings, *ctx->collector);
+
+  return !ctx->collector->ShouldEarlyOut();
+}
+
+struct CastVisitContext {
+  const JPH::CharacterVirtual *self;
+  const JPH::ShapeCast *shape_cast;
+  JPH::Vec3 origin;
+  JPH::Vec3 extents;
+  const JPH::ShapeCastSettings *original_settings;
+  JPH::ShapeCastSettings settings;
+  JPH::Vec3 direction;
+  JPH::RVec3 base_offset;
+  JPH::CastShapeCollector *collector;
+};
+
+/// Mirrors CharacterVsCharacterCollisionSimple::CastCharacter, one candidate
+/// at a time. @see VisitCollideCandidate.
+bool VisitCastCandidate(void *raw, ZJoltCharacter *candidate) {
+  auto *ctx = static_cast<CastVisitContext *>(raw);
+  if (ctx->collector->ShouldEarlyOut()) return false;
+
+  const JPH::CharacterVirtual *other = Impl(candidate);
+  if (other == nullptr || other == ctx->self) return true;
+
+  const JPH::Mat44 transform2 =
+      other->GetCenterOfMassTransform().PostTranslated(-ctx->base_offset).ToMat44();
+
+  // Adds character 2's padding so collision with its outer shell is detected.
+  ctx->settings.mExtraConvexRadius =
+      ctx->original_settings->mExtraConvexRadius + other->GetCharacterPadding();
+
+  // Sweep the bounding box of the character against the bounding box of the
+  // other character to see if they can collide.
+  const JPH::Shape *shape2 = other->GetShape();
+  JPH::AABox bounds2 = shape2->GetWorldSpaceBounds(transform2, JPH::Vec3::sOne());
+  bounds2.ExpandBy(ctx->extents + JPH::Vec3::sReplicate(other->GetCharacterPadding()));
+  if (!JPH::RayAABoxHits(ctx->origin, ctx->direction, bounds2.mMin, bounds2.mMax)) {
+    return true;
+  }
+
+  ctx->collector->SetUserData(reinterpret_cast<JPH::uint64>(other));
+
+  // As above, collides against the character's shape without padding;
+  // CharacterVirtual::ValidateMovement corrects for that afterwards.
+  JPH::CollisionDispatch::sCastShapeVsShapeWorldSpace(
+      *ctx->shape_cast, ctx->settings, shape2, JPH::Vec3::sOne(), {}, transform2,
+      JPH::SubShapeIDCreator(), JPH::SubShapeIDCreator(), *ctx->collector);
+
+  return !ctx->collector->ShouldEarlyOut();
+}
+
+}  // namespace
+
+struct ZJoltCharacterVsCharacterCollisionCustom final
+    : public ZJoltCharacterVsCharacterCollision {
+  ZJoltCharacterVsCharacterCollisionCallbacks callbacks;
+
+  void CollideCharacter(const JPH::CharacterVirtual *inCharacter,
+                        JPH::RMat44Arg inCenterOfMassTransform,
+                        const JPH::CollideShapeSettings &inCollideShapeSettings,
+                        JPH::RVec3Arg inBaseOffset,
+                        JPH::CollideShapeCollector &ioCollector) const override {
+    if (callbacks.collide_character == nullptr) return;
+
+    const JPH::Mat44 transform1 =
+        inCenterOfMassTransform.PostTranslated(-inBaseOffset).ToMat44();
+    const JPH::Shape *shape1 = inCharacter->GetShape();
+    const JPH::AABox bounds1 = shape1->GetWorldSpaceBounds(transform1, JPH::Vec3::sOne());
+
+    CollideVisitContext ctx{};
+    ctx.self = inCharacter;
+    ctx.transform1 = transform1;
+    ctx.shape1 = shape1;
+    ctx.bounds1 = bounds1;
+    ctx.original_settings = &inCollideShapeSettings;
+    ctx.settings = inCollideShapeSettings;
+    ctx.base_offset = inBaseOffset;
+    ctx.collector = &ioCollector;
+
+    const ZJoltRMat44 transform_c = zjolt::ToCR(inCenterOfMassTransform);
+    callbacks.collide_character(callbacks.user, CharacterIdOf(inCharacter),
+                                &transform_c, &VisitCollideCandidate, &ctx);
+    ioCollector.SetUserData(0);
+  }
+
+  void CastCharacter(const JPH::CharacterVirtual *inCharacter,
+                     JPH::RMat44Arg inCenterOfMassTransform,
+                     JPH::Vec3Arg inDirection,
+                     const JPH::ShapeCastSettings &inShapeCastSettings,
+                     JPH::RVec3Arg inBaseOffset,
+                     JPH::CastShapeCollector &ioCollector) const override {
+    if (callbacks.cast_character == nullptr) return;
+
+    const JPH::Mat44 transform1 =
+        inCenterOfMassTransform.PostTranslated(-inBaseOffset).ToMat44();
+    const JPH::ShapeCast shape_cast(inCharacter->GetShape(), JPH::Vec3::sOne(),
+                                    transform1, inDirection);
+    const JPH::Vec3 origin = shape_cast.mShapeWorldBounds.GetCenter();
+    const JPH::Vec3 extents = shape_cast.mShapeWorldBounds.GetExtent() +
+                              JPH::Vec3::sReplicate(inShapeCastSettings.mExtraConvexRadius);
+
+    CastVisitContext ctx{};
+    ctx.self = inCharacter;
+    ctx.shape_cast = &shape_cast;
+    ctx.origin = origin;
+    ctx.extents = extents;
+    ctx.original_settings = &inShapeCastSettings;
+    ctx.settings = inShapeCastSettings;
+    ctx.direction = inDirection;
+    ctx.base_offset = inBaseOffset;
+    ctx.collector = &ioCollector;
+
+    const ZJoltRMat44 transform_c = zjolt::ToCR(inCenterOfMassTransform);
+    const ZJoltVec3 direction_c = zjolt::ToC(inDirection);
+    callbacks.cast_character(callbacks.user, CharacterIdOf(inCharacter),
+                             &transform_c, &direction_c, &VisitCastCandidate, &ctx);
+    ioCollector.SetUserData(0);
+  }
+};
 
 extern "C" {
 
@@ -457,9 +663,10 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
   settings.mMaxCollisionIterations = desc->max_collision_iterations;
   settings.mMaxConstraintIterations = desc->max_constraint_iterations;
   settings.mMaxNumHits = desc->max_num_hits;
-  settings.mBackFaceMode = desc->back_face_mode == ZJOLT_BACK_FACE_MODE_IGNORE
-                               ? JPH::EBackFaceMode::IgnoreBackFaces
-                               : JPH::EBackFaceMode::CollideWithBackFaces;
+  settings.mBackFaceMode =
+      zjolt::RawEnum(desc->back_face_mode) == ZJOLT_BACK_FACE_MODE_IGNORE
+          ? JPH::EBackFaceMode::IgnoreBackFaces
+          : JPH::EBackFaceMode::CollideWithBackFaces;
   settings.mEnhancedInternalEdgeRemoval = desc->enhanced_internal_edge_removal;
   if (desc->inner_body_shape != nullptr) {
     settings.mInnerBodyShape = zjolt::ToJolt(desc->inner_body_shape);
@@ -467,19 +674,12 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
         static_cast<JPH::ObjectLayer>(desc->inner_body_layer);
   }
 
-  // The supporting volume is a plane through the character; a contact above
-  // it cannot count as ground however flat it is. Jolt's own default is
-  // effectively "everything supports", which reports a wall the character is
-  // pressed against as the ground it is standing on.
-  //
-  // The plane goes one inner radius above the shape's lowest point, which for
-  // a capsule or a sphere is the centre of its bottom cap — Jolt's own
-  // samples use exactly that height, spelled as the standing radius. Placing
-  // it at the lowest point instead is the tempting mistake and it breaks
-  // every slope: a capsule resting on a ramp touches it on the SIDE of its
-  // bottom cap, above the lowest point, so a floor-level plane discards that
-  // contact and the character reports itself unsupported on ground it is
-  // plainly standing on.
+  // The supporting volume is a plane through the character; a contact
+  // above it cannot count as ground. Jolt's default is effectively
+  // "everything supports", reporting a pressed-against wall as ground.
+  // Placed one inner radius above the shape's lowest point (a capsule/
+  // sphere's standing radius) rather than AT the lowest point: a
+  // floor-level plane discards a ramp's side-of-cap contact and reports unsupported on ground plainly stood on.
   settings.mSupportingVolume = zjolt::SupportingVolumeFor(
       settings.mShape, settings.mUp);
 
@@ -647,6 +847,73 @@ void zjoltCharacterUpdateGroundVelocity(ZJoltCharacter *character) {
   impl->UpdateGroundVelocity();
 }
 
+ZJoltResult zjoltCharacterGetAdjustedBodyVelocity(
+    const ZJoltCharacter *character, ZJoltBodyId body_b,
+    ZJoltVec3 *out_linear_velocity, ZJoltVec3 *out_angular_velocity) {
+  ZJOLT_ENTER(out_linear_velocity, out_angular_velocity);
+  const JPH::CharacterVirtual *impl = Impl(character);
+  if (!zjolt::Present(impl)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::BodyLockRead lock(character->owner->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body_b));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BODY_NOT_FOUND,
+        "body_b does not name a live body in this character's system");
+  }
+  const JPH::Body &jolt_body = lock.GetBody();
+
+  JPH::Vec3 linear = JPH::Vec3::sZero();
+  JPH::Vec3 angular = JPH::Vec3::sZero();
+  if (!jolt_body.IsStatic()) {
+    const JPH::MotionProperties *mp = jolt_body.GetMotionPropertiesUnchecked();
+    linear = mp->GetLinearVelocity();
+    angular = mp->GetAngularVelocity();
+  }
+  // The exact two steps CharacterVirtual::GetAdjustedBodyVelocity itself
+  // takes: the body's real velocity, then the installed listener's own
+  // override -- both public, unlike the private method that combines them.
+  JPH::CharacterContactListener *listener = impl->GetListener();
+  if (listener != nullptr) listener->OnAdjustBodyVelocity(impl, jolt_body, linear, angular);
+
+  zjolt::WriteVec3(out_linear_velocity, linear);
+  zjolt::WriteVec3(out_angular_velocity, angular);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltCharacterCalculateGroundVelocity(const ZJoltCharacter *character,
+                                           const ZJoltRVec3 *center_of_mass,
+                                           const ZJoltVec3 *linear_velocity,
+                                           const ZJoltVec3 *angular_velocity,
+                                           float delta_time, ZJoltVec3 *out) {
+  if (out == nullptr) return;
+  const JPH::CharacterVirtual *impl = Impl(character);
+  if (impl == nullptr || center_of_mass == nullptr ||
+      linear_velocity == nullptr || angular_velocity == nullptr) {
+    *out = ZJoltVec3{0, 0, 0};
+    return;
+  }
+
+  // Literal port of CharacterVirtual::CalculateCharacterGroundVelocity,
+  // reading only the character's own (public) current position.
+  const JPH::Vec3 in_linear = zjolt::ToJolt(*linear_velocity);
+  const JPH::Vec3 in_angular = zjolt::ToJolt(*angular_velocity);
+  const float angular_len_sq = in_angular.LengthSq();
+  if (angular_len_sq < 1.0e-12f) {
+    zjolt::WriteVec3(out, in_linear);
+    return;
+  }
+  const float angular_len = std::sqrt(angular_len_sq);
+  const JPH::Quat rotation =
+      JPH::Quat::sRotation(in_angular / angular_len, angular_len * delta_time);
+  const JPH::RVec3 com = zjolt::ToJoltR(*center_of_mass);
+  const JPH::RVec3 character_position = impl->GetPosition();
+  const JPH::RVec3 new_position =
+      com + rotation * JPH::Vec3(character_position - com);
+  zjolt::WriteVec3(out, in_linear + JPH::Vec3(new_position - character_position) /
+                            delta_time);
+}
+
 ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
                                    const ZJoltShape *shape,
                                    float max_penetration_depth,
@@ -662,13 +929,12 @@ ZJoltResult zjoltCharacterSetShape(ZJoltCharacter *character,
       adapters.object_layer, adapters.body, adapters.shape,
       *character->owner->temp_allocator);
 
-  // A refused shape change is a normal outcome — standing up under a low
-  // ceiling — so it is reported through out_changed rather than as an error.
+  // A refused shape change is a normal outcome — standing up under a
+  // low ceiling — reported through out_changed, not as an error.
   //
-  // The inner body, when there is one, has to follow. Jolt's
-  // SetInnerBodyShape does not check for its absence first; it would reach
-  // BodyInterface::SetShape with an invalid id, which happens to be harmless,
-  // but relying on that is not the same as not doing it.
+  // The inner body, when there is one, has to follow: Jolt's
+  // SetInnerBodyShape does not check for its absence first, and would
+  // reach BodyInterface::SetShape with an invalid id — harmless, but relying on that is not the same as not doing it.
   if (changed && !impl->GetInnerBodyID().IsInvalid())
     impl->SetInnerBodyShape(zjolt::ToJolt(shape));
   if (out_changed != nullptr) *out_changed = changed;
@@ -1123,8 +1389,8 @@ ZJoltResult zjoltCharacterVsCharacterCollisionCreate(
   ZJOLT_ENTER(out);
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  ZJoltCharacterVsCharacterCollision *collision =
-      zjolt::New<ZJoltCharacterVsCharacterCollision>();
+  ZJoltCharacterVsCharacterCollisionSimple *collision =
+      zjolt::New<ZJoltCharacterVsCharacterCollisionSimple>();
   if (collision == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   zjolt::HandleCreated();
@@ -1132,6 +1398,27 @@ ZJoltResult zjoltCharacterVsCharacterCollisionCreate(
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltCharacterVsCharacterCollisionCreateCustom(
+    const ZJoltCharacterVsCharacterCollisionCallbacks *callbacks,
+    ZJoltCharacterVsCharacterCollision **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(callbacks, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  ZJoltCharacterVsCharacterCollisionCustom *collision =
+      zjolt::New<ZJoltCharacterVsCharacterCollisionCustom>();
+  if (collision == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+  collision->callbacks = *callbacks;
+
+  zjolt::HandleCreated();
+  *out = collision;
+  return ZJOLT_RESULT_OK;
+}
+
+/// Frees whichever concrete type Create or CreateCustom handed out. The
+/// explicit destructor call inside zjolt::Delete resolves virtually — both
+/// concrete types share ZJoltCharacterVsCharacterCollision's base, whose own
+/// base (JPH::CharacterVsCharacterCollision) declares one — so the right
+/// destructor body runs either way.
 void zjoltCharacterVsCharacterCollisionDestroy(
     ZJoltCharacterVsCharacterCollision *collision) {
   if (collision == nullptr) return;
@@ -1197,15 +1484,12 @@ ZJoltResult zjoltRigidCharacterCreate(ZJoltPhysicsSystem *system,
                            "a character needs a shape");
   }
 
-  // Character's constructor creates its rigid body eagerly and has no way to
-  // report that failing: BodyInterface::CreateBody returning NULL just leaves
-  // the body id at its invalid default (Character.cpp). Destroying a Character
-  // in that state is not safe either — ~Character unconditionally calls
-  // DestroyBody(mBodyID), and Jolt's own DestroyBodies indexes its body array
-  // by the id with no validity check, so an invalid id is an out-of-bounds
-  // access rather than a no-op. Checking room for one more body up front, and
-  // never destroying a Character that came out without one, is how this binds
-  // that safely without touching Jolt.
+  // Character's constructor creates its rigid body eagerly with no way
+  // to report failure: a NULL CreateBody just leaves the body id at its
+  // invalid default. Destroying a Character in that state is not safe
+  // either — ~Character unconditionally calls DestroyBody(mBodyID), an
+  // out-of-bounds access on an invalid id, not a no-op. Checking room
+  // for one more body up front, and never destroying one that came out without it, binds this safely without touching Jolt.
   if (system->system.GetNumBodies() >= system->system.GetMaxBodies()) {
     return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
                            "the system is already holding max_bodies bodies");
@@ -1266,9 +1550,12 @@ void zjoltRigidCharacterDestroy(ZJoltRigidCharacter *character) {
 
 void zjoltRigidCharacterAddToPhysicsSystem(ZJoltRigidCharacter *character,
                                            ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::Character *impl = Impl(character);
   if (impl == nullptr) return;
-  impl->AddToPhysicsSystem(ToJoltActivation(activation));
+  impl->AddToPhysicsSystem(ToJoltActivation(raw_activation));
 }
 
 void zjoltRigidCharacterRemoveFromPhysicsSystem(ZJoltRigidCharacter *character) {
@@ -1350,11 +1637,14 @@ void zjoltRigidCharacterSetPositionAndRotation(ZJoltRigidCharacter *character,
                                                const ZJoltRVec3 *position,
                                                const ZJoltQuat *rotation,
                                                ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::Character *impl = Impl(character);
   if (impl == nullptr || position == nullptr || rotation == nullptr) return;
   impl->SetPositionAndRotation(zjolt::ToJoltR(*position),
                                zjolt::ToJoltRotation(*rotation),
-                               ToJoltActivation(activation));
+                               ToJoltActivation(raw_activation));
 }
 
 void zjoltRigidCharacterGetPosition(const ZJoltRigidCharacter *character,
@@ -1367,9 +1657,12 @@ void zjoltRigidCharacterGetPosition(const ZJoltRigidCharacter *character,
 void zjoltRigidCharacterSetPosition(ZJoltRigidCharacter *character,
                                     const ZJoltRVec3 *position,
                                     ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::Character *impl = Impl(character);
   if (impl == nullptr || position == nullptr) return;
-  impl->SetPosition(zjolt::ToJoltR(*position), ToJoltActivation(activation));
+  impl->SetPosition(zjolt::ToJoltR(*position), ToJoltActivation(raw_activation));
 }
 
 void zjoltRigidCharacterGetRotation(const ZJoltRigidCharacter *character,
@@ -1382,9 +1675,12 @@ void zjoltRigidCharacterGetRotation(const ZJoltRigidCharacter *character,
 void zjoltRigidCharacterSetRotation(ZJoltRigidCharacter *character,
                                     const ZJoltQuat *rotation,
                                     ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::Character *impl = Impl(character);
   if (impl == nullptr || rotation == nullptr) return;
-  impl->SetRotation(zjolt::ToJoltRotation(*rotation), ToJoltActivation(activation));
+  impl->SetRotation(zjolt::ToJoltRotation(*rotation), ToJoltActivation(raw_activation));
 }
 
 void zjoltRigidCharacterGetCenterOfMassPosition(

@@ -1,0 +1,17 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Jolt (root headers)	GetConfigurationString	BOUND	zjoltAbiLayout ZJoltAbiLayout zjoltVersion zjoltJoltVersion
+Jolt (root headers)	RegisterTypes	BOUND	zjoltInit zjoltInitWithConfig
+Jolt (root headers)	RegisterTypesInternal	BOUND	zjoltInitWithConfig ZJOLT_CONFIG_ID
+Jolt (root headers)	UnregisterTypes	BOUND	zjoltDeinit
+Jolt (root headers)	VerifyJoltVersionID	BOUND	zjoltInitWithConfig ZJOLT_CONFIG_ID ZJOLT_RESULT_CONFIG_MISMATCH zjoltConfigId
+Jolt (root headers)	VerifyJoltVersionIDInternal	BOUND	zjoltInitWithConfig ZJOLT_RESULT_CONFIG_MISMATCH

@@ -1,30 +1,13 @@
-# Physics/Ragdoll — every name `tools/coverage.sh Ragdoll` reports as unbound,
-# classified. One line per name: NAME  CATEGORY  reason.
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
 #
-# Categories
-#   INTERNAL         machinery that must not cross a C boundary: solver-loop
-#                    internals, index tables built once and consumed by Jolt
-#                    itself, serialisation this ABI routes differently.
-#   EXTENSION_POINT  a C++ subclassing hook zjolt already gives a caller
-#                    another way, naming the zjolt type that covers it.
-#   BOUND_ELSEWHERE  reachable today through a zjolt entry point with a
-#                    different name.
-#   REAL_GAP         a caller would reasonably want it and could not reach it.
-#
-# `tools/coverage.sh` matches names literally and its `bound` regex excludes
-# digits, so any entry point whose RETURN TYPE is a fixed-width integer is
-# invisible to it. Several names below are answered by such an entry point.
-
-AdditionalConstraint  BOUND_ELSEWHERE  RagdollSettings::AdditionalConstraint is a constraint between two ragdoll bodies outside the parent-child tree, for closed kinematic loops. Reachable today, and with MORE constraint types than a ragdoll-local descriptor could carry: zjoltRagdollGetBodyIds names every part, and zjoltConstraintCreateFixed/Point/Hinge/SwingTwist/SixDof/... plus zjoltConstraintAdd join any two of them. Binding it into the settings would only ever have offered the swing-twist ZJoltRagdollConstraintDesc builds, so it would be strictly narrower. What the settings route would add is lifetime: the ragdoll would add, remove and destroy the extra constraint with its parts. A caller taking the route above owns that itself and must zjoltConstraintRemove before the ragdoll's last zjoltRagdollRelease destroys the bodies underneath it.
-CalculateConstraintIndexToBodyIdxPair  INTERNAL  Builds RagdollSettings::mConstraintIndexToBodyIdxPair, which nothing in Jolt reads — only sRestoreFromBinaryState builds it (Ragdoll.cpp:401). The table it produces is exactly (parent joint, joint) for each non-root joint in joint order, which zjoltSkeletonGetJointParentIndex already gives, and it is inert without a constraint handle to pair an index with.
-CalculateConstraintPriorities  REAL_GAP  bound as zjoltRagdollSettingsCalculateConstraintPriorities. The third of Jolt's three "call this after configuring the ragdoll" methods, beside Stabilize and DisableParentChildCollisions, which zjolt already bound. It sets each constraint's solver priority so joints near the root solve before joints near the leaves, which changes how a stressed ragdoll settles, and there was no other way to reach mConstraintPriority on a ragdoll's own constraints.
-GetBodyCount  BOUND_ELSEWHERE  zjoltRagdollGetBodyIds with a NULL array is the size query, and always writes *out_count. Ragdoll.bodyCount() on the Zig side is that call.
-GetBodyIndexToConstraintIndex  INTERNAL  The whole-array getter for the table zjoltRagdollSettingsCalculateBodyIndexToConstraintIndex builds; arrays do not cross this ABI. Jolt consumes it itself inside DriveToPoseUsingMotors (Ragdoll.cpp:654,691), which is why the Calculate half is bound and the getter is not.
-GetBodyIndicesForConstraintIndex  INTERNAL  Element accessor for mConstraintIndexToBodyIdxPair — see CalculateConstraintIndexToBodyIdxPair. Derivable from the skeleton, and returns a std::pair, which has no C shape.
-GetConstraintCount  REAL_GAP  bound as zjoltRagdollGetConstraintCount (which coverage.sh still cannot see: it returns uint32_t), together with zjoltRagdollGetConstraint so the count indexes something. A ragdoll's constraints were unreachable, so per-joint motor tuning, per-joint solver priority and "how much force is this joint taking" (the zjoltConstraint* surface) had no way in.
-GetConstraintIndexForBodyIndex  INTERNAL  The accessor Jolt's own DriveToPoseUsingMotors calls on every step (Ragdoll.cpp:654,691). It indexes mBodyIndexToConstraintIndex without a bounds check, and answers a question the skeleton already answers.
-GetConstraintIndexToBodyIdxPair  INTERNAL  Whole-array getter for the same table — see CalculateConstraintIndexToBodyIdxPair.
-GetRagdollSettings  REAL_GAP  bound as zjoltRagdollGetRagdollSettings, with zjoltRagdollSettingsGetSkeleton beside it. It was the only route from a live ragdoll back to the template it was spawned from, and from there to its skeleton — the thing that turns a ZJoltBodyId out of zjoltRagdollGetBodyIds into a joint name.
-GetRootTransform  REAL_GAP  bound as zjoltRagdollGetRootTransform. Where the ragdoll IS: the one transform a camera, a footstep or a distance cull wants, without reading every part back. Jolt indexes mBodyIDs[0] with no bounds check and returns a zero position and identity rotation when the body lock fails; the binding refuses an empty ragdoll and documents the lock default.
-SaveBinaryState  INTERNAL  RagdollSettings::SaveBinaryState — there is no Ragdoll::SaveBinaryState, so this is settings serialisation, and BINDING.md's "settings objects do not cross" covers it: a host driving this ABI builds settings from its own asset data through zjoltRagdollSettingsBuild. Restoring one would also reintroduce constraints of any TwoBodyConstraint type, which zjoltRagdollDriveToPoseUsingMotors relies on not happening. A live ragdoll's runtime state is a different question and is answered by the physics-system-wide save/restore in src/state.zig, which covers the ragdoll's bodies like any others.
-SetGroupID  REAL_GAP  bound as zjoltRagdollSetGroupId. zjoltRagdollSettingsCreateRagdoll takes the collision group id once at spawn, and the group id is what makes a shared zjoltRagdollSettingsDisableParentChildCollisions filter apply to one ragdoll and not another. Changing it afterwards — pooling and respawning a ragdoll, or moving one into a group that ignores a player — had no entry point.
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Physics/Ragdoll	AdditionalConstraint	BOUND	zjoltRagdollGetBodyIds zjoltConstraintCreateFixed zjoltConstraintAdd ZJoltRagdollConstraintDesc zjoltConstraintRemove zjoltRagdollRelease
+Physics/Ragdoll	GetBodyCount	BOUND	zjoltRagdollGetBodyIds

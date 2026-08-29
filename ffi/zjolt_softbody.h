@@ -2,37 +2,14 @@
 // zjolt — soft bodies: shared topology, creation, per-step read-back, and the
 // per-instance properties a host drives while the simulation runs.
 //
-// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part; this
-// file is split out so that no single header has to carry the whole surface.
+// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part.
 //
-// A soft body is built in two stages, same as Jolt's own:
-//
-//   1. A ZJoltSoftBodySharedSettings carries the topology — vertices, faces,
-//      and the constraints that hold them together. It is reference counted
-//      and shareable: build one cloth or one blob of jelly and stamp out many
-//      soft bodies from it. Vertices and constraint arrays are appended in
-//      bulk, and CreateConstraints derives edge/shear/bend constraints from
-//      the faces automatically rather than requiring every edge by hand.
-//   2. A ZJoltSoftBodyDesc (Jolt's SoftBodyCreationSettings, flattened) places
-//      one instance of that topology in the world. It is NOT the same call as
-//      a rigid body: soft bodies go through
-//      BodyInterface::CreateSoftBody, a distinct entry point from CreateBody,
-//      because a soft body has no shape, no motion type and no mass override
-//      of its own — its "shape" IS its simulated vertices, and its dynamics
-//      come from SoftBodyCreationSettings's own fields (iteration count,
-//      pressure, per-vertex radius) instead. The body id it returns is an
-//      ordinary ZJoltBodyId: add it, remove it, and put it in a collision
-//      group through the existing zjoltBody* calls exactly like a rigid body.
-//
-// Per step, a soft body's vertices move on their own — there is no transform
-// to read back the way a rigid body has one. zjoltSoftBodyGetVertexStates is
-// the bulk read-back for that: one lock, one crossing, every vertex.
-//
-// The two stages above describe a body being born. The second half of this
-// header is what a host does with one afterwards: the live properties of the
-// body's SoftBodyMotionProperties, one-vertex-at-a-time control over velocity
-// and inverse mass, and the per-frame skinning call that makes a cloth follow
-// an animated skeleton.
+// Built in two stages: ZJoltSoftBodySharedSettings carries the reference-
+// counted, shareable topology (vertices, faces, constraints); ZJoltSoftBodyDesc
+// places one instance in the world via BodyInterface::CreateSoftBody, a
+// distinct entry point from CreateBody. The returned ZJoltBodyId is ordinary.
+// zjoltSoftBodyGetVertexStates is the per-step bulk read-back; there is no
+// transform to read the way a rigid body has one.
 //===----------------------------------------------------------------------===//
 
 #ifndef ZJOLT_SOFTBODY_H_
@@ -42,6 +19,8 @@
 
 // For ZJoltCollisionGroup, which ZJoltSoftBodyDesc carries.
 #include "zjolt_group.h"
+// For ZJoltPlane, which the vertex-collision iterator below reads and writes.
+#include "zjolt_shape.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,13 +59,11 @@ typedef struct ZJoltSoftBodyFace {
   uint32_t material_index;
 } ZJoltSoftBodyFace;
 
-/// A spring holding two vertices at a fixed rest length. The rest length
-/// itself is not a field here: it is measured from the vertices' positions by
-/// zjoltSoftBodySharedSettingsCalculateEdgeLengths (or by CreateConstraints,
-/// which calls it for you), not supplied up front.
+/// A spring holding two vertices at a fixed rest length. The rest length is
+/// not a field here: it is measured by
+/// zjoltSoftBodySharedSettingsCalculateEdgeLengths (or by CreateConstraints).
 ///
-/// `vertex[0]` and `vertex[1]` must differ — Jolt asserts on an edge that
-/// connects a vertex to itself (SoftBodySharedSettings.cpp:375).
+/// `vertex[0]` and `vertex[1]` must differ.
 typedef struct ZJoltSoftBodyEdge {
   uint32_t vertex[2];
   /// Inverse of the spring's stiffness. 0 is rigid.
@@ -100,20 +77,12 @@ typedef struct ZJoltSoftBodyVolumeConstraint {
   float compliance;
 } ZJoltSoftBodyVolumeConstraint;
 
-/// A discrete Cosserat rod: two vertices held at a fixed length, like an
-/// edge, but carrying an ORIENTATION as well. That orientation is the whole
-/// reason to reach for a rod instead of an edge — it is what a host reads
-/// back through zjoltSoftBodyGetRodStates to orient geometry attached along
-/// the rod, a plant stem or a leaf or a cable.
+/// A discrete Cosserat rod: two vertices at a fixed length, like an edge,
+/// but with an ORIENTATION too, read back via zjoltSoftBodyGetRodStates.
 ///
-/// A rod's length, inverse mass and rest frame are not fields here: all three
-/// are derived from the vertices by
-/// zjoltSoftBodySharedSettingsCalculateRodProperties, which is not optional
-/// for rods the way CalculateEdgeLengths is optional for edges. @see that
-/// function.
-///
-/// A rod on its own is free to spin about its own axis at constant velocity;
-/// it takes at least one ZJoltSoftBodyRodBendTwist to pin that down.
+/// Length, inverse mass and rest frame are derived by
+/// zjoltSoftBodySharedSettingsCalculateRodProperties — NOT optional, unlike
+/// CalculateEdgeLengths. Needs a ZJoltSoftBodyRodBendTwist to stop spinning.
 typedef struct ZJoltSoftBodyRodStretchShear {
   /// Must differ, and must be at two DISTINCT positions — a rod of zero
   /// length is refused rather than left to Jolt's assert.
@@ -122,31 +91,23 @@ typedef struct ZJoltSoftBodyRodStretchShear {
   float compliance;
 } ZJoltSoftBodyRodStretchShear;
 
-/// Limits the bend and twist between two rods, by index into the rods added
-/// so far. This is what stops a rod from rotating freely about its own axis,
-/// and it is also what connects rods into a chain the Bishop frames are
-/// propagated along.
+/// Limits the bend and twist between two rods, indexed into the rods added
+/// so far. Stops a rod spinning freely and chains rods for Bishop frames.
 ///
-/// Take care with the two indices across
-/// zjoltSoftBodySharedSettingsOptimize: it REORDERS rods, and remaps these
-/// indices to follow, so `rod[]` names the rods in the order they were added
-/// only until Optimize runs. Author every bend-twist constraint before
-/// optimising and this never comes up.
+/// zjoltSoftBodySharedSettingsOptimize REORDERS rods and remaps these
+/// indices; author every bend-twist constraint before optimising.
 typedef struct ZJoltSoftBodyRodBendTwist {
   /// Must differ, and each must name a rod already added.
   uint32_t rod[2];
   float compliance;
 } ZJoltSoftBodyRodBendTwist;
 
-/// One joint's inverse bind matrix, for skinning a soft body to an animated
-/// skeleton. `matrix` is Jolt's own Mat44 layout: four columns of four
-/// floats each (column-major), so a column c's row r is `matrix[4*c + r]` —
-/// NOT row-major.
+/// One joint's inverse bind matrix, for skinning to an animated skeleton.
+/// `matrix` is column-major: column c's row r is `matrix[4*c + r]`.
 ///
-/// Referenced by index from ZJoltSoftBodySkinned::weights, so add every
-/// joint's inverse bind matrix a Skinned constraint will use before or
-/// alongside it; nothing here checks that a weight's index is in range at
-/// add time, because the final count is not known until you stop adding.
+/// Referenced by index from ZJoltSoftBodySkinned::weights; add every joint
+/// used before or alongside it. Not range-checked at add time — the final
+/// count is unknown until you stop adding.
 typedef struct ZJoltSoftBodyInvBind {
   uint32_t joint_index;
   float matrix[16];
@@ -160,14 +121,12 @@ typedef struct ZJoltSoftBodySkinWeight {
   float weight;
 } ZJoltSoftBodySkinWeight;
 
-/// Skins one simulated vertex to up to four joints and limits how far the
-/// simulated vertex may stray from its skinned position. The bind pose is
-/// the vertex's own ZJoltSoftBodyVertex::position.
+/// Skins one simulated vertex to up to four joints and limits how far it may
+/// stray from its skinned position. The bind pose is the vertex's own
+/// ZJoltSoftBodyVertex::position.
 ///
 /// `weights` holds up to four entries; the first with `weight == 0` ends the
-/// list, matching Jolt's own convention (SoftBodySharedSettings.h:280) —
-/// pad unused trailing entries with a zero weight rather than zero-length
-/// the list some other way.
+/// list — pad unused trailing entries with a zero weight.
 typedef struct ZJoltSoftBodySkinned {
   uint32_t vertex;
   ZJoltSoftBodySkinWeight weights[4];
@@ -227,67 +186,43 @@ ZJOLT_API void zjoltSoftBodySharedSettingsRelease(
 ZJOLT_API uint32_t zjoltSoftBodySharedSettingsGetRefCount(
     const ZJoltSoftBodySharedSettings *settings);
 
-/// A deep copy of `settings`, returned with a reference count of one and
-/// sharing nothing with the original but its material references.
+/// A deep copy of `settings`, returned with a reference count of one,
+/// sharing nothing but material references. The only way to vary a
+/// finished topology, since every other call only appends.
 ///
-/// This is the only way to vary a finished topology, because every other call
-/// on these settings appends: there is no remove, no edit, and no reset. So
-/// "the same cloth, stiffer" or "the same body, one more pinned corner" means
-/// cloning the built settings and adding to the copy, rather than rebuilding
-/// from source data the host may have already thrown away.
-///
-/// The copy carries the original's optimisation state too — clone something
-/// that has already been through zjoltSoftBodySharedSettingsOptimize and the
-/// clone is optimised as well. Add anything to it after that and it must be
-/// optimised again, exactly as the original would have to be.
+/// Carries the original's optimisation state; adding to the clone
+/// afterward requires re-optimising, same as the original would.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsClone(
     const ZJoltSoftBodySharedSettings *settings,
     ZJoltSoftBodySharedSettings **out);
 
-/// Replaces the settings' material list, which ZJoltSoftBodyFace::material_
-/// index indexes. A reference is taken on each; NULL entries are refused.
+/// Replaces the settings' material list, indexed by
+/// ZJoltSoftBodyFace::material_index. A reference is taken on each; NULL
+/// entries are refused. Read by queries, not the solver.
 ///
-/// A soft body's materials are read by QUERIES, not by its solver: they are
-/// what zjoltShapeGetMaterial answers with for a ray cast or a collide-shape
-/// hit against this body, so this is how a host says "that triangle of the
-/// sail is canvas and this one is rope" and gets it back out of a hit. No
-/// friction or restitution is taken from them — those are per-body, on
-/// ZJoltSoftBodyDesc.
-///
-/// `count` of 0 is refused rather than clearing the list: Jolt indexes it
-/// with every face's material_index unguarded, so an empty list is an
-/// out-of-bounds read for every face the settings already hold. Pass
-/// zjoltPhysicsMaterialDefault() for a slot with nothing of its own.
-///
-/// Faces already added are NOT re-checked here — a face whose material_index
-/// is past the new list is refused up front, and the whole call fails without
-/// replacing anything.
+/// `count` of 0 is refused (Jolt indexes it unguarded). A face already
+/// added whose material_index is past the new list refuses the whole call.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsSetMaterials(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltPhysicsMaterial *const *materials, uint32_t count);
 
-/// The settings' material list, in the order ZJoltSoftBodyFace::material_index
-/// indexes it. Two-call protocol: pass out_materials = NULL to learn the
-/// count. Pointers are borrowed from the settings and stay valid as long as
-/// they do; take a reference with zjoltPhysicsMaterialAddRef to outlive them.
+/// The settings' material list, in ZJoltSoftBodyFace::material_index order.
+/// Two-call protocol: out_materials = NULL learns the count. Borrowed
+/// pointers, valid as long as the settings are; zjoltPhysicsMaterialAddRef
+/// to outlive them.
 ///
-/// Settings that never had SetMaterials called report exactly one material,
-/// which is zjoltPhysicsMaterialDefault().
+/// Settings that never had SetMaterials called report one material: zjoltPhysicsMaterialDefault().
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsGetMaterials(
     const ZJoltSoftBodySharedSettings *settings,
     const ZJoltPhysicsMaterial **out_materials, uint32_t capacity,
     uint32_t *out_count);
 
-/// Appends `count` vertices. Vertex indices used by every other Add* call
-/// below refer to the order vertices were appended in, across every call
-/// made so far — so add all of a body's vertices before the faces and
-/// constraints that reference them.
+/// Appends `count` vertices. Vertex indices in every other Add* call below
+/// refer to the append order across every call so far — add all vertices
+/// before the faces and constraints that reference them.
 ///
-/// That ordering is enforced rather than merely advised: every Add* below
-/// refuses a vertex index that is not already in range. Jolt indexes its
-/// vertex array with those indices unguarded, both while solving and while
-/// measuring — `Array::operator[]` asserts (Array.h:566) and, in a build with
-/// asserts off, reads past the end of the array instead.
+/// Enforced, not advised: every Add* below refuses an out-of-range index,
+/// since Jolt indexes its vertex array unguarded.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsAddVertices(
     ZJoltSoftBodySharedSettings *settings, const ZJoltSoftBodyVertex *vertices,
     uint32_t count);
@@ -318,13 +253,12 @@ ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsAddVolumeConstraints(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodyVolumeConstraint *constraints, uint32_t count);
 
-/// Appends `count` Cosserat rods. Fails without adding any of them if one
-/// connects a vertex to itself, or names a vertex index past the vertices
-/// added so far.
+/// Appends `count` Cosserat rods. Fails without adding any if one connects
+/// a vertex to itself, or names an out-of-range vertex index.
 ///
-/// Rods are not usable until zjoltSoftBodySharedSettingsCalculateRodProperties
-/// has run — see there. A rod's index, for the bend-twist constraints below,
-/// is its position across every call made so far, the same way a vertex's is.
+/// Not usable until zjoltSoftBodySharedSettingsCalculateRodProperties has
+/// run. A rod's index (for bend-twist constraints) is its append position,
+/// like a vertex's.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsAddRodStretchShearConstraints(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodyRodStretchShear *rods, uint32_t count);
@@ -343,31 +277,22 @@ ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsAddInvBindMatrices(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodyInvBind *inv_binds, uint32_t count);
 
-/// Appends `count` skinned constraints. Fails without adding any of them if
-/// one names a vertex index past the vertices added so far: Jolt reaches for
-/// that vertex on every zjoltSoftBodySkinVertices call and on every step the
-/// skin constraints are solved, and it is indexed rather than looked up.
+/// Appends `count` skinned constraints. Fails without adding any if one
+/// names an out-of-range vertex index — indexed, not looked up, every solve.
 ///
-/// A weight's `inv_bind_index` is NOT checked here, for the reason
-/// ZJoltSoftBodyInvBind gives — the inverse bind matrix list is still allowed
-/// to grow. zjoltSoftBodySkinVertices checks it instead, at the one point the
-/// final count is known.
+/// A weight's `inv_bind_index` is NOT checked here, since the inverse
+/// bind matrix list may still grow; zjoltSoftBodySkinVertices checks it
+/// once the final count is known.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsAddSkinnedConstraints(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodySkinned *constraints, uint32_t count);
 
-/// Builds edge, shear and bend constraints from the faces already added,
-/// instead of listing every edge by hand. Also derives an LRA constraint per
-/// vertex when `vertex_attributes[i].lra_type` asks for one, and calls
-/// CalculateEdgeLengths for you.
+/// Builds edge, shear and bend constraints from the faces already added.
+/// Also derives an LRA constraint per vertex when
+/// `vertex_attributes[i].lra_type` asks for one, and calls CalculateEdgeLengths.
 ///
-/// `vertex_attributes` is indexed in parallel with the vertices added so
-/// far; if it is shorter than that, Jolt repeats its last element for the
-/// remaining vertices (SoftBodySharedSettings.h:53) — which means
-/// `vertex_attributes_count` must be at least 1, since repeating the last
-/// element of an empty list has no element to repeat. That is checked here
-/// and reported as ZJOLT_RESULT_INVALID_ARGUMENT rather than left to read
-/// off the end of the caller's array.
+/// `vertex_attributes` is indexed in parallel with the vertices, repeating
+/// its last element if shorter; `vertex_attributes_count` must be >= 1.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsCreateConstraints(
     ZJoltSoftBodySharedSettings *settings,
     const ZJoltSoftBodyVertexAttributes *vertex_attributes,
@@ -382,64 +307,28 @@ ZJOLT_API void zjoltSoftBodySharedSettingsCalculateEdgeLengths(
     ZJoltSoftBodySharedSettings *settings);
 
 /// Measures every volume constraint's rest volume from its four vertices'
-/// current positions, the way CalculateEdgeLengths measures an edge's rest
-/// length.
-///
-/// Unlike edges, NOTHING calls this for you — CreateConstraints derives edge,
-/// shear and bend constraints from the faces but never a volume constraint,
-/// so tetrahedra added through
-/// zjoltSoftBodySharedSettingsAddVolumeConstraints keep Jolt's placeholder
-/// rest volume of 1 until this runs, and the solver spends every step trying
-/// to force them to that size. A jelly that inflates or collapses the instant
-/// it is created is this call missing.
-///
-/// A tetrahedron whose four vertices are coplanar gets a rest volume of zero,
-/// which is legal and means "keep it flat"; it is not refused, because a
-/// degenerate tetrahedron is a plausible thing to author deliberately and an
-/// implausible one to author by accident.
+/// positions, like CalculateEdgeLengths measures an edge. Unlike edges,
+/// NOTHING calls this for you: tetrahedra keep Jolt's placeholder rest
+/// volume of 1 until this runs, so a jelly inflates or collapses on
+/// creation without it. A coplanar tetrahedron gets a legal rest volume
+/// of zero ("keep it flat"), not a refusal.
 ZJOLT_API void zjoltSoftBodySharedSettingsCalculateVolumeConstraintVolumes(
     ZJoltSoftBodySharedSettings *settings);
 
-/// Derives every rod's length, inverse mass and rest orientation from the
-/// vertices, and every bend-twist constraint's rest rotation from the rods it
-/// joins. Run it once, after every rod and bend-twist constraint has been
-/// added and before zjoltSoftBodySharedSettingsOptimize.
+/// Derives every rod's length, inverse mass and rest orientation, and
+/// every bend-twist constraint's rest rotation. Run once, after every rod
+/// and bend-twist constraint, before zjoltSoftBodySharedSettingsOptimize —
+/// NOT optional: skipping it seeds every simulation at a zero quaternion.
 ///
-/// This is not the optional convenience CalculateEdgeLengths is. A rod's rest
-/// orientation is its Bishop frame, and a body's rod states are seeded from
-/// it at creation, so rods that never had this run start every simulation at
-/// a zero quaternion rather than a rotation — not a subtle error, but not one
-/// that reports itself either.
-///
-/// It also propagates one frame along a chain of rods, which is why it wants
-/// the bend-twist constraints in place first: they are what say which rods
-/// are neighbours. Along the way Jolt may SWAP a rod's two vertices, to point
-/// it the same way as the rod before it in the chain.
-///
-/// ZJOLT_RESULT_INVALID_ARGUMENT, rather than Jolt's assert, for a rod whose
-/// two vertices sit at the same position: it has no direction to build a
-/// frame from, and the length it divides by is zero.
+/// ZJOLT_RESULT_INVALID_ARGUMENT if both vertices sit at the same position.
 ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsCalculateRodProperties(
     ZJoltSoftBodySharedSettings *settings);
 
-/// Works out which faces meet at each skinned vertex, which is what gives
-/// that vertex a normal — and the normal is the direction
-/// ZJoltSoftBodySkinned::back_stop_distance is measured along.
-///
-/// Neither zjoltSoftBodySharedSettingsOptimize nor CreateConstraints calls
-/// this. Settings that never had it run still simulate: every skinned vertex
-/// simply has a zero normal, so the back stop does nothing at all and only
-/// max_distance still bites. Call it once, after every face and every skinned
-/// constraint has been added.
-///
-/// Only a face whose three vertices are ALL skinned contributes a normal, so a
-/// vertex on the boundary between a skinned region and a free one is given
-/// fewer faces than meet at it, and one in a wholly unskinned neighbourhood is
-/// given none.
-///
-/// Refused rather than left to Jolt's assert: more than 255 qualifying faces
-/// meeting at one skinned vertex, which does not fit the 8-bit count Jolt
-/// packs alongside the index (SoftBodySharedSettings.cpp:602).
+/// Works out which faces meet at each skinned vertex, giving it a normal —
+/// the direction ZJoltSoftBodySkinned::back_stop_distance is measured
+/// along. Not called by Optimize or CreateConstraints; skipping it leaves
+/// every skinned vertex with a zero normal (back stop then does nothing).
+/// ZJOLT_RESULT_INVALID_ARGUMENT past 255 qualifying faces at one vertex.
 ZJOLT_API ZJoltResult
 zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(
     ZJoltSoftBodySharedSettings *settings);
@@ -455,11 +344,8 @@ ZJOLT_API void zjoltSoftBodySharedSettingsOptimize(
 //===----------------------------------------------------------------------===//
 // Creating a soft body
 //
-// Goes through BodyInterface::CreateSoftBody, a distinct entry point from
-// CreateBody — see the note at the top of this file for why. The body id
-// that comes back is ordinary: zjoltBodyAdd/Remove/Destroy, collision groups,
-// and every other zjoltBody* call in zjolt_body.h and zjolt_group.h work on
-// it exactly as they would on a rigid body.
+// Goes through BodyInterface::CreateSoftBody, distinct from CreateBody. The
+// returned ZJoltBodyId is ordinary: every zjoltBody* call works on it too.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltSoftBodyDesc {
@@ -515,6 +401,28 @@ ZJOLT_API ZJoltResult zjoltSoftBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                                 ZJoltActivation activation,
                                                 ZJoltBodyId *out);
 
+/// As zjoltSoftBodyCreate, but the body takes the id the caller names instead
+/// of the next one Jolt would assign — see zjoltBodyCreateWithId in
+/// zjolt_body.h, which this mirrors exactly, `id` requirements included.
+ZJOLT_API ZJoltResult zjoltSoftBodyCreateWithId(ZJoltPhysicsSystem *system,
+                                                const ZJoltSoftBodyDesc *desc,
+                                                ZJoltBodyId id,
+                                                ZJoltBodyId *out);
+
+/// As zjoltSoftBodyCreateWithId, followed immediately by zjoltBodyAdd.
+ZJOLT_API ZJoltResult zjoltSoftBodyCreateAndAddWithId(
+    ZJoltPhysicsSystem *system, const ZJoltSoftBodyDesc *desc, ZJoltBodyId id,
+    ZJoltActivation activation, ZJoltBodyId *out);
+
+/// The shared topology a live soft body was built from, the reference
+/// `shared_settings` took at creation. Borrowed; takes no reference, not
+/// valid past the body's own destruction.
+///
+/// NULL for a rigid body, and for a stale id — not distinguishable through
+/// this call alone; ask zjoltBodyGetBodyType first if that matters.
+ZJOLT_API const ZJoltSoftBodySharedSettings *zjoltSoftBodyGetSharedSettings(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
 //===----------------------------------------------------------------------===//
 // Per-step read-back
 //===----------------------------------------------------------------------===//
@@ -544,22 +452,8 @@ ZJOLT_API ZJoltResult zjoltSoftBodyGetVertexStates(
 //===----------------------------------------------------------------------===//
 // Live properties of one soft body
 //
-// Everything above configures a soft body before it exists. This is the other
-// half: the knobs Jolt keeps on the body's own SoftBodyMotionProperties, which
-// a host changes while the simulation runs — stiffen the cloth this frame,
-// inflate the balloon, unpin the corner the character just let go of.
-//
-// Every call below takes the system and a body id and resolves those motion
-// properties under a lock, exactly as zjoltSoftBodyGetVertexStates does. A
-// body id naming nothing is ZJOLT_RESULT_BODY_NOT_FOUND; a body id naming a
-// RIGID body is ZJOLT_RESULT_INVALID_ARGUMENT. That second one is the reason
-// these are entry points rather than a struct a caller fills in: a rigid
-// body's MotionProperties is a sibling of a soft body's, not a parent, so
-// casting one to the other is a mistake no compiler can see and no crash
-// points back to.
-//
-// None of these wake a sleeping body. Change one on a body that has gone to
-// sleep and it takes effect when something else wakes it.
+// Runtime knobs on SoftBodyMotionProperties. A body id naming nothing is
+// ZJOLT_RESULT_BODY_NOT_FOUND, a RIGID body ZJOLT_RESULT_INVALID_ARGUMENT.
 //===----------------------------------------------------------------------===//
 
 /// Solver iterations this body runs per step. @see ZJoltSoftBodyDesc for why
@@ -569,13 +463,11 @@ ZJOLT_API ZJoltResult zjoltSoftBodyGetNumIterations(
 ZJOLT_API ZJoltResult zjoltSoftBodySetNumIterations(
     ZJoltPhysicsSystem *system, ZJoltBodyId body, uint32_t num_iterations);
 
-/// Internal gas pressure: n * R * T, amount of substance times the ideal gas
-/// constant times absolute temperature. 0 disables it entirely.
+/// Internal gas pressure: n * R * T. 0 disables it entirely.
 ///
-/// The force it produces is computed from the volume the faces enclose, so it
-/// means nothing on a body whose faces do not close a surface — a flat sheet
-/// of cloth — and it pulls INWARD on one whose faces wind inside out.
-/// zjoltSoftBodyGetVolume is what tells the two apart.
+/// Computed from the volume the faces enclose: means nothing on an open
+/// surface (a flat sheet of cloth), and pulls INWARD if faces wind inside
+/// out — zjoltSoftBodyGetVolume tells the two apart.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetPressure(const ZJoltPhysicsSystem *system,
                                                ZJoltBodyId body, float *out);
 ZJOLT_API ZJoltResult zjoltSoftBodySetPressure(ZJoltPhysicsSystem *system,
@@ -602,11 +494,9 @@ ZJOLT_API ZJoltResult zjoltSoftBodySetFacesDoubleSided(
 /// How far this body's vertices are held off the surface of whatever they
 /// touch. Negative is refused.
 ///
-/// Jolt's own setter asserts on this — but on the value it is about to
-/// OVERWRITE rather than the one being set (SoftBodyMotionProperties.h:102),
-/// so upstream notices a bad radius one call late, or never, if the caller
-/// sets it only once. The check here is on the incoming value, which is what
-/// that assert was written to mean.
+/// Jolt's own assert checks the value being OVERWRITTEN, not the incoming
+/// one — so it can miss a bad radius for a call or forever. This checks
+/// the incoming value instead.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetVertexRadius(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, float *out);
 ZJOLT_API ZJoltResult zjoltSoftBodySetVertexRadius(ZJoltPhysicsSystem *system,
@@ -616,15 +506,8 @@ ZJOLT_API ZJoltResult zjoltSoftBodySetVertexRadius(ZJoltPhysicsSystem *system,
 //===----------------------------------------------------------------------===//
 // One vertex at a time
 //
-// Velocity and inverse mass are the only two parts of a simulated vertex Jolt
-// sanctions writing while the body runs (SoftBodyVertex.h:12). There is
-// deliberately no setter for a position: writing one moves the vertex without
-// moving the previous position the solver integrates from, and the step that
-// follows misses every collision along the way. Move a soft body by moving
-// the body, or by hard-skinning it.
-//
-// `index` is into the same array zjoltSoftBodyGetVertexStates reads, in the
-// same order, and is checked against its length — Jolt indexes it unguarded.
+// Only velocity and inverse mass may be written while running (no position
+// setter, to avoid skipping collisions); `index` is bounds-checked.
 //===----------------------------------------------------------------------===//
 
 /// One vertex's velocity, RELATIVE TO THE BODY'S CENTRE OF MASS — the frame
@@ -637,12 +520,10 @@ ZJOLT_API ZJoltResult zjoltSoftBodySetVertexVelocity(
     const ZJoltVec3 *velocity);
 
 /// One vertex's inverse mass. 0 pins it: it still takes part in every
-/// constraint, but nothing moves it — which is how a cloth is nailed to a
-/// flagpole, or to a hand.
+/// constraint, but nothing moves it.
 ///
-/// This does NOT recompute the body's own mass and inertia, which Jolt derives
-/// from the vertices once at creation. @see
-/// zjoltSoftBodyCalculateMassAndInertia.
+/// Does NOT recompute the body's own mass and inertia, derived once at
+/// creation. @see zjoltSoftBodyCalculateMassAndInertia.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetVertexInvMass(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, uint32_t index,
     float *out);
@@ -652,14 +533,10 @@ ZJOLT_API ZJoltResult zjoltSoftBodySetVertexInvMass(ZJoltPhysicsSystem *system,
                                                     float inv_mass);
 
 /// Recomputes the body's total mass and inertia from its vertices' current
-/// inverse masses and positions. Jolt does this once, at creation, and never
-/// again — so a body whose per-vertex inverse masses were changed keeps the
-/// mass it was born with until this runs.
-///
-/// A single vertex with an inverse mass of 0 gives the WHOLE body infinite
-/// mass and inertia (SoftBodyMotionProperties.cpp:48). That is upstream's
-/// rule, not this binding's, and it is why pinning one corner of a cloth stops
-/// the body as a whole from responding to an impulse.
+/// inverse masses and positions. Jolt does this once, at creation only —
+/// a body whose per-vertex masses changed keeps its original total until
+/// this runs. A single vertex with an inverse mass of 0 gives the WHOLE
+/// body infinite mass and inertia.
 ZJOLT_API ZJoltResult zjoltSoftBodyCalculateMassAndInertia(
     ZJoltPhysicsSystem *system, ZJoltBodyId body);
 
@@ -667,14 +544,12 @@ ZJOLT_API ZJoltResult zjoltSoftBodyCalculateMassAndInertia(
 // Cheap measurements
 //===----------------------------------------------------------------------===//
 
-/// The volume the body's faces enclose, in its own local space. One pass over
-/// the faces, no allocation.
+/// The volume the body's faces enclose, in local space. One pass, no
+/// allocation.
 ///
-/// NEGATIVE when the faces wind inside out, and merely a number — not zero —
-/// for a surface that does not close, such as a sheet of cloth. Jolt computes
-/// its pressure force from exactly this quantity, so a body reporting a
-/// negative volume is a body whose pressure is squeezing it rather than
-/// inflating it.
+/// NEGATIVE when faces wind inside out; a nonzero number even for an open
+/// surface (a sheet of cloth). Pressure force is computed from exactly
+/// this, so negative means it squeezes rather than inflates.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetVolume(const ZJoltPhysicsSystem *system,
                                              ZJoltBodyId body, float *out);
 
@@ -687,61 +562,16 @@ ZJOLT_API ZJoltResult zjoltSoftBodyGetLocalBounds(
 //===----------------------------------------------------------------------===//
 // Skinning to an animated skeleton
 //
-// A cloth that follows a character is not simulated out of nothing. Each
-// frame the host hands Jolt the skeleton's joint matrices; Jolt skins every
-// vertex carrying a Skinned constraint the way a renderer would, and the
-// solver is then allowed to pull the simulated vertex away from that skinned
-// position by at most ZJoltSoftBodySkinned::max_distance.
-//
-// The authoring half is already above — AddInvBindMatrices,
-// AddSkinnedConstraints and CalculateSkinnedConstraintNormals build the bind
-// pose. This is the per-frame half, and the order within a frame is:
-//
-//   1. animate the skeleton;
-//   2. zjoltSoftBodySkinVertices with this frame's joint matrices;
-//   3. zjoltPhysicsSystemStep.
-//
-// Missing a frame is not an error. The skinned positions simply stay where the
-// last call left them, and the cloth spends that step constrained to a pose
-// the character has already left.
+// Per-frame order: animate the skeleton, zjoltSoftBodySkinVertices, then
+// zjoltPhysicsSystemStep. A missed frame is not an error — positions stay.
 //===----------------------------------------------------------------------===//
 
-/// Skins every vertex carrying a Skinned constraint to `joint_matrices`, and
-/// records the result for the solver to constrain against on the next step.
-///
-/// `joint_matrices` is indexed by ZJoltSoftBodyInvBind::joint_index and holds
-/// `joint_count` entries. Each matrix must be expressed RELATIVE TO THE BODY'S
-/// CENTRE-OF-MASS TRANSFORM, not in world space: take the world joint matrix
-/// and pre-multiply it by the inverse of zjoltBodyGetCenterOfMassTransform.
-/// World-space matrices are not detectably wrong and nothing here fails — the
-/// cloth simply skins to wherever the body's centre of mass sits relative to
-/// the origin, which is the single most common way to get this call wrong.
-///
-/// `hard_skin_all` puts every skinned vertex exactly on its skinned position
-/// and zeroes its velocity, ignoring max_distance entirely. That is a reset,
-/// for the frame a character spawns or is teleported — not something to do
-/// every frame, which would leave nothing for the solver to do.
-///
-/// `joint_matrices` may be NULL only when `joint_count` is 0, which in turn is
-/// only usable on settings carrying no inverse bind matrices.
-///
-/// Refused rather than left to Jolt's asserts:
-///
-///   * an inverse bind matrix whose joint_index is >= `joint_count`
-///     (SoftBodyMotionProperties.cpp:1150) — the one thing `joint_count` is
-///     passed for;
-///   * a skin weight whose inv_bind_index is past the settings' inverse bind
-///     matrix list (:1173), which is the check
-///     zjoltSoftBodySharedSettingsAddSkinnedConstraints could not make;
-///   * shared settings carrying no skinned constraints at all, or carrying
-///     vertices appended AFTER this body was created (:1157). Jolt sizes the
-///     per-instance skinning state once, at creation, and only when there is
-///     at least one skinned constraint to size it for.
-///
-/// The skinned positions and normals themselves stay inside Jolt: they are
-/// private to SoftBodyMotionProperties with no accessor, so there is nothing
-/// to read back here. What the skinning did is visible in the vertices
-/// zjoltSoftBodyGetVertexStates reports after the next step.
+/// Skins every vertex carrying a Skinned constraint to `joint_matrices`
+/// (indexed by ZJoltSoftBodyInvBind::joint_index, `joint_count` entries).
+/// Matrices must be RELATIVE TO THE BODY'S CENTRE-OF-MASS TRANSFORM, not
+/// world space — a world-space matrix is not detectably wrong, just
+/// silently offset. `hard_skin_all` snaps every vertex to its skinned
+/// position, a reset for a spawn or teleport.
 ZJOLT_API ZJoltResult zjoltSoftBodySkinVertices(
     ZJoltPhysicsSystem *system, ZJoltBodyId body,
     const ZJoltMat44 *joint_matrices, uint32_t joint_count,
@@ -749,11 +579,10 @@ ZJOLT_API ZJoltResult zjoltSoftBodySkinVertices(
 
 /// Whether the solver enforces this body's skin constraints at all.
 ///
-/// Switching it off does not stop zjoltSoftBodySkinVertices from doing its
-/// work: with the constraints off, that call hard-skins every vertex whose
-/// max_distance is 0 and leaves the rest to simulate freely. So this is the
-/// difference between "cloth that follows the character" and "cloth pinned at
-/// its kinematic vertices and otherwise loose".
+/// Switching it off does not stop zjoltSoftBodySkinVertices working: with
+/// constraints off, that call hard-skins vertices whose max_distance is 0
+/// and leaves the rest free — "follows the character" vs "pinned at
+/// kinematic vertices, otherwise loose".
 ZJOLT_API ZJoltResult zjoltSoftBodyGetEnableSkinConstraints(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, bool *out);
 ZJOLT_API ZJoltResult zjoltSoftBodySetEnableSkinConstraints(
@@ -787,17 +616,12 @@ typedef struct ZJoltSoftBodyRodState {
   ZJoltVec3 angular_velocity;
 } ZJoltSoftBodyRodState;
 
-/// Reads every rod of one soft body under a single lock. Two-call protocol,
-/// exactly like zjoltSoftBodyGetVertexStates: `*out_count` always receives
-/// the rod count, so a capacity of 0 with out_states NULL is a size query.
+/// Reads every rod of one soft body under a single lock. Two-call
+/// protocol: `*out_count` always receives the rod count, so capacity 0
+/// with out_states NULL is a size query.
 ///
-/// A soft body whose settings carry no rods reports 0 rather than failing.
-///
-/// `angular_velocity` is meaningful only BETWEEN steps. Jolt overlays it on
-/// the rod's previous rotation for the duration of a step
-/// (SoftBodyMotionProperties.h:232-241), and computes the velocity back out
-/// of it at the end — so reading this from inside a contact callback gets a
-/// quaternion's first three components, not a velocity.
+/// `angular_velocity` is meaningful only BETWEEN steps — mid-step (e.g. a
+/// contact callback) it reads a quaternion's components, not a velocity.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetRodStates(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltSoftBodyRodState *out_states, uint32_t capacity, uint32_t *out_count);
@@ -806,66 +630,123 @@ ZJOLT_API ZJoltResult zjoltSoftBodyGetRodStates(
 // Hit read-back and manual update
 //===----------------------------------------------------------------------===//
 
-/// Which face of `body` a sub-shape id names.
-///
-/// Every hit against a soft body — ray cast, collide shape, cast shape —
-/// comes back carrying a ZJoltSubShapeId, and this is what turns one into an
-/// index into the faces the host itself added, so "the arrow hit the flag"
-/// can become "the arrow hit triangle 412". The index is into the face list
-/// of the body's SHARED SETTINGS, in the order
-/// zjoltSoftBodySharedSettingsAddFaces built it: soft bodies do not have
-/// their faces reordered the way constraints are.
-///
-/// ZJOLT_RESULT_INVALID_ARGUMENT rather than Jolt's assert for a sub-shape id
-/// that has bits left over after the face index is taken out of it, which is
-/// what an id belonging to some other body's shape looks like from here.
+/// Which face of `body` a sub-shape id names — turns a hit's ZJoltSubShapeId
+/// into an index into the SHARED SETTINGS face list, in
+/// zjoltSoftBodySharedSettingsAddFaces order (never reordered). ZJOLT_RESULT_INVALID_ARGUMENT
+/// for a sub-shape id with bits left over after the face index.
 ZJOLT_API ZJoltResult zjoltSoftBodyGetFaceIndex(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltSubShapeId sub_shape_id, uint32_t *out);
 
-/// Runs one soft-body update immediately, on the calling thread, without
-/// going through zjoltPhysicsSystemStep.
+/// Runs one soft-body update immediately, without zjoltPhysicsSystemStep —
+/// for a body just teleported, or kept out of the simulation (one IS in
+/// the system gets updated twice).
 ///
-/// This is for the soft body that has just been teleported and needs to
-/// settle before it is seen, and for the one deliberately kept out of the
-/// simulation so a host can update it right after the animated object it
-/// hangs from. A body that IS in the system is stepped by the system as well,
-/// so calling this on one updates it twice.
-///
-/// It is single threaded where a step is not, it bypasses the sleep check,
-/// and the rigid bodies it pushes against do not move while it runs — so
-/// calling it repeatedly without stepping in between produces artefacts Jolt
-/// documents but does not prevent.
-///
-/// THREADING: this takes body locks of its own, on this body and on every
-/// body it collides with. It must not be called while zjoltPhysicsSystemStep
-/// is running on the same system, and it must not be called from inside a
-/// contact callback or a step listener — both of those already hold locks
-/// this would wait on.
+/// THREADING: takes locks on this body and everything it collides with.
+/// Must not be called during a step, a contact callback, or a step listener.
 ZJOLT_API ZJoltResult zjoltSoftBodyCustomUpdate(ZJoltPhysicsSystem *system,
                                                 ZJoltBodyId body,
                                                 float delta_time);
 
 //===----------------------------------------------------------------------===//
+// Vertex-vs-shape collision
+//
+// What Shape::CollideSoftBodyVertices runs on: for each vertex, keep
+// whichever call reports the deepest penetration. Exposed standalone so a
+// caller can drive it with no PhysicsSystem and no soft body involved, and
+// so a host-implemented shape (zjolt_customshape.h) can build its own
+// collide_soft_body_vertices callback from the same pieces Jolt's built-in
+// shapes use internally.
+//===----------------------------------------------------------------------===//
+
+/// Strided cursor over one soft-body vertex array's collision-relevant
+/// fields, mirroring Jolt's CollideSoftBodyVertexIterator: `position` and
+/// `inv_mass` read-only, the rest written as vertices are found to collide.
+/// `*_stride` is the byte distance between elements, not necessarily sizeof
+/// the element. Every pointer is borrowed and must stay valid and unmoved
+/// for as long as the iterator is used, and may NOT be NULL: every field is dereferenced unconditionally.
+typedef struct ZJoltCollideSoftBodyVertexIterator {
+  const uint8_t *position;
+  uint32_t position_stride;
+  const uint8_t *inv_mass;
+  uint32_t inv_mass_stride;
+  uint8_t *collision_plane;
+  uint32_t collision_plane_stride;
+  uint8_t *largest_penetration;
+  uint32_t largest_penetration_stride;
+  uint8_t *colliding_shape_index;
+  uint32_t colliding_shape_index_stride;
+} ZJoltCollideSoftBodyVertexIterator;
+
+/// Runs `shape`'s own CollideSoftBodyVertices against `vertices`,
+/// standalone — no PhysicsSystem or soft body needed. Dispatches to
+/// whatever concrete shape `shape` is, a soft body's own SoftBodyShape
+/// included, which is how two soft bodies collide with each other.
+/// `colliding_shape_index` marks any vertex this call wins, uninterpreted
+/// otherwise. ZJOLT_RESULT_INVALID_ARGUMENT for a NULL argument, or any NULL field of `vertices`.
+ZJOLT_API ZJoltResult zjoltShapeCollideSoftBodyVertices(
+    const ZJoltShape *shape, const ZJoltMat44 *center_of_mass_transform,
+    ZJoltVec3 scale, const ZJoltCollideSoftBodyVertexIterator *vertices,
+    uint32_t count, int32_t colliding_shape_index);
+
+/// Collides soft-body vertices against a caller-supplied set of triangles —
+/// Jolt's CollideSoftBodyVerticesVsTriangles, the closest-point search
+/// TriangleShape, MeshShape and HeightFieldShape all build their own
+/// CollideSoftBodyVertices on. Useful directly for a host-implemented shape
+/// backed by its own triangle soup.
+typedef struct ZJoltCollideSoftBodyVerticesVsTriangles
+    ZJoltCollideSoftBodyVerticesVsTriangles;
+
+/// `center_of_mass_transform` and `scale` are fixed for this collider's
+/// whole lifetime, matching Jolt's own object — built fresh per
+/// CollideSoftBodyVertices call. Destroy with
+/// zjoltCollideSoftBodyVerticesVsTrianglesDestroy; accepts NULL.
+ZJOLT_API ZJoltResult zjoltCollideSoftBodyVerticesVsTrianglesCreate(
+    const ZJoltMat44 *center_of_mass_transform, ZJoltVec3 scale,
+    ZJoltCollideSoftBodyVerticesVsTriangles **out);
+ZJOLT_API void zjoltCollideSoftBodyVerticesVsTrianglesDestroy(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider);
+
+/// Begins vertex `index`'s closest-triangle search, discarding whatever
+/// ProcessTriangle found for whichever vertex StartVertex last began.
+/// `vertex->position` must be non-NULL; no other field is read here.
+ZJOLT_API void zjoltCollideSoftBodyVerticesVsTrianglesStartVertex(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider,
+    const ZJoltCollideSoftBodyVertexIterator *vertex, uint32_t index);
+
+/// Considers one candidate triangle, LOCAL space and unscaled — `collider`
+/// applies its own scale — against the vertex StartVertex began; kept only
+/// if closer than every triangle already seen since.
+ZJOLT_API void zjoltCollideSoftBodyVerticesVsTrianglesProcessTriangle(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider, ZJoltVec3 v0,
+    ZJoltVec3 v1, ZJoltVec3 v2);
+
+/// Commits the closest triangle found since StartVertex into vertex
+/// `index`: calls UpdatePenetration and, if it wins, writes
+/// collision_plane and colliding_shape_index — a no-op if no
+/// ProcessTriangle call beat what was already there. `vertex->position`,
+/// `collision_plane`, `largest_penetration` and `colliding_shape_index`
+/// must all be non-NULL.
+ZJOLT_API void zjoltCollideSoftBodyVerticesVsTrianglesFinishVertex(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider,
+    const ZJoltCollideSoftBodyVertexIterator *vertex, uint32_t index,
+    int32_t colliding_shape_index);
+
+/// Marks one vertex as touching `body` via continuous collision detection —
+/// SoftBodyVertex::MarkCCDContact. `*out_colliding_shape_index` is stamped
+/// from `body`'s own id, NOT an index into a per-step colliding-shape list
+/// the way a discrete contact's is. Does not touch largest_penetration. A
+/// no-op if any output pointer is NULL.
+ZJOLT_API void zjoltSoftBodyVertexMarkCcdContact(
+    ZJoltBodyId body, const ZJoltPlane *contact_plane,
+    ZJoltPlane *out_collision_plane, int32_t *out_colliding_shape_index,
+    bool *out_has_contact);
+
+//===----------------------------------------------------------------------===//
 // SoftBodyContactListener
 //
-// Fires as soft bodies collide with rigid bodies. Separate from
-// ZJoltContactListener in zjolt_system.h, and not a substitute for it: Jolt
-// routes soft-body collisions through their own listener entirely, so a world
-// with soft bodies in it and only a rigid contact listener installed hears
-// nothing about them.
-//
-// Crosses as function pointers plus a `void *user`, never a mirrored C++
-// vtable. Either field may be NULL, and a NULL one behaves as Jolt's own
-// default: accept every contact, report nothing.
-//
-// NOTHING MAY UNWIND OUT OF ONE OF THESE. Jolt is built with exceptions off,
-// so an exception crossing a callback is std::terminate — and from a Zig host
-// a panic crossing one skips lock destructors and can wedge the next step.
-//
-// Both callbacks run WITH ALL BODIES LOCKED. Do not call back into the
-// system from inside one — not a query, not a body read, not another soft
-// body's properties. Copy what is needed and act on it after the step.
+// Separate from ZJoltContactListener: a rigid-only listener hears nothing about soft bodies. Exceptions are off — NOTHING may unwind out of a callback.
+// Both run WITH ALL BODIES LOCKED. Do not call back into the system from inside one.
 //===----------------------------------------------------------------------===//
 
 /// Whether a soft body's collision with one other body is processed at all.
@@ -919,33 +800,23 @@ typedef struct ZJoltSoftBodyVertexContact {
   ZJoltVec3 normal;
 } ZJoltSoftBodyVertexContact;
 
-/// The vertices that touched something, and what each of them touched.
+/// The vertices that touched something, and what each touched. Two-call
+/// protocol: `*out_count` always receives the touching-vertex count;
+/// capacity 0 with out_contacts NULL is a size query.
 ///
-/// Two-call protocol: `*out_count` always receives the number of touching
-/// vertices, so a capacity of 0 with out_contacts NULL is a size query. Only
-/// vertices that actually collided are reported — a cloth of ten thousand
-/// vertices resting on a table produces as many entries as there are vertices
-/// on the table, not ten thousand.
-///
-/// `manifold` may only be the one the current callback was handed. Keeping it
-/// and calling this later reads freed solver state.
+/// `manifold` may only be the one the current callback was handed — kept
+/// past it, this reads freed solver state.
 ZJOLT_API ZJoltResult zjoltSoftBodyManifoldGetVertexContacts(
     const ZJoltSoftBodyManifold *manifold,
     ZJoltSoftBodyVertexContact *out_contacts, uint32_t capacity,
     uint32_t *out_count);
 
-/// The sensors this soft body is overlapping. Same two-call protocol, same
-/// lifetime rule.
+/// The sensors this soft body is overlapping. Same two-call protocol and
+/// lifetime rule as zjoltSoftBodyManifoldGetVertexContacts.
 ///
-/// A sensor is reported once for the whole body rather than once per vertex,
-/// which is why it is a separate list and not a flag on a vertex contact.
-///
-/// This listener is not merely how a host HEARS about a soft body overlapping
-/// a sensor, it is what makes it happen: Jolt skips sensors entirely for a
-/// soft body when no soft-body contact listener is installed
-/// (SoftBodyMotionProperties.cpp:154). A world that only installs
-/// zjoltPhysicsSystemSetContactListener gets no soft-body sensor overlaps at
-/// all.
+/// Installing this listener is what makes soft-body sensor overlaps
+/// happen at all: Jolt skips them entirely otherwise, even for a world
+/// with zjoltPhysicsSystemSetContactListener installed.
 ZJOLT_API ZJoltResult zjoltSoftBodyManifoldGetSensorContacts(
     const ZJoltSoftBodyManifold *manifold, ZJoltBodyId *out_bodies,
     uint32_t capacity, uint32_t *out_count);

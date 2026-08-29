@@ -1,31 +1,17 @@
-//! Behavioural tests for vehicles: a wheeled car that accelerates, spins its
-//! wheels, brakes to a stop; an automatic transmission that upshifts as
-//! engine RPM climbs; wheel transform read-back against the suspension
-//! length that produced it; and a tracked vehicle that curves when its two
-//! tracks are driven at different rates.
+//! Behavioural tests for vehicles: a wheeled car that accelerates,
+//! spins its wheels, brakes to a stop; an automatic transmission that
+//! upshifts as RPM climbs; wheel transform read-back against the
+//! suspension length that produced it; and a tracked vehicle that
+//! curves when its two tracks are driven at different rates.
 //!
-//! `zjoltVehicleConstraintCreate` (see `ffi/zjolt_vehicle.h`) both adds the
-//! constraint to the system and registers it as a physics step listener in
-//! the same call — a vehicle constraint that is not stepped never moves its
-//! wheels, but nothing extra is needed here to make that happen: stepping
-//! `world.system` is enough.
+//! `zjoltVehicleConstraintCreate` both adds the constraint and
+//! registers it as a step listener, so stepping `world.system` is
+//! enough to move the wheels.
 //!
-//! One thing that DOES need doing explicitly: a body that has settled and
-//! sat still for `PhysicsSettings::mTimeBeforeSleep` (0.5 s by default) goes
-//! to sleep, same as any other dynamic body, and a sleeping body's
-//! constraints are not solved — so a vehicle that fell asleep during an
-//! idling settle-down does not move no matter what driver input arrives
-//! afterward, because nothing ever wakes it back up.
-//! `WheeledVehicleController::AllowSleep()` stops an ALREADY-active vehicle
-//! from dozing off while it has driver input, but that guard cannot rescue a
-//! body that is already asleep before the input arrives. Every rig below
-//! creates its chassis with `allow_sleeping = false` for exactly this
-//! reason — the alternative, `bodies.activate(chassis)` right before the
-//! first driver input, works just as well for a one-shot script but not for
-//! the settle-then-drive shape every test here has.
-//!
-//! Reuses `integration_test.zig`'s layer map and floor fixture rather than
-//! building its own — see `BINDING.md`.
+//! A settled, still body sleeps after `mTimeBeforeSleep` (0.5s), and a
+//! sleeping body's constraints are not solved — nothing wakes a vehicle
+//! that fell asleep before driver input arrives. Every rig below
+//! creates its chassis with `allow_sleeping = false` for exactly this reason.
 
 const std = @import("std");
 const zjolt = @import("zjolt.zig");
@@ -37,12 +23,8 @@ const World = fixture.World;
 //=============================================================================
 // A small AWD car
 //
-// Four wheels at the corners of a box chassis, front and rear differentials
-// each taking half the engine's torque so every wheel is driven — the
-// simplest layout that cannot leave a wheel silent under forward input.
-// suspension_min/max, radius and inertia are all Jolt's own WheelSettings
-// defaults (see zjoltVehicleWheelDescInit); only each wheel's position is
-// this test's own.
+// Four wheels at the corners of a box chassis, front/rear differentials
+// each taking half the engine's torque — the simplest layout that cannot leave a wheel silent. Only each wheel's position is this test's own; the rest is Jolt's own WheelSettings defaults (zjoltVehicleWheelDescInit).
 //=============================================================================
 
 const chassis_half_extent = zjolt.vec3(0.75, 0.25, 1.75);
@@ -65,13 +47,23 @@ fn differential(left_wheel: i32, right_wheel: i32, engine_torque_ratio: f32) zjo
 
 fn collisionTester() zjolt.VehicleCollisionTesterDesc {
     var tester = zjolt.defaultVehicleCollisionTesterDesc();
-    // The default (0) is Layers.static, which a wheel ray can never hit: our
-    // Layers map only lets a static-layer query hit the moving broad-phase
-    // layer (see integration_test.zig). Layers.moving collides with
-    // everything, including the static floor, which is what the wheels
-    // actually need to test against.
+    // The default (0) is Layers.static, which a wheel ray can never hit:
+    // the Layers map only lets a static-layer query hit the moving
+    // broad-phase layer (see integration_test.zig). Layers.moving
+    // collides with everything, including the static floor, which is what the wheels actually need to test against.
     tester.object_layer = Layers.moving;
     return tester;
+}
+
+/// A `VehicleCurveDesc` with exactly these points and nothing left over from
+/// whatever `points` (a fixed array) happened to hold before — a curve
+/// read back is only as trustworthy a check as the curve it is compared
+/// against is exact.
+fn curve(points: []const zjolt.VehicleCurvePoint) zjolt.VehicleCurveDesc {
+    var desc: zjolt.VehicleCurveDesc = std.mem.zeroes(zjolt.VehicleCurveDesc);
+    @memcpy(desc.points[0..points.len], points);
+    desc.count = @intCast(points.len);
+    return desc;
 }
 
 /// Wheel indices, front-left/front-right/rear-left/rear-right, shared by
@@ -162,16 +154,12 @@ fn buildWheeledCarWithBars(
     return .{ .world = world, .chassis_shape = chassis_shape, .chassis = chassis, .vehicle = vehicle };
 }
 
-/// Jolt's own default (`PhysicsSettings::mNumVelocitySteps = 10`) is tuned
-/// for ordinary rigid-body contacts. A vehicle's wheel is a much stiffer
-/// coupling — its own moment of inertia is tiny next to the chassis it is
-/// meant to be dragging along — and ten iterations are not enough to fully
-/// resolve that stiffness every step: a locked, sliding wheel under hard
-/// braking decelerates the chassis correctly at first and then, well before
-/// it should, the correction all but stops landing on the chassis at all —
-/// not because grip ran out, but because the solver hasn't converged. Thirty
-/// iterations is comfortably enough for one small car; a host with many
-/// vehicles on screen would want this measured, not copied blind.
+/// Jolt's default (`mNumVelocitySteps = 10`) is tuned for ordinary
+/// rigid-body contacts; a vehicle's wheel is a much stiffer coupling
+/// (tiny inertia next to the chassis it drags), and ten iterations
+/// under-converge — a locked, sliding wheel under hard braking stops
+/// decelerating the chassis correctly well before grip actually runs
+/// out. Thirty is enough for one small car; measure for many vehicles on screen.
 fn raiseVelocitySteps(system: zjolt.PhysicsSystem) void {
     var settings = system.getSettings();
     settings.num_velocity_steps = 30;
@@ -216,17 +204,6 @@ test "forward input accelerates the chassis along its forward axis and spins the
 
     // Full brake, no throttle: it comes back to rest rather than coasting or
     // (a stuck brake circuit) staying at speed.
-    {
-        const v = car.vehicle;
-        var w: u32 = 0;
-        while (w < 4) : (w += 1) {
-            std.debug.print("PROBE w{d} contact={} susp={d:.4} n=({d:.3},{d:.3},{d:.3}) av={d:.2}\n", .{
-                w,                         v.wheelHasContact(w),      v.wheelSuspensionLength(w),
-                v.wheelContactNormal(w).x, v.wheelContactNormal(w).y, v.wheelContactNormal(w).z,
-                v.wheelAngularVelocity(w),
-            });
-        }
-    }
     try car.vehicle.setWheeledDriverInput(0, 0, 1.0, 0);
     try car.settle(5.0);
     const after_braking = @abs(bodies.getLinearVelocity(car.chassis).z);
@@ -312,7 +289,7 @@ test "wheel transform read-back puts each wheel under the chassis at its suspens
         // the current suspension length, then carried into world space by
         // the chassis's own transform.
         const local = zjolt.vec3(local_x[wheel_index], wheel_hardpoint_y - length, local_z[wheel_index]);
-        const rotated = try zjolt.quatRotateVector(chassis_rotation, local);
+        const rotated = try chassis_rotation.rotateVector(local);
         const expected_x = chassis_position.x + rotated.x;
         const expected_y = chassis_position.y + rotated.y;
         const expected_z = chassis_position.z + rotated.z;
@@ -327,6 +304,48 @@ test "wheel transform read-back puts each wheel under the chassis at its suspens
         // Under the chassis, not through it or floating above it.
         try std.testing.expect(pose.position.y < chassis_position.y);
     }
+}
+
+//=============================================================================
+// Wheeled: brake impulse readback
+//=============================================================================
+
+test "a wheel's brake impulse is nonzero only while the brakes are actually locking it" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+    try car.settle(1.5);
+
+    // At rest with no driver input, nothing is braking.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelBrakeImpulse(0), 1e-6);
+
+    // WheelSettingsWV's own defaults: inertia 0.9 kg m^2, radius 0.3 m,
+    // max_brake_torque 1500 Nm. Locking a wheel spinning at 5 rad/s needs
+    // more than |angular_velocity| * inertia / dt = 5 * 0.9 * 60 = 270 Nm
+    // (WheeledVehicleController.cpp:622-652) — 1500 is comfortably enough,
+    // so full brake locks it in this one step rather than merely slowing it.
+    car.vehicle.setWheelAngularVelocity(0, 5.0);
+    try car.vehicle.setWheeledDriverInput(0, 0, 1.0, 0);
+
+    _ = try car.world.system.step(1.0 / 60.0, 1, car.world.jobs);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelAngularVelocity(0), 1e-4);
+    // The excess torque past what locked the wheel — (1500 - 270) * dt /
+    // radius — is what is left to push the floor.
+    try std.testing.expectApproxEqAbs(@as(f32, 68.33), car.vehicle.wheelBrakeImpulse(0), 0.5);
+
+    // Releasing the brake is picked up on the very next step, with nothing
+    // else touched.
+    try car.vehicle.setWheeledDriverInput(0, 0, 0, 0);
+    _ = try car.world.system.step(1.0 / 60.0, 1, car.world.jobs);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelBrakeImpulse(0), 1e-6);
+
+    // A tracked vehicle's wheels are WheelTV, not WheelWV.
+    var tank = try buildTrackedCar(1.0);
+    defer tank.deinit();
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelBrakeImpulse(0), 1e-6);
 }
 
 //=============================================================================
@@ -400,24 +419,104 @@ test "a tracked vehicle curves when its two tracks are driven at different rates
     // It actually went somewhere, rather than spinning its tracks in place.
     try std.testing.expect(@sqrt(dx * dx + dz * dz) > 0.5);
 
-    // A vehicle driven straight off +Z would show essentially no sideways
+    // A vehicle driven straight off +Z shows essentially no sideways
     // travel; one curving under differential track rates displaces
-    // significantly in X. This is checked on the DISPLACEMENT rather than
-    // the final heading angle on purpose: over a long enough curving run the
-    // heading can wrap back around past "facing +Z again" while the vehicle
-    // has plainly been turning the entire time, which a one-shot angle
-    // check at the end would alias back down to near zero.
+    // significantly in X. Checked on DISPLACEMENT, not the final heading
+    // angle: over a long curving run heading can wrap back around past
+    // "facing +Z again" while still turning, which a one-shot angle check would alias back down to near zero.
     try std.testing.expect(@abs(dx) > 1.5);
+}
+
+//=============================================================================
+// Tracked: WheelTV's own state
+//
+// A tracked vehicle's wheels carry state a wheeled vehicle's WheelWV does
+// not — see ffi/zjolt_vehicle.h's "Tracked wheels" section.
+//=============================================================================
+
+const ZeroTrackGrip = struct {
+    calls: u32 = 0,
+
+    /// Ice, same as FrictionLog.zeroGrip below but for a tracked wheel.
+    fn zero(
+        user: ?*anyopaque,
+        wheel_index: u32,
+        body: zjolt.BodyId,
+        sub_shape_id: zjolt.SubShapeId,
+        longitudinal_friction: *f32,
+        lateral_friction: *f32,
+    ) callconv(.c) void {
+        _ = wheel_index;
+        _ = body;
+        _ = sub_shape_id;
+        const self: *ZeroTrackGrip = @ptrCast(@alignCast(user.?));
+        self.calls += 1;
+        longitudinal_friction.* = 0;
+        lateral_friction.* = 0;
+    }
+};
+
+test "a tracked wheel's own friction and brake impulse reflect what actually happened, and mTrackIndex names its track" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var tank = try buildTrackedCar(1.0);
+    defer tank.deinit();
+
+    // TrackedVehicleController::PreCollide is what fills in WheelTV's own
+    // mTrackIndex, and it has not run yet — the vehicle has never been
+    // stepped — so every wheel still carries WheelTV's -1 default, and
+    // nothing has contact yet either.
+    try std.testing.expectEqual(@as(i32, -1), tank.vehicle.wheelTrackIndex(0));
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelCombinedLongitudinalFriction(0), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelCombinedLateralFriction(0), 1e-6);
+
+    try tank.settle(1.5);
+
+    // buildTrackedCar puts wheels 0/1 on the left track (index 0) and 2/3 on
+    // the right (index 1) — the only way to check mTrackIndex against ground
+    // truth, since nothing else on this ABI reports it.
+    try std.testing.expectEqual(@as(i32, 0), tank.vehicle.wheelTrackIndex(0));
+    try std.testing.expectEqual(@as(i32, 0), tank.vehicle.wheelTrackIndex(1));
+    try std.testing.expectEqual(@as(i32, 1), tank.vehicle.wheelTrackIndex(2));
+    try std.testing.expectEqual(@as(i32, 1), tank.vehicle.wheelTrackIndex(3));
+
+    // Settled on a floor set to friction 1.0 (buildTrackedCar), combined
+    // through Jolt's default sqrt(tire * ground); WheelSettingsTV's own
+    // defaults are 4.0 longitudinal / 2.0 lateral (zjoltVehicleWheelDescInit).
+    try std.testing.expect(tank.vehicle.wheelHasContact(0));
+    try std.testing.expectApproxEqAbs(@as(f32, 2.0), tank.vehicle.wheelCombinedLongitudinalFriction(0), 0.05);
+    try std.testing.expectApproxEqAbs(@sqrt(@as(f32, 2.0)), tank.vehicle.wheelCombinedLateralFriction(0), 0.05);
+
+    // The values are live Jolt state, not an echo of the desc: a
+    // combine-friction override reaches WheelTV through the same
+    // VehicleConstraint::CombineFunction WheelWV::Update calls (see
+    // WheelTV::Update, TrackedVehicleController.cpp).
+    var zero_grip: ZeroTrackGrip = .{};
+    try tank.vehicle.setCombineFrictionCallback(.{ .combine = ZeroTrackGrip.zero, .user = &zero_grip });
+    try tank.settle(1.0 / 60.0);
+    try std.testing.expect(zero_grip.calls > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelCombinedLongitudinalFriction(0), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelCombinedLateralFriction(0), 1e-6);
+    try tank.vehicle.setCombineFrictionCallback(null);
+
+    // WheelTV's own brake impulse, spread from its track's brake rather than
+    // computed per wheel the way WheeledVehicleController spreads it across
+    // WheelWV — distinct from zjoltVehicleConstraintGetWheelBrakeImpulse
+    // (WheelWV only), which stays 0 on a tracked constraint (see the wheeled
+    // brake-impulse test above).
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.trackedWheelBrakeImpulse(0), 1e-6);
+    try tank.vehicle.setTrackedDriverInput(0, 1.0, 1.0, 1.0);
+    _ = try tank.world.system.step(1.0 / 60.0, 1, tank.world.jobs);
+    try std.testing.expect(tank.vehicle.trackedWheelBrakeImpulse(0) > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelBrakeImpulse(0), 1e-6);
 }
 
 //=============================================================================
 // Anti-roll bars
 //
-// A bar couples the suspensions of the two wheels it names: the further apart
-// they are compressed, the harder it pushes to even them out. Under a rolling
-// load that shows up as the two suspension lengths staying closer together,
-// which is measured directly here rather than through the chassis angle it
-// eventually produces.
+// A bar couples the suspensions of the two wheels it names: the
+// further apart they compress, the harder it pushes to even them out — measured here as the two suspension lengths staying closer together, not through the resulting chassis angle.
 //=============================================================================
 
 fn antiRollBar(left_wheel: i32, right_wheel: i32, stiffness: f32) zjolt.VehicleAntiRollBarDesc {
@@ -517,9 +616,8 @@ test "anti-roll bars read back after creation, and stiffness is the one field th
 //=============================================================================
 // Differentials
 //
-// Driven in the air, with gravity overridden away, so the only thing deciding
-// which wheels turn is how the engine's torque was split — on the ground the
-// road turns every wheel regardless.
+// Driven in the air, gravity overridden away, so only the engine's
+// torque split decides which wheels turn — on the ground the road turns every wheel regardless.
 //=============================================================================
 
 test "retuning a differential's engine torque ratio moves the drive between axles" {
@@ -605,6 +703,35 @@ test "a differential is validated on the way in, so a bad one cannot reach the s
     try std.testing.expectError(error.InvalidArgument, car.vehicle.setDifferentialLimitedSlipRatio(1.0));
 }
 
+test "calculateDifferentialTorqueRatio splits evenly at equal wheel speeds, and refuses a tracked constraint or an out-of-range index" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    // Equal wheel speeds never trigger the limited-slip adjustment
+    // (VehicleDifferential.cpp: alpha is 0 when the two omegas are equal),
+    // so the result is exactly the differential's own left_right_split
+    // (0.5, zjoltVehicleDifferentialDescInit's default -- `differential()`
+    // above never overrides it).
+    const even = try car.vehicle.calculateDifferentialTorqueRatio(0, 5.0, 5.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), even.left_torque_fraction, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), even.right_torque_fraction, 1e-5);
+
+    try std.testing.expectError(
+        error.InvalidArgument,
+        car.vehicle.calculateDifferentialTorqueRatio(9, 5.0, 5.0),
+    );
+
+    var tank = try buildTrackedCar(1.0);
+    defer tank.deinit();
+    try std.testing.expectError(
+        error.InvalidArgument,
+        tank.vehicle.calculateDifferentialTorqueRatio(0, 5.0, 5.0),
+    );
+}
+
 //=============================================================================
 // Engine and clutch readback
 //=============================================================================
@@ -631,12 +758,6 @@ test "engine RPM is clamped into the engine's own range, and torque is the curve
     try std.testing.expect(full > 0);
     try std.testing.expectApproxEqAbs(full * 0.5, car.vehicle.engineTorque(0.5), 1e-3);
     try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.engineTorque(0), 1e-6);
-
-    // Placing the debug RPM meter is a no-op that reports itself when this
-    // library was built without Jolt's debug renderer, which is the default.
-    car.vehicle.setRpmMeter(zjolt.vec3(0, 1, 0), 0.5) catch |e| {
-        try std.testing.expectEqual(error.Unsupported, e);
-    };
 }
 
 test "wheel speed at the clutch is zero at rest and follows the driven wheels once moving" {
@@ -658,6 +779,293 @@ test "wheel speed at the clutch is zero at rest and follows the driven wheels on
     // Same order of magnitude as the engine it is measured against — this is
     // the number engine RPM is subtracted from to get clutch slip.
     try std.testing.expect(at_clutch < car.vehicle.engineRpm() * 4);
+}
+
+//=============================================================================
+// Engine and transmission — runtime operations
+//=============================================================================
+
+test "engineApplyTorque and engineApplyDamping change RPM by exactly the formula, and engineClampRPM is a no-op once within range" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    // VehicleEngine::ApplyTorque: RPM += (60 / (2*pi)) * torque * dt / inertia.
+    // The rig's engine defaults (VehicleConstraint.Options): inertia 0.5,
+    // range [1000, 6000] -- wide enough that ApplyTorque's own internal
+    // ClampRPM does not touch this result.
+    try car.vehicle.setEngineRpm(3000);
+    try car.vehicle.engineApplyTorque(100.0, 0.01);
+    const angular_velocity_to_rpm: f32 = 60.0 / (2.0 * std.math.pi);
+    const expected_after_torque: f32 = 3000.0 + angular_velocity_to_rpm * 100.0 * 0.01 / 0.5;
+    try std.testing.expectApproxEqAbs(expected_after_torque, car.vehicle.engineRpm(), 1e-2);
+
+    // VehicleEngine::ApplyDamping: RPM *= max(0, 1 - angular_damping * dt).
+    try car.vehicle.setEngineRpm(3000);
+    try car.vehicle.engineApplyDamping(0.1);
+    const expected_after_damping: f32 = 3000.0 * @max(0.0, 1.0 - 0.2 * 0.1);
+    try std.testing.expectApproxEqAbs(expected_after_damping, car.vehicle.engineRpm(), 1e-2);
+
+    // ClampRPM alone: every path that changes RPM already clamps on the way
+    // out (setEngineRpm, engineApplyTorque, engineApplyDamping), so RPM
+    // can never actually leave [min_rpm, max_rpm] through this ABI --
+    // calling it directly on an already in-range value is a no-op, which is
+    // what this checks rather than inventing an unreachable state.
+    try car.vehicle.setEngineRpm(3000);
+    try car.vehicle.engineClampRPM();
+    try std.testing.expectApproxEqAbs(@as(f32, 3000), car.vehicle.engineRpm(), 1e-4);
+}
+
+test "engineAllowSleep and transmissionAllowSleep read the engine and transmission's own idle state" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    // VehicleEngine::AllowSleep: current RPM <= 1.01 * min_rpm (1000 here).
+    try car.vehicle.setEngineRpm(1000);
+    try std.testing.expect(car.vehicle.engineAllowSleep());
+    try car.vehicle.setEngineRpm(3000);
+    try std.testing.expect(!car.vehicle.engineAllowSleep());
+
+    // A fresh transmission is idle: not mid-shift, clutch already fully
+    // released, no post-shift latency window running.
+    try std.testing.expect(car.vehicle.transmissionAllowSleep());
+}
+
+test "getEngineDesc and getTransmissionDesc round-trip the rig's construction-time values, and gearRatios reads Jolt's own built-in default ratios" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    // buildWheeledCar never overrides .engine/.transmission, so these are
+    // VehicleConstraint.Options' own defaults -- Jolt's own construction-time
+    // values.
+    const engine = try car.vehicle.getEngineDesc();
+    try std.testing.expectApproxEqAbs(@as(f32, 500), engine.max_torque, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1000), engine.min_rpm, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 6000), engine.max_rpm, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), engine.inertia, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), engine.angular_damping, 1e-4);
+
+    const transmission = try car.vehicle.getTransmissionDesc();
+    try std.testing.expectEqual(zjolt.VehicleTransmissionMode.auto, transmission.mode);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), transmission.switch_time, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.3), transmission.clutch_release_time, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), transmission.switch_latency, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 4000), transmission.shift_up_rpm, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 2000), transmission.shift_down_rpm, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), transmission.clutch_strength, 1e-4);
+    // The two gear-ratio arrays are always left empty here -- gearRatios
+    // below is what reads them.
+    try std.testing.expectEqual(@as(?[*]const f32, null), transmission.forward_gear_ratios);
+    try std.testing.expectEqual(@as(u32, 0), transmission.forward_gear_ratio_count);
+
+    // A 0 forward/reverse gear-ratio count at creation left Jolt's own
+    // built-in 5-speed ratios in place (VehicleTransmissionSettings' own
+    // field defaults).
+    var forward: [8]f32 = undefined;
+    var reverse: [8]f32 = undefined;
+    const counts = try car.vehicle.gearRatios(&forward, &reverse);
+    try std.testing.expectEqual(@as(u32, 5), counts.forward);
+    try std.testing.expectEqual(@as(u32, 1), counts.reverse);
+    const expected_forward = [_]f32{ 2.66, 1.78, 1.3, 1.0, 0.74 };
+    for (expected_forward, forward[0..5]) |e, a| try std.testing.expectApproxEqAbs(e, a, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, -2.90), reverse[0], 1e-4);
+
+    // A buffer shorter than the true count is refused rather than silently truncated.
+    var too_small: [1]f32 = undefined;
+    try std.testing.expectError(error.BufferTooSmall, car.vehicle.gearRatios(&too_small, &reverse));
+}
+
+//=============================================================================
+// The debug RPM meter
+//=============================================================================
+
+test "the debug RPM meter draws wherever it was last positioned, and is Unsupported without -Ddebug_renderer=true" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    if (!zjolt.options.debug_renderer) {
+        try std.testing.expectError(error.Unsupported, car.vehicle.setRpmMeter(zjolt.vec3(0, 1, 0), 0.5));
+        return;
+    }
+
+    var renderer = try zjolt.DebugRenderer.init();
+    defer renderer.deinit();
+    const target = renderer.target();
+
+    // Nothing has stepped since buildWheeledCar created it, so the chassis
+    // is still exactly where it was placed.
+    const chassis_pos = car.world.system.bodies().getPosition(car.chassis);
+
+    // WheeledVehicleController::Draw's RPM meter (VehicleEngine::DrawRPM,
+    // solid pies by default) is the only SOLID geometry it draws — the
+    // suspension, wheel basis, contact and wheel-cylinder lines it also
+    // draws are all lines or a wireframe cylinder — so every triangle read
+    // back below belongs to the meter and nowhere else.
+    try car.vehicle.setRpmMeter(zjolt.vec3(5, 0, 0), 0.5);
+    target.drawConstraints(car.world.system);
+    const near_side = try renderer.trianglesAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(near_side);
+    try std.testing.expect(near_side.len > 0);
+    for (near_side) |tri| {
+        // The pie's own radius (0.5) bounds every vertex to within that of
+        // rpm_meter_pos on every axis; 1.0 is a generous margin around it.
+        try std.testing.expect(@abs(tri.v1.x - (chassis_pos.x + 5)) < 1.0);
+    }
+
+    renderer.clear();
+
+    try car.vehicle.setRpmMeter(zjolt.vec3(-5, 0, 0), 0.5);
+    target.drawConstraints(car.world.system);
+    const far_side = try renderer.trianglesAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(far_side);
+    try std.testing.expect(far_side.len > 0);
+    for (far_side) |tri| {
+        try std.testing.expect(@abs(tri.v1.x - (chassis_pos.x - 5)) < 1.0);
+        // Ten metres from the original mark — the assertion that
+        // actually distinguishes "moved" from "always drawn somewhere".
+        try std.testing.expect(@abs(tri.v1.x - (chassis_pos.x + 5)) > 5.0);
+    }
+}
+
+test "engineConvertRPMToAngle matches the needle-angle formula, and engineDrawRPM draws directly at the given position rather than setRpmMeter's stored one" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    if (!zjolt.options.debug_renderer) {
+        try std.testing.expectError(error.Unsupported, car.vehicle.engineConvertRPMToAngle(3000));
+        return;
+    }
+
+    // VehicleEngine::ConvertRPMToAngle: (-0.75 + 1.5 * rpm / max_rpm) * pi.
+    // The rig's max_rpm is 6000 (buildWheeledCar's default engine), so 3000
+    // (exactly half) lands on 0 by hand.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), try car.vehicle.engineConvertRPMToAngle(3000), 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.75 * std.math.pi), try car.vehicle.engineConvertRPMToAngle(6000), 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.75 * std.math.pi), try car.vehicle.engineConvertRPMToAngle(0), 1e-4);
+
+    var renderer = try zjolt.DebugRenderer.init();
+    defer renderer.deinit();
+
+    const chassis_pos = car.world.system.bodies().getPosition(car.chassis);
+
+    // Drawn directly at an explicit position, unlike setRpmMeter's own
+    // stored one -- this does not go through SetRPMMeter/Draw at all.
+    try car.vehicle.engineDrawRPM(
+        renderer,
+        zjolt.rvec3(chassis_pos.x + 8, chassis_pos.y, chassis_pos.z),
+        car.vehicle.localForward(),
+        car.vehicle.localUp(),
+        0.5,
+        4000,
+        5000,
+    );
+    const drawn = try renderer.trianglesAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(drawn);
+    try std.testing.expect(drawn.len > 0);
+    for (drawn) |tri| {
+        // The pie's own radius (0.5) bounds every vertex to within that of
+        // the position passed in, not wherever setRpmMeter last left it.
+        try std.testing.expect(@abs(tri.v1.x - (chassis_pos.x + 8)) < 1.0);
+    }
+}
+
+//=============================================================================
+// Curve read-back
+//=============================================================================
+
+test "a wheel's and the engine's curves read back exactly what was set, point for point, and Jolt's own default when nothing was" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const chassis_shape = try zjolt.Shape.initBox(chassis_half_extent, .{ .density = 300 });
+    defer chassis_shape.release();
+
+    const chassis = try world.system.bodies().createAndAdd(.{
+        .shape = chassis_shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 1, 0),
+        .allow_sleeping = false,
+    }, .activate);
+
+    const longitudinal = [_]zjolt.VehicleCurvePoint{
+        .{ .x = 0, .y = 0.1 },
+        .{ .x = 0.3, .y = 1.1 },
+        .{ .x = 1.0, .y = 0.6 },
+    };
+    var driven_wheel = wheelAt(-wheel_x, wheel_z);
+    driven_wheel.longitudinal_friction = curve(&longitudinal);
+    // Left at Jolt's own built-in default (count = 0) — the "even Jolt's own
+    // built-in default when count=0 was passed" half of the gap.
+    driven_wheel.lateral_friction = zjolt.default_vehicle_curve;
+
+    const wheels = [_]zjolt.VehicleWheelDesc{
+        driven_wheel,
+        wheelAt(wheel_x, wheel_z),
+        wheelAt(-wheel_x, -wheel_z),
+        wheelAt(wheel_x, -wheel_z),
+    };
+
+    var engine = zjolt.defaultVehicleEngineDesc();
+    const normalized_torque = [_]zjolt.VehicleCurvePoint{
+        .{ .x = 0, .y = 0.2 },
+        .{ .x = 0.5, .y = 1.0 },
+    };
+    engine.normalized_torque = curve(&normalized_torque);
+
+    const vehicle = try zjolt.VehicleConstraint.init(world.system, chassis, .{
+        .wheels = &wheels,
+        .engine = engine,
+        .collision_tester = collisionTester(),
+    });
+    defer vehicle.deinit();
+
+    const back = vehicle.wheelLongitudinalFrictionCurve(0).?;
+    try std.testing.expectEqual(@as(u32, longitudinal.len), back.count);
+    for (longitudinal, 0..) |p, i| {
+        try std.testing.expectEqual(p.x, back.points[i].x);
+        try std.testing.expectEqual(p.y, back.points[i].y);
+    }
+
+    // count = 0 left Jolt's own built-in default in place, and that default
+    // is exactly what reads back — the same curve zjoltVehicleWheelDescInit
+    // itself reports.
+    const jolt_default = zjolt.defaultVehicleWheelDesc().lateral_friction;
+    const default_back = vehicle.wheelLateralFrictionCurve(0).?;
+    try std.testing.expectEqual(jolt_default.count, default_back.count);
+    for (0..default_back.count) |i| {
+        try std.testing.expectEqual(jolt_default.points[i].x, default_back.points[i].x);
+        try std.testing.expectEqual(jolt_default.points[i].y, default_back.points[i].y);
+    }
+
+    const engine_back = vehicle.engineNormalizedTorqueCurve().?;
+    try std.testing.expectEqual(@as(u32, normalized_torque.len), engine_back.count);
+    for (normalized_torque, 0..) |p, i| {
+        try std.testing.expectEqual(p.x, engine_back.points[i].x);
+        try std.testing.expectEqual(p.y, engine_back.points[i].y);
+    }
+
+    // A tracked constraint has no WheelWV curve at all — its per-wheel
+    // friction is one coefficient, not a slip-dependent profile.
+    var tank = try buildTrackedCar(1.0);
+    defer tank.deinit();
+    try std.testing.expect(tank.vehicle.wheelLongitudinalFrictionCurve(0) == null);
 }
 
 //=============================================================================
@@ -695,6 +1103,52 @@ test "each track reports the angular velocity that drives it, and the steering r
     try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.trackAngularVelocity(.right), 1e-5);
 }
 
+test "calculateTrackedWheelAngularVelocity refuses a never-stepped constraint, then matches its track's angular velocity at equal wheel radii once stepped" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var tank = try buildTrackedCar(1.0);
+    defer tank.deinit();
+
+    // WheelTV::mTrackIndex is only assigned by TrackedVehicleController::
+    // PreCollide, which runs as part of a physics step; calling this before
+    // the constraint has ever been stepped is refused rather than reading
+    // GetTracks()[-1] (Jolt's own bounds-checked array on an unassigned
+    // wheel — see zjoltVehicleConstraintGetWheelTrackIndex's own -1 case).
+    try std.testing.expectError(
+        error.InvalidArgument,
+        tank.vehicle.calculateTrackedWheelAngularVelocity(1),
+    );
+
+    // One tiny step establishes every wheel's track assignment without
+    // meaningfully moving the vehicle (zero driver input throughout).
+    try tank.settle(1.0 / 60.0);
+
+    // Every wheel here shares wheelAt()'s default radius, so
+    // WheelTV::CalculateAngularVelocity's ratio (driven wheel's radius over
+    // this wheel's radius) is exactly 1 by hand: the wheel ends up at the
+    // track's own angular velocity.
+    try tank.vehicle.setTrackAngularVelocity(.left, 50.0);
+    try tank.vehicle.calculateTrackedWheelAngularVelocity(1);
+    try std.testing.expectApproxEqAbs(@as(f32, 50.0), tank.vehicle.wheelAngularVelocity(1), 1e-3);
+
+    // The driven wheel itself: its own radius over itself is 1 too.
+    try tank.vehicle.calculateTrackedWheelAngularVelocity(0);
+    try std.testing.expectApproxEqAbs(@as(f32, 50.0), tank.vehicle.wheelAngularVelocity(0), 1e-3);
+
+    try std.testing.expectError(
+        error.InvalidArgument,
+        tank.vehicle.calculateTrackedWheelAngularVelocity(99),
+    );
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+    try std.testing.expectError(
+        error.InvalidArgument,
+        car.vehicle.calculateTrackedWheelAngularVelocity(0),
+    );
+}
+
 test "tracks and wheeled drivetrains refuse each other's entry points rather than reinterpreting memory" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
@@ -714,6 +1168,71 @@ test "tracks and wheeled drivetrains refuse each other's entry points rather tha
     try std.testing.expectEqual(@as(u32, 0), tank.vehicle.differentialCount());
     try std.testing.expect(tank.vehicle.differential(0) == null);
     try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelSpeedAtClutch(), 1e-6);
+}
+
+test "a track's inertia, damping, brake torque and differential ratio are live, read back exactly, and only change the side they were set on" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // High enough that no wheel ever reaches the ground in this test.
+    // Grounded, the longitudinal solve pulls a track's angular velocity
+    // toward rolling contact whenever it is not the one being braked
+    // (TrackedVehicleController.cpp:391-407) — real and correct, but it
+    // would swamp the difference isolated here. See "retuning a
+    // differential's engine torque ratio..." for the wheeled equivalent, via overrideGravity instead of height.
+    var tank = try buildTrackedCar(50.0);
+    defer tank.deinit();
+
+    // TrackedVehicleControllerSettings' own defaults (buildTrackedCar
+    // overrides none of them): VehicleTrackSettings' mInertia = 10,
+    // mAngularDamping = 0.5, mMaxBrakeTorque = 15000, mDifferentialRatio = 6.
+    const left_default = tank.vehicle.track(.left).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 10), left_default.inertia, 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), left_default.angular_damping, 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f32, 15000), left_default.max_brake_torque, 1e-1);
+    try std.testing.expectApproxEqAbs(@as(f32, 6), left_default.differential_ratio, 1e-3);
+
+    var unbraked = left_default;
+    unbraked.max_brake_torque = 0;
+    try tank.vehicle.setTrack(.left, unbraked);
+
+    // Reading .left back gives exactly the new struct...
+    const left_now = tank.vehicle.track(.left).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 0), left_now.max_brake_torque, 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), left_now.inertia, 1e-3);
+    // ...and .right, never touched, is still what it was built with.
+    try std.testing.expectApproxEqAbs(@as(f32, 15000), tank.vehicle.track(.right).?.max_brake_torque, 1e-1);
+
+    // Prove it is live, not just readable: seed the two tracks spinning
+    // at different rates, brake both fully, and step once. The right
+    // track's brakes are as strong as when built and fully lock it this
+    // step (TrackedVehicleController.cpp:293-312: brake_torque =
+    // mBrakeInput * mMaxBrakeTorque, 15000 stops it outright here). The
+    // left track's are gone, so only damping touches it, far too slow to remove the seeded speed in one step.
+    try tank.vehicle.setTrackedDriverInput(0, 1.0, 1.0, 1.0);
+    try tank.vehicle.setTrackAngularVelocity(.left, 4.0);
+    try tank.vehicle.setTrackAngularVelocity(.right, 4.0);
+
+    _ = try tank.world.system.step(1.0 / 60.0, 1, tank.world.jobs);
+
+    try std.testing.expect(@abs(tank.vehicle.trackAngularVelocity(.right)) < 0.5);
+    try std.testing.expect(@abs(tank.vehicle.trackAngularVelocity(.left)) > 2.0);
+
+    // Validated the same way `init` validates the same four numbers.
+    var bad = left_default;
+    bad.inertia = -1;
+    try std.testing.expectError(error.InvalidArgument, tank.vehicle.setTrack(.left, bad));
+    bad = left_default;
+    bad.differential_ratio = 0;
+    try std.testing.expectError(error.InvalidArgument, tank.vehicle.setTrack(.left, bad));
+    // Nothing partially applied.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.track(.left).?.max_brake_torque, 1e-6);
+
+    // A wheeled controller has no tracks at all.
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+    try std.testing.expect(car.vehicle.track(.left) == null);
+    try std.testing.expectError(error.InvalidArgument, car.vehicle.setTrack(.left, left_default));
 }
 
 //=============================================================================
@@ -899,6 +1418,137 @@ test "the wheel collision tester can be swapped after creation, filters and all"
     while (wheel < 4) : (wheel += 1) try std.testing.expect(!car.vehicle.wheelHasContact(wheel));
 
     try car.vehicle.setWheelFilters(null);
+}
+
+//=============================================================================
+// A custom (callback) collision tester
+//
+// The fixture floor is flat at world y = 0 (integration_test.zig), so a
+// ray-vs-plane test reproduces exactly what the built-in ray tester finds — not a toy, genuinely the ray tester, just written on this side of the boundary.
+//=============================================================================
+
+const GroundPlane = struct {
+    floor: zjolt.BodyId,
+    collide_calls: u32 = 0,
+    predict_calls: u32 = 0,
+    found: bool = true,
+
+    /// The suspension length a ray from `origin` along `direction` (both
+    /// world space) needs to reach world y = 0, clamped into the wheel's
+    /// suspension range the way every tester here clamps it.
+    fn lengthToPlane(origin_y: zjolt.Real, direction_y: f32) ?f32 {
+        if (direction_y >= -1e-6) return null; // pointing away from the ground
+        const oy: f32 = @floatCast(origin_y);
+        return std.math.clamp(-oy / direction_y, 0.0, 0.5);
+    }
+
+    fn collide(
+        user: ?*anyopaque,
+        input: *const zjolt.VehicleGroundTestInput,
+        out_contact: *zjolt.VehicleGroundContact,
+    ) callconv(.c) bool {
+        const self: *GroundPlane = @ptrCast(@alignCast(user.?));
+        self.collide_calls += 1;
+        if (!self.found) return false;
+        const length = lengthToPlane(input.origin.y, input.direction.y) orelse return false;
+
+        out_contact.body = self.floor;
+        out_contact.sub_shape_id = 0;
+        out_contact.position = .{ .x = input.origin.x, .y = 0, .z = input.origin.z };
+        out_contact.normal = .{ .x = 0, .y = 1, .z = 0 };
+        out_contact.suspension_length = length;
+        return true;
+    }
+
+    /// The built-in testers reproject onto the same plane rather than
+    /// casting again; this does the same thing for an actual flat plane
+    /// instead of approximating one from the last hit.
+    fn predict(
+        user: ?*anyopaque,
+        input: *const zjolt.VehicleGroundTestInput,
+        contact: *zjolt.VehicleGroundContact,
+    ) callconv(.c) void {
+        const self: *GroundPlane = @ptrCast(@alignCast(user.?));
+        self.predict_calls += 1;
+        const length = lengthToPlane(input.origin.y, input.direction.y) orelse return;
+        contact.position = .{ .x = input.origin.x, .y = 0, .z = input.origin.z };
+        contact.suspension_length = length;
+    }
+};
+
+test "a callback collision tester finds and loses contact on its own terms, with Jolt's own prediction pass between full tests" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    var ground: GroundPlane = .{ .floor = car.world.floor };
+    try car.vehicle.setCollisionTesterCallback(.{
+        .collide = GroundPlane.collide,
+        .predict_contact_properties = GroundPlane.predict,
+        .user = &ground,
+    });
+    try std.testing.expectEqual(
+        zjolt.VehicleCollisionTesterKind.callback,
+        car.vehicle.collisionTesterKind(),
+    );
+
+    // A flat-plane ray test settles the chassis exactly the way the built-in
+    // ray tester does elsewhere in this file.
+    try car.settle(1.5);
+    try std.testing.expect(ground.collide_calls > 0);
+
+    var wheel: u32 = 0;
+    while (wheel < 4) : (wheel += 1) {
+        try std.testing.expect(car.vehicle.wheelHasContact(wheel));
+        try std.testing.expectEqual(car.world.floor, car.vehicle.wheelContactBodyId(wheel));
+        const length = car.vehicle.wheelSuspensionLength(wheel);
+        try std.testing.expect(length >= 0.3 - 1e-4 and length <= 0.5 + 1e-4);
+    }
+
+    // Telling it there is nothing there is honoured immediately: every wheel
+    // loses contact, which is not something a built-in tester could be told
+    // to do from outside.
+    ground.found = false;
+    try car.settle(0.2);
+    wheel = 0;
+    while (wheel < 4) : (wheel += 1) try std.testing.expect(!car.vehicle.wheelHasContact(wheel));
+
+    // Restore contact, then skip most steps' full test so
+    // predict_contact_properties is what keeps the wheels' contacts current
+    // between them.
+    ground.found = true;
+    try car.settle(0.3);
+    car.vehicle.setNumStepsBetweenCollisionTestActive(5);
+    const collide_before = ground.collide_calls;
+    const predict_before = ground.predict_calls;
+    try car.settle(0.5);
+    try std.testing.expect(ground.collide_calls > collide_before);
+    try std.testing.expect(ground.predict_calls > predict_before);
+
+    try std.testing.expectEqual(
+        @as(?*anyopaque, @ptrCast(&ground)),
+        car.vehicle.collisionTesterCallback().user,
+    );
+
+    // Both fields are required — a one-sided callback cannot leave Jolt
+    // calling through a NULL function pointer on the steps it skips a full
+    // test.
+    try std.testing.expectError(error.InvalidArgument, car.vehicle.setCollisionTesterCallback(.{
+        .collide = GroundPlane.collide,
+        .predict_contact_properties = null,
+        .user = &ground,
+    }));
+
+    // Switching back to a built-in tester clears the callback and its kind;
+    // installing this one back clears the built-in's in turn.
+    try car.vehicle.setCollisionTester(collisionTester());
+    try std.testing.expectEqual(
+        zjolt.VehicleCollisionTesterKind.ray,
+        car.vehicle.collisionTesterKind(),
+    );
+    try std.testing.expect(car.vehicle.collisionTesterCallback().collide == null);
 }
 
 //=============================================================================

@@ -8,6 +8,7 @@
 const std = @import("std");
 const core = @import("core.zig");
 const group = @import("group.zig");
+const shape = @import("shape.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
@@ -18,9 +19,11 @@ pub const Mat44 = core.Mat44;
 pub const ObjectLayer = core.ObjectLayer;
 pub const PhysicsMaterial = core.PhysicsMaterial;
 pub const PhysicsSystem = core.PhysicsSystem;
+pub const Plane = shape.Plane;
 pub const Quat = core.Quat;
 pub const RVec3 = core.RVec3;
 pub const Result = core.Result;
+pub const Shape = core.Shape;
 pub const SubShapeId = core.SubShapeId;
 pub const Vec3 = core.Vec3;
 pub const max_physics_jobs = core.max_physics_jobs;
@@ -150,6 +153,12 @@ pub extern fn zjoltSoftBodyCreate(system: *PhysicsSystem, desc: *const SoftBodyD
 
 pub extern fn zjoltSoftBodyCreateAndAdd(system: *PhysicsSystem, desc: *const SoftBodyDesc, activation: Activation, out: *BodyId) Result;
 
+pub extern fn zjoltSoftBodyCreateWithId(system: *PhysicsSystem, desc: *const SoftBodyDesc, id: BodyId, out: *BodyId) Result;
+
+pub extern fn zjoltSoftBodyCreateAndAddWithId(system: *PhysicsSystem, desc: *const SoftBodyDesc, id: BodyId, activation: Activation, out: *BodyId) Result;
+
+pub extern fn zjoltSoftBodyGetSharedSettings(system: *const PhysicsSystem, body: BodyId) ?*const SoftBodySharedSettings;
+
 pub extern fn zjoltSoftBodyGetVertexStates(system: *const PhysicsSystem, body: BodyId, out_states: ?[*]SoftBodyVertexState, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltSoftBodyGetNumIterations(system: *const PhysicsSystem, body: BodyId, out: *u32) Result;
@@ -273,3 +282,45 @@ pub extern fn zjoltSoftBodyManifoldGetVertexContacts(manifold: *const SoftBodyMa
 pub extern fn zjoltSoftBodyManifoldGetSensorContacts(manifold: *const SoftBodyManifold, out_bodies: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltSoftBodySetContactListener(system: *PhysicsSystem, listener: ?*const SoftBodyContactListener) Result;
+
+pub const CollideSoftBodyVertexIterator = extern struct {
+    position: ?[*]const u8 = null,
+    position_stride: u32 = 0,
+    inv_mass: ?[*]const u8 = null,
+    inv_mass_stride: u32 = 0,
+    collision_plane: ?[*]u8 = null,
+    collision_plane_stride: u32 = 0,
+    largest_penetration: ?[*]u8 = null,
+    largest_penetration_stride: u32 = 0,
+    colliding_shape_index: ?[*]u8 = null,
+    colliding_shape_index_stride: u32 = 0,
+
+    /// Records `penetration` as vertex `index`'s collision depth if it
+    /// exceeds what `largest_penetration` already holds — JPH's own
+    /// `CollideSoftBodyVertexIterator::UpdatePenetration`, done directly on
+    /// caller memory with no ABI crossing. True means the caller must also
+    /// write `collision_plane`/`colliding_shape_index` for `index`.
+    pub fn updatePenetration(
+        it: CollideSoftBodyVertexIterator,
+        index: u32,
+        penetration: f32,
+    ) bool {
+        const base = it.largest_penetration orelse return false;
+        const slot: *align(1) f32 = @ptrCast(base + index * it.largest_penetration_stride);
+        if (slot.* >= penetration) return false;
+        slot.* = penetration;
+        return true;
+    }
+};
+
+pub extern fn zjoltShapeCollideSoftBodyVertices(shape_: *const Shape, center_of_mass_transform: *const Mat44, scale: Vec3, vertices: *const CollideSoftBodyVertexIterator, count: u32, colliding_shape_index: i32) Result;
+
+pub const CollideSoftBodyVerticesVsTriangles = opaque {};
+
+pub extern fn zjoltCollideSoftBodyVerticesVsTrianglesCreate(center_of_mass_transform: *const Mat44, scale: Vec3, out: **CollideSoftBodyVerticesVsTriangles) Result;
+pub extern fn zjoltCollideSoftBodyVerticesVsTrianglesDestroy(collider: ?*CollideSoftBodyVerticesVsTriangles) void;
+pub extern fn zjoltCollideSoftBodyVerticesVsTrianglesStartVertex(collider: *CollideSoftBodyVerticesVsTriangles, vertex: *const CollideSoftBodyVertexIterator, index: u32) void;
+pub extern fn zjoltCollideSoftBodyVerticesVsTrianglesProcessTriangle(collider: *CollideSoftBodyVerticesVsTriangles, v0: Vec3, v1: Vec3, v2: Vec3) void;
+pub extern fn zjoltCollideSoftBodyVerticesVsTrianglesFinishVertex(collider: *CollideSoftBodyVerticesVsTriangles, vertex: *const CollideSoftBodyVertexIterator, index: u32, colliding_shape_index: i32) void;
+
+pub extern fn zjoltSoftBodyVertexMarkCcdContact(body: BodyId, contact_plane: *const Plane, out_collision_plane: *Plane, out_colliding_shape_index: *i32, out_has_contact: *bool) void;

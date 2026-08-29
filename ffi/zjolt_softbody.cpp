@@ -14,10 +14,16 @@
 
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyLock.h>
+#include <Jolt/Physics/Collision/CollideSoftBodyVertexIterator.h>
+// ScaleHelpers::IsInsideOut: CollideSoftBodyVerticesVsTriangles.h uses it
+// without including it itself.
+#include <Jolt/Physics/Collision/Shape/ScaleHelpers.h>
+#include <Jolt/Physics/Collision/CollideSoftBodyVerticesVsTriangles.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <Jolt/Physics/SoftBody/SoftBodyShape.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyVertex.h>
 
 namespace zjolt {
 
@@ -33,6 +39,10 @@ inline ZJoltSoftBodySharedSettings *ToC(
     JPH::SoftBodySharedSettings *settings) {
   return reinterpret_cast<ZJoltSoftBodySharedSettings *>(settings);
 }
+inline const ZJoltSoftBodySharedSettings *ToC(
+    const JPH::SoftBodySharedSettings *settings) {
+  return reinterpret_cast<const ZJoltSoftBodySharedSettings *>(settings);
+}
 
 /// The manifold tag is the same never-completed, never-dereferenced kind, but
 /// it names something zjolt does not own at all: a SoftBodyManifold is built
@@ -46,19 +56,33 @@ inline const ZJoltSoftBodyManifold *ToC(const JPH::SoftBodyManifold *manifold) {
   return reinterpret_cast<const ZJoltSoftBodyManifold *>(manifold);
 }
 
+/// zjoltCollideSoftBodyVerticesVsTrianglesCreate/Destroy own one of these
+/// outright (New/Delete, not ref counted), so only one direction is needed.
+inline JPH::CollideSoftBodyVerticesVsTriangles *ToJolt(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider) {
+  return reinterpret_cast<JPH::CollideSoftBodyVerticesVsTriangles *>(collider);
+}
+inline ZJoltCollideSoftBodyVerticesVsTriangles *ToC(
+    JPH::CollideSoftBodyVerticesVsTriangles *collider) {
+  return reinterpret_cast<ZJoltCollideSoftBodyVerticesVsTriangles *>(collider);
+}
+
 }  // namespace zjolt
 
 namespace {
 
 using JoltSettings = JPH::SoftBodySharedSettings;
 
-JPH::EActivation ToJoltActivation(ZJoltActivation activation) {
+// These two take the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Each entry point below converts once, at the boundary,
+// before the value ever reaches here.
+JPH::EActivation ToJoltActivation(int32_t activation) {
   return activation == ZJOLT_ACTIVATION_DONT_ACTIVATE
              ? JPH::EActivation::DontActivate
              : JPH::EActivation::Activate;
 }
 
-JoltSettings::EBendType ToJoltBendType(ZJoltSoftBodyBendType type) {
+JoltSettings::EBendType ToJoltBendType(int32_t type) {
   switch (type) {
     case ZJOLT_SOFT_BODY_BEND_TYPE_NONE:
       return JoltSettings::EBendType::None;
@@ -70,7 +94,10 @@ JoltSettings::EBendType ToJoltBendType(ZJoltSoftBodyBendType type) {
   return JoltSettings::EBendType::Distance;
 }
 
-JoltSettings::ELRAType ToJoltLraType(ZJoltSoftBodyLraType type) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Its one caller reads this straight out of a host-supplied
+// vertex_attributes array, which is the entry point this value arrives from.
+JoltSettings::ELRAType ToJoltLraType(int32_t type) {
   switch (type) {
     case ZJOLT_SOFT_BODY_LRA_TYPE_NONE:
       return JoltSettings::ELRAType::None;
@@ -101,20 +128,12 @@ JPH::Mat44 ToJoltMat44(const float (&m)[16]) {
   return JPH::Mat44::sLoadFloat4x4(reinterpret_cast<const JPH::Float4 *>(m));
 }
 
-/// Refuses a batch of vertex indices that name vertices the settings do not
-/// have.
+/// Refuses a batch of vertex indices that name vertices the settings do
+/// not have.
 ///
-/// Nothing downstream of an Add* call looks one of these up — the solver, the
-/// volume measurement and the skinning all INDEX with it, straight into
-/// `mVertices`. `JPH::Array::operator[]` asserts (Array.h:566), and a build
-/// with asserts off reads past the end of the array instead. The check has to
-/// be here, because this is the last place that knows the index came from
-/// outside.
-///
-/// The count it checks against is the count at the time of the call, which is
-/// why the header asks for vertices to be added first. That is not a
-/// limitation of the check: an index that is in range now stays in range,
-/// because a settings' vertex list only ever grows.
+/// Nothing downstream index-checks this: the solver, volume measurement,
+/// and skinning index straight into `mVertices`, reading past the end with
+/// asserts off. Checks the count at call time — vertices must be added first.
 bool VerticesExist(const JoltSettings &settings, const uint32_t *vertices,
                    uint32_t count) {
   const uint32_t have = static_cast<uint32_t>(settings.mVertices.size());
@@ -130,17 +149,7 @@ ZJoltResult NoSuchVertex(const char *what) {
 //===----------------------------------------------------------------------===//
 // Reaching a body's soft-body motion properties
 //
-// A soft body's SoftBodyMotionProperties is a SIBLING of a rigid body's
-// MotionProperties, not a parent, and `GetMotionPropertiesUnchecked` hands
-// back the base of both — plus a null pointer for a static body, which has
-// none at all. So the static_cast every Jolt sample writes is only sound once
-// `IsSoftBody()` has been asked, and nothing about the resulting corruption
-// points back at the cast.
-//
-// Every entry point below therefore goes through one of these two, which take
-// the lock, ask the question, and hand the caller a reference that is already
-// the right type. The lambda cannot throw: Jolt compiles -fno-exceptions and
-// so does this file.
+// SoftBodyMotionProperties is a SIBLING of MotionProperties, not a parent — `GetMotionPropertiesUnchecked` hands back the base of both, plus null for a static body — so the static_cast every Jolt sample writes is only sound once `IsSoftBody()` has been asked. Every entry point below goes through one of these two, which take the lock, check, and hand back a reference already of the right type.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult BodyNotFound() {
@@ -220,6 +229,53 @@ ZJoltResult NumIterationsIsValid(uint32_t num_iterations) {
       ZJOLT_RESULT_INVALID_ARGUMENT,
       "num_iterations must be at least 1: Jolt divides the step's delta time "
       "by it to size a sub-step, so zero makes every sub-step infinite");
+}
+
+//===----------------------------------------------------------------------===//
+// ZJoltCollideSoftBodyVertexIterator plumbing
+//
+// position/collision_plane read or write ZJoltVec3/ZJoltPlane directly at
+// the caller's own stride; Jolt's Vec3/Plane are SIMD-shaped and not byte-
+// compatible with those, so every crossing into real Jolt code below gathers
+// into a JPH type first and, for an output, scatters back after.
+//===----------------------------------------------------------------------===//
+
+/// Every array a real Shape::CollideSoftBodyVertices call dereferences
+/// unconditionally must itself be non-NULL; a caller doing its own
+/// bookkeeping outside these entry points is the only place the header's
+/// NULL convention does not apply.
+ZJoltResult VertexIteratorFieldsPresent(
+    const ZJoltCollideSoftBodyVertexIterator &it) {
+  if (it.position != nullptr && it.inv_mass != nullptr &&
+      it.collision_plane != nullptr && it.largest_penetration != nullptr &&
+      it.colliding_shape_index != nullptr) {
+    return ZJOLT_RESULT_OK;
+  }
+  return zjolt::SetError(
+      ZJOLT_RESULT_INVALID_ARGUMENT,
+      "every ZJoltCollideSoftBodyVertexIterator field must be non-NULL");
+}
+
+JPH::Vec3 ReadVec3At(const uint8_t *base, uint32_t stride, uint32_t index) {
+  return zjolt::ToJolt(
+      *reinterpret_cast<const ZJoltVec3 *>(base + size_t(index) * stride));
+}
+
+JPH::Plane ReadPlaneAt(const uint8_t *base, uint32_t stride, uint32_t index) {
+  const ZJoltPlane &p =
+      *reinterpret_cast<const ZJoltPlane *>(base + size_t(index) * stride);
+  return JPH::Plane(zjolt::ToJolt(p.normal), p.constant);
+}
+
+void WritePlaneAt(uint8_t *base, uint32_t stride, uint32_t index,
+                  const JPH::Plane &plane) {
+  ZJoltPlane &out = *reinterpret_cast<ZJoltPlane *>(base + size_t(index) * stride);
+  out.normal = zjolt::ToC(plane.GetNormal());
+  out.constant = plane.GetConstant();
+}
+
+float ReadFloatAt(const uint8_t *base, uint32_t stride, uint32_t index) {
+  return *reinterpret_cast<const float *>(base + size_t(index) * stride);
 }
 
 }  // namespace
@@ -610,6 +666,9 @@ ZJoltResult zjoltSoftBodySharedSettingsCreateConstraints(
     uint32_t vertex_attributes_count, ZJoltSoftBodyBendType bend_type,
     float angle_tolerance_radians) {
   ZJOLT_ENTER();
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_bend_type = zjolt::RawEnum(bend_type);
   if (!zjolt::Present(settings, vertex_attributes))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (vertex_attributes_count == 0) {
@@ -626,12 +685,12 @@ ZJoltResult zjoltSoftBodySharedSettingsCreateConstraints(
     const ZJoltSoftBodyVertexAttributes &a = vertex_attributes[i];
     attrs.push_back(JoltSettings::VertexAttributes(
         a.compliance, a.shear_compliance, a.bend_compliance,
-        ToJoltLraType(a.lra_type), a.lra_max_distance_multiplier));
+        ToJoltLraType(zjolt::RawEnum(a.lra_type)), a.lra_max_distance_multiplier));
   }
 
   zjolt::ToJolt(settings)->CreateConstraints(
       attrs.data(), static_cast<JPH::uint>(attrs.size()),
-      ToJoltBendType(bend_type), angle_tolerance_radians);
+      ToJoltBendType(raw_bend_type), angle_tolerance_radians);
   return ZJOLT_RESULT_OK;
 }
 
@@ -687,10 +746,10 @@ ZJoltResult zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(
   JoltSettings *jolt_settings = zjolt::ToJolt(settings);
 
   // Jolt packs each skinned vertex's face count into the top 8 bits of a
-  // uint32 and asserts it fits (SoftBodySharedSettings.cpp:602). The count is
-  // the number of faces meeting at that vertex whose OTHER two vertices are
-  // skinned too, which is why it is counted the same way here rather than
-  // approximated by the vertex's total degree.
+  // uint32 and asserts it fits (SoftBodySharedSettings.cpp:602): the number
+  // of faces meeting at that vertex whose OTHER two vertices are skinned
+  // too, counted the same way here rather than approximated by the
+  // vertex's total degree.
   const size_t num_vertices = jolt_settings->mVertices.size();
   if (num_vertices != 0 && !jolt_settings->mSkinnedConstraints.empty()) {
     JPH::Array<uint8_t> skinned(num_vertices, 0);
@@ -827,11 +886,76 @@ ZJoltResult zjoltSoftBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                       const ZJoltSoftBodyDesc *desc,
                                       ZJoltActivation activation,
                                       ZJoltBodyId *out) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   const ZJoltResult created = zjoltSoftBodyCreate(system, desc, out);
   if (created != ZJOLT_RESULT_OK) return created;
   system->system.GetBodyInterface().AddBody(zjolt::ToJolt(*out),
-                                            ToJoltActivation(activation));
+                                            ToJoltActivation(raw_activation));
   return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodyCreateWithId(ZJoltPhysicsSystem *system,
+                                      const ZJoltSoftBodyDesc *desc,
+                                      ZJoltBodyId id, ZJoltBodyId *out) {
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out, (ZJoltBodyId)ZJOLT_BODY_ID_INVALID));
+  if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (id == JPH::BodyID::cInvalidBodyID) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "id: ZJOLT_BODY_ID_INVALID does not name a body");
+  }
+  // See zjoltBodyCreateWithId (zjolt_body.cpp) for why this is checked ahead
+  // of ever constructing a JPH::BodyID from it.
+  if ((id & JPH::BodyID::cBroadPhaseBit) != 0) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "id: bit 31 is reserved for the broad phase and cannot be set in a "
+        "custom body id");
+  }
+
+  JPH::SoftBodyCreationSettings settings;
+  const ZJoltResult built = BuildSoftBodyCreationSettings(*desc, &settings);
+  if (built != ZJOLT_RESULT_OK) return built;
+
+  JPH::Body *body = system->system.GetBodyInterface().CreateSoftBodyWithID(
+      zjolt::ToJolt(id), settings);
+  if (body == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "id: already names a live body, or its index is beyond max_bodies");
+  }
+  *out = zjolt::ToC(body->GetID());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodyCreateAndAddWithId(ZJoltPhysicsSystem *system,
+                                            const ZJoltSoftBodyDesc *desc,
+                                            ZJoltBodyId id,
+                                            ZJoltActivation activation,
+                                            ZJoltBodyId *out) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
+  const ZJoltResult created = zjoltSoftBodyCreateWithId(system, desc, id, out);
+  if (created != ZJOLT_RESULT_OK) return created;
+  system->system.GetBodyInterface().AddBody(zjolt::ToJolt(*out),
+                                            ToJoltActivation(raw_activation));
+  return ZJOLT_RESULT_OK;
+}
+
+const ZJoltSoftBodySharedSettings *zjoltSoftBodyGetSharedSettings(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body) {
+  if (system == nullptr) return nullptr;
+  const JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                               zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return nullptr;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsSoftBody()) return nullptr;
+  const auto *motion = static_cast<const JPH::SoftBodyMotionProperties *>(
+      jolt_body.GetMotionPropertiesUnchecked());
+  return zjolt::ToC(motion->GetSettings());
 }
 
 //===----------------------------------------------------------------------===//
@@ -865,10 +989,7 @@ ZJoltResult zjoltSoftBodyGetVertexStates(const ZJoltPhysicsSystem *system,
 //===----------------------------------------------------------------------===//
 // Live properties
 //
-// Each of these is the same three lines: guard the out-parameter, resolve the
-// motion properties under a lock, touch one field. Written out one at a time
-// rather than folded into a property enum, because a caller reads a name and a
-// doc comment, not a table.
+// Each of these guards the out-parameter, resolves the motion properties under a lock, and touches one field — written out one at a time rather than folded into a property enum, since a caller reads a name and a doc comment, not a table.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltSoftBodyGetNumIterations(const ZJoltPhysicsSystem *system,
@@ -1115,12 +1236,11 @@ ZJoltResult zjoltSoftBodySkinVertices(ZJoltPhysicsSystem *system,
         const JoltSettings &settings = *motion.GetSettings();
 
         // Jolt sizes the per-instance skinning state once, in Initialize, and
-        // only when there is at least one skinned constraint to size it for —
-        // then asserts that it still matches the settings' vertex count
-        // (SoftBodyMotionProperties.cpp:1157). Both halves of that are things
-        // a caller can get wrong from out here, and the second is not obvious:
-        // the shared settings are shared, so another body's setup code can
-        // append vertices to them long after this body was created.
+        // only when a skinned constraint exists to size it for — then
+        // asserts it still matches the settings' vertex count. Both are
+        // things a caller can get wrong: settings are shared, so another
+        // body's setup code can append vertices to them after this body was
+        // created.
         const size_t skin_state_size = settings.mSkinnedConstraints.empty()
                                            ? 0
                                            : motion.GetVertices().size();
@@ -1330,15 +1450,12 @@ ZJoltResult zjoltSoftBodyCustomUpdate(ZJoltPhysicsSystem *system,
                            "delta_time must be greater than zero");
   }
 
-  // Deliberately the NO-LOCK interface, which is what makes this the one
-  // entry point in this file that does not go through WithSoftBodyWrite.
-  // CustomUpdate takes body locks of its own — on the bodies it collides
-  // with, and on this one through BodyInterface::SetPosition
-  // (SoftBodyMotionProperties.cpp:1255). Holding a write lock across it would
-  // wait on a mutex this thread already owns, and Jolt's body mutexes are not
-  // recursive, so the deadlock would be permanent and would look like a hang
-  // in the physics step rather than a bad call here. The threading contract
-  // this shifts onto the caller is stated in the header.
+  // Deliberately the NO-LOCK interface — the one entry point here that does
+  // not go through WithSoftBodyWrite. CustomUpdate takes body locks of its
+  // own, including on this body via BodyInterface::SetPosition. Holding a
+  // write lock across it would wait on a mutex this thread already owns —
+  // Jolt's body mutexes are not recursive, so the deadlock would be
+  // permanent and look like a hang in the physics step, not a bad call here.
   JPH::BodyLockWrite lock(system->system.GetBodyLockInterfaceNoLock(),
                           zjolt::ToJolt(body));
   if (!lock.Succeeded()) return BodyNotFound();
@@ -1349,6 +1466,160 @@ ZJoltResult zjoltSoftBodyCustomUpdate(ZJoltPhysicsSystem *system,
       jolt_body.GetMotionPropertiesUnchecked())
       ->CustomUpdate(delta_time, jolt_body, system->system);
   return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Vertex-vs-shape collision
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltShapeCollideSoftBodyVertices(
+    const ZJoltShape *shape, const ZJoltMat44 *center_of_mass_transform,
+    ZJoltVec3 scale, const ZJoltCollideSoftBodyVertexIterator *vertices,
+    uint32_t count, int32_t colliding_shape_index) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, center_of_mass_transform, vertices))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const ZJoltResult fields_ok = VertexIteratorFieldsPresent(*vertices);
+  if (fields_ok != ZJOLT_RESULT_OK) return fields_ok;
+  if (count == 0) return ZJOLT_RESULT_OK;
+
+  // Vec3 and Plane are gathered/scattered through temporaries (see the
+  // plumbing block above); inv_mass, largest_penetration and
+  // colliding_shape_index are plain float/int, aliased directly.
+  JPH::Array<JPH::Vec3> positions(count);
+  JPH::Array<JPH::Plane> planes(count);
+  JPH::Array<float> penetrations_before(count);
+  for (uint32_t i = 0; i < count; ++i) {
+    positions[i] = ReadVec3At(vertices->position, vertices->position_stride, i);
+    planes[i] = ReadPlaneAt(vertices->collision_plane,
+                            vertices->collision_plane_stride, i);
+    penetrations_before[i] = ReadFloatAt(
+        vertices->largest_penetration, vertices->largest_penetration_stride, i);
+  }
+
+  const JPH::CollideSoftBodyVertexIterator iterator(
+      JPH::StridedPtr<const JPH::Vec3>(positions.data(), sizeof(JPH::Vec3)),
+      JPH::StridedPtr<const float>(
+          reinterpret_cast<const float *>(vertices->inv_mass),
+          int(vertices->inv_mass_stride)),
+      JPH::StridedPtr<JPH::Plane>(planes.data(), sizeof(JPH::Plane)),
+      JPH::StridedPtr<float>(reinterpret_cast<float *>(vertices->largest_penetration),
+                             int(vertices->largest_penetration_stride)),
+      JPH::StridedPtr<int>(reinterpret_cast<int *>(vertices->colliding_shape_index),
+                           int(vertices->colliding_shape_index_stride)));
+
+  zjolt::ToJolt(shape)->CollideSoftBodyVertices(
+      zjolt::ToJolt(*center_of_mass_transform), zjolt::ToJolt(scale), iterator,
+      count, colliding_shape_index);
+
+  for (uint32_t i = 0; i < count; ++i) {
+    const float after = ReadFloatAt(vertices->largest_penetration,
+                                    vertices->largest_penetration_stride, i);
+    if (after > penetrations_before[i]) {
+      WritePlaneAt(vertices->collision_plane, vertices->collision_plane_stride,
+                  i, planes[i]);
+    }
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltCollideSoftBodyVerticesVsTrianglesCreate(
+    const ZJoltMat44 *center_of_mass_transform, ZJoltVec3 scale,
+    ZJoltCollideSoftBodyVerticesVsTriangles **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(center_of_mass_transform, out))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::CollideSoftBodyVerticesVsTriangles *collider =
+      zjolt::New<JPH::CollideSoftBodyVerticesVsTriangles>(
+          zjolt::ToJolt(*center_of_mass_transform), zjolt::ToJolt(scale));
+  if (collider == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
+                           "could not allocate a soft-body-vs-triangles collider");
+  }
+  *out = zjolt::ToC(collider);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltCollideSoftBodyVerticesVsTrianglesDestroy(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider) {
+  zjolt::Delete(zjolt::ToJolt(collider));
+}
+
+void zjoltCollideSoftBodyVerticesVsTrianglesStartVertex(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider,
+    const ZJoltCollideSoftBodyVertexIterator *vertex, uint32_t index) {
+  if (collider == nullptr || vertex == nullptr || vertex->position == nullptr)
+    return;
+  const JPH::Vec3 position =
+      ReadVec3At(vertex->position, vertex->position_stride, index);
+  const JPH::CollideSoftBodyVertexIterator iterator(
+      JPH::StridedPtr<const JPH::Vec3>(&position, 0), JPH::StridedPtr<const float>(),
+      JPH::StridedPtr<JPH::Plane>(), JPH::StridedPtr<float>(),
+      JPH::StridedPtr<int>());
+  zjolt::ToJolt(collider)->StartVertex(iterator);
+}
+
+void zjoltCollideSoftBodyVerticesVsTrianglesProcessTriangle(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider, ZJoltVec3 v0,
+    ZJoltVec3 v1, ZJoltVec3 v2) {
+  if (collider == nullptr) return;
+  zjolt::ToJolt(collider)->ProcessTriangle(zjolt::ToJolt(v0), zjolt::ToJolt(v1),
+                                           zjolt::ToJolt(v2));
+}
+
+void zjoltCollideSoftBodyVerticesVsTrianglesFinishVertex(
+    ZJoltCollideSoftBodyVerticesVsTriangles *collider,
+    const ZJoltCollideSoftBodyVertexIterator *vertex, uint32_t index,
+    int32_t colliding_shape_index) {
+  if (collider == nullptr || vertex == nullptr) return;
+  if (vertex->position == nullptr || vertex->collision_plane == nullptr ||
+      vertex->largest_penetration == nullptr ||
+      vertex->colliding_shape_index == nullptr) {
+    return;
+  }
+
+  const JPH::Vec3 position =
+      ReadVec3At(vertex->position, vertex->position_stride, index);
+  float *largest_penetration = reinterpret_cast<float *>(
+      vertex->largest_penetration + size_t(index) * vertex->largest_penetration_stride);
+  int *colliding_shape_index_slot = reinterpret_cast<int *>(
+      vertex->colliding_shape_index +
+      size_t(index) * vertex->colliding_shape_index_stride);
+  const float penetration_before = *largest_penetration;
+  JPH::Plane plane_storage(JPH::Vec3::sAxisY(), 0.0f);
+
+  const JPH::CollideSoftBodyVertexIterator iterator(
+      JPH::StridedPtr<const JPH::Vec3>(&position, 0), JPH::StridedPtr<const float>(),
+      JPH::StridedPtr<JPH::Plane>(&plane_storage, 0),
+      JPH::StridedPtr<float>(largest_penetration, 0),
+      JPH::StridedPtr<int>(colliding_shape_index_slot, 0));
+
+  zjolt::ToJolt(collider)->FinishVertex(iterator, colliding_shape_index);
+
+  if (*largest_penetration > penetration_before) {
+    WritePlaneAt(vertex->collision_plane, vertex->collision_plane_stride, index,
+                plane_storage);
+  }
+}
+
+void zjoltSoftBodyVertexMarkCcdContact(ZJoltBodyId body,
+                                       const ZJoltPlane *contact_plane,
+                                       ZJoltPlane *out_collision_plane,
+                                       int32_t *out_colliding_shape_index,
+                                       bool *out_has_contact) {
+  if (!zjolt::Present(contact_plane, out_collision_plane,
+                      out_colliding_shape_index, out_has_contact)) {
+    return;
+  }
+  JPH::SoftBodyVertex vertex{};
+  vertex.MarkCCDContact(
+      zjolt::ToJolt(body),
+      JPH::Plane(zjolt::ToJolt(contact_plane->normal), contact_plane->constant));
+  out_collision_plane->normal = zjolt::ToC(vertex.mCollisionPlane.GetNormal());
+  out_collision_plane->constant = vertex.mCollisionPlane.GetConstant();
+  *out_colliding_shape_index = vertex.mCollidingShapeIndex;
+  *out_has_contact = vertex.mHasContact;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1441,10 +1712,7 @@ ZJoltResult zjoltSoftBodySetContactListener(
 //===----------------------------------------------------------------------===//
 // The adapter Jolt actually calls
 //
-// Outside extern "C": these are C++ virtual overrides, declared in
-// zjolt_internal.h next to their rigid-body sibling and defined here because
-// this is the translation unit that knows how a soft-body manifold is
-// projected.
+// Outside extern "C": C++ virtual overrides, declared in zjolt_internal.h next to their rigid-body sibling and defined here, the translation unit that knows how a soft-body manifold is projected.
 //===----------------------------------------------------------------------===//
 
 JPH::SoftBodyValidateResult

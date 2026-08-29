@@ -1,237 +1,119 @@
-# zjolt — Physics/Constraints coverage triage.
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
 #
-# Every name `tools/coverage.sh Constraints` reports as unbound, classified.
-# The list is a work list, not a score: it over-counts solver machinery that
-# must never cross a C boundary and under-counts real gaps hidden behind a
-# rename, so each name here carries a verdict and the reason for it.
-#
-# Format: NAME  CATEGORY  reason
-#
-#   INTERNAL         solver / island / contact-manager machinery, math and unit
-#                    helpers, debug-draw internals. Nobody outside Jolt's own
-#                    solver calls these.
-#   EXTENSION_POINT  a C++ subclassing customisation point that zjolt already
-#                    gives a caller a different way (named).
-#   BOUND_ELSEWHERE  already reachable through a zjolt entry point under
-#                    another name (named).
-#   REAL_GAP         a caller would reasonably want it and could not reach it.
-#
-# One caveat about "unbound" above: coverage.sh extracts bound names with
-# `ZJOLT_API [A-Za-z_ *]*zjolt...`, whose character class excludes digits, so
-# any declaration whose RETURN TYPE is a fixed-width integer (uint32_t,
-# uint64_t, ...) is invisible to it and its holder shows up as a false gap.
-# Four names below are exactly that and are marked so.
-
-AddAngularVelocityStep	INTERNAL	MotionProperties solver step, called from the constraint parts' warm-start and solve; a velocity delta applied inside one solver iteration.
-AddBodyPair	INTERNAL	ContactConstraintManager — contact-manager machinery, not a constraint type.
-AddContactConstraint	INTERNAL	ContactConstraintManager — contact-manager machinery.
-AddLinearVelocityStep	INTERNAL	MotionProperties solver step, called from the constraint parts.
-AddPoint	BOUND_ELSEWHERE	zjoltPathConstraintPathCreateHermite — the whole control-point array goes in at once; PathConstraintPathHermite::AddPoint is the incremental spelling of the same construction.
-AddPositionStep	INTERNAL	Body position step applied inside the position solver.
-AddRotationStep	INTERNAL	Body rotation step applied inside the position solver.
-ApplyVelocityStep	INTERNAL	ConstraintPart velocity step; pure solver-loop plumbing.
-BuildIslands	INTERNAL	Constraint solver interface — links the two bodies in the island builder.
-BuildIslandSplits	INTERNAL	Constraint solver interface — large-island splitter linkage.
-CalculateConstraintProperties	INTERNAL	Per-step constraint-part setup; recomputed every solver iteration from body state.
-CalculateConstraintPropertiesWithFrequencyAndDamping	INTERNAL	Per-step constraint-part setup, soft-limit variant.
-CalculateConstraintPropertiesWithSettingsForLimit	INTERNAL	Per-step constraint-part setup, limit variant.
-CalculateConstraintPropertiesWithSettingsForMotor	INTERNAL	Per-step constraint-part setup, motor variant.
-CalculateConstraintPropertiesWithStiffnessAndDamping	INTERNAL	Per-step constraint-part setup, stiffness/damping variant.
-CalculateFrictionConstraintProperties	INTERNAL	ContactConstraintManager — contact friction setup.
-CalculateInverseEffectiveMass	INTERNAL	Constraint-part mass-matrix term, recomputed per step.
-CalculateLagrangeMultiplier	INTERNAL	DualAxisConstraintPart solver math.
-CalculateNonPenetrationConstraintProperties	INTERNAL	ContactConstraintManager — contact setup.
-CalculateSolverSteps	INTERNAL	Constructor of the solver's per-island step-count accumulator.
-CalculateSpringPropertiesWithBias	INTERNAL	SpringPart solver math.
-CalculateSpringPropertiesWithFrequencyAndDamping	INTERNAL	SpringPart solver math.
-CalculateSpringPropertiesWithMassNormalizedStiffnessAndDamping	INTERNAL	SpringPart solver math.
-CalculateSpringPropertiesWithSettings	INTERNAL	SpringPart solver math.
-CalculateSpringPropertiesWithStiffnessAndDamping	INTERNAL	SpringPart solver math.
-Clamp	INTERNAL	Jolt scalar helper that leaked into the scan from constraint-part bodies.
-ClampSwingTwist	INTERNAL	SwingTwistConstraintPart, not SwingTwistConstraint — read the body: it takes an ALREADY-decomposed swing/twist quaternion pair (three JPH_ASSERTs demand swing.x == 0 and twist.y == twist.z == 0, which a caller cannot satisfy without the part's own private decomposition), returns an internal clamped-axis bitmask, and is called only from CalculateConstraintProperties and SolvePositionConstraint.
-Conjugated	INTERNAL	Quat math helper.
-ConstraintIdxToConstraintOffset	INTERNAL	ContactConstraintManager index bookkeeping.
-ConstraintManager	INTERNAL	Solver plumbing class; its whole member list is internal.
-ContactConstraintManager	INTERNAL	Solver plumbing class; its whole member list is internal.
-ContactPointRemovedCallbacks	INTERNAL	ContactConstraintManager::ManifoldCache dispatcher; the callback it fans out to is ZJoltContactListener.on_contact_removed.
-Cross	INTERNAL	Vec3 math helper.
-DegreesToRadians	INTERNAL	Unit helper.
-DrawPath	BOUND_ELSEWHERE	zjoltPhysicsSystemDrawConstraints — PathConstraint::DrawConstraint calls DrawPath, so a path attached to a constraint is drawn by the bound system-level call.
-EnsureWPositive	INTERNAL	Quat math helper.
-FinalizeContactCacheAndCallContactPointRemovedCallbacks	INTERNAL	ContactConstraintManager cache lifecycle.
-Find	INTERNAL	ContactConstraintManager manifold/body-pair cache lookup.
-FindOrCreate	INTERNAL	ContactConstraintManager manifold cache.
-FinishConstraintBuffer	INTERNAL	ContactConstraintManager per-step buffer lifecycle.
-FromHandle	INTERNAL	ContactConstraintManager cache handle conversion.
-GetActiveConstraints	INTERNAL	ConstraintManager — solver plumbing.
-GetAffectedBodies	INTERNAL	ContactConstraintManager.
-GetAllBodyPairsSorted	INTERNAL	ContactConstraintManager determinism helper.
-GetAllCCDManifoldsSorted	INTERNAL	ContactConstraintManager determinism helper.
-GetAllManifoldsSorted	INTERNAL	ContactConstraintManager determinism helper.
-GetBias	INTERNAL	SpringPart solver term.
-GetBody1	BOUND_ELSEWHERE	zjoltConstraintGetBodies — hands back both body ids; a raw JPH::Body* could not cross this ABI in any case.
-GetBody2	BOUND_ELSEWHERE	zjoltConstraintGetBodies.
-GetCombineFriction	INTERNAL	ContactConstraintManager.
-GetCombineRestitution	INTERNAL	ContactConstraintManager.
-GetConstraintPriority	BOUND_ELSEWHERE	zjoltConstraintGetPriority — false gap, its uint32_t return type hides it from coverage.sh's bound-name regex.
-GetConstraints	INTERNAL	ConstraintManager — solver plumbing.
-GetConstraintSettings	INTERNAL	Jolt's own comment calls it "Debug function to convert a constraint to its settings"; BINDING.md — settings objects do not cross this ABI, a host keeps its own asset format and rebuilds through zjoltConstraintCreate*.
-GetConstraintToBody1	REAL_GAP	SwingTwistConstraint's constraint-space rotation for body 1; needed to convert between body space and constraint space. Bound as zjoltSwingTwistConstraintGetConstraintToBody1.
-GetConstraintToBody1Matrix	REAL_GAP	The only frame accessor every constraint kind has. Bound as zjoltConstraintGetConstraintToBody1Matrix.
-GetConstraintToBody2	REAL_GAP	Bound as zjoltSwingTwistConstraintGetConstraintToBody2.
-GetConstraintToBody2Matrix	REAL_GAP	Bound as zjoltConstraintGetConstraintToBody2Matrix.
-GetContactAllocator	INTERNAL	ContactConstraintManager allocator plumbing.
-GetContactListener	INTERNAL	ContactConstraintManager accessor; the listener itself is bound as ZJoltContactListener via zjoltPhysicsSystemSetContactListener.
-GetContactsFromCache	INTERNAL	ContactConstraintManager cache.
-GetDrawConstraintSize	REAL_GAP	Scales what the bound zjoltPhysicsSystemDrawConstraintReferenceFrame draws, and was unreachable. Bound as zjoltConstraintGetDrawSize.
-GetEnabled	BOUND_ELSEWHERE	zjoltConstraintIsEnabled.
-GetInverseInertiaForRotation	INTERNAL	MotionProperties; a constraint-part call site, not Constraints-area API.
-GetInverseMass	INTERNAL	MotionProperties; a constraint-part call site.
-GetLimitsMax	BOUND_ELSEWHERE	zjoltHingeConstraintGetLimits / zjoltSliderConstraintGetLimits / zjoltSixDofConstraintGetLimits — one paired getter per kind instead of two singles.
-GetLimitsMin	BOUND_ELSEWHERE	zjoltHingeConstraintGetLimits / zjoltSliderConstraintGetLimits / zjoltSixDofConstraintGetLimits.
-GetLocalSpaceHingeAxis1	REAL_GAP	The hinge's frame was write-only — settable at creation, unreadable after. Bound as zjoltHingeConstraintGetLocalSpaceHingeAxis1.
-GetLocalSpaceHingeAxis2	REAL_GAP	Bound as zjoltHingeConstraintGetLocalSpaceHingeAxis2.
-GetLocalSpaceNormalAxis1	REAL_GAP	Bound as zjoltHingeConstraintGetLocalSpaceNormalAxis1.
-GetLocalSpaceNormalAxis2	REAL_GAP	Bound as zjoltHingeConstraintGetLocalSpaceNormalAxis2.
-GetLocalSpacePosition1	REAL_GAP	SwingTwistConstraint attachment point; the point constraint's equivalent was bound and this one was not. Bound as zjoltSwingTwistConstraintGetLocalSpacePosition1.
-GetLocalSpacePosition2	REAL_GAP	Bound as zjoltSwingTwistConstraintGetLocalSpacePosition2.
-GetMaxConstraints	INTERNAL	ContactConstraintManager capacity.
-GetMaxDistance	BOUND_ELSEWHERE	zjoltDistanceConstraintGetDistance returns both bounds at once.
-GetMaxLength	BOUND_ELSEWHERE	zjoltPulleyConstraintGetLength returns both bounds at once.
-GetMinDistance	BOUND_ELSEWHERE	zjoltDistanceConstraintGetDistance.
-GetMinLength	BOUND_ELSEWHERE	zjoltPulleyConstraintGetLength.
-GetMotionProperties	INTERNAL	Body accessor; a constraint-part call site.
-GetMotionPropertiesUnchecked	INTERNAL	Body accessor; a constraint-part call site.
-GetNormalizedPerpendicular	INTERNAL	Vec3 math helper.
-GetNumBodyPairs	INTERNAL	ContactConstraintManager cache statistic.
-GetNumConstraints	BOUND_ELSEWHERE	zjoltPhysicsSystemGetNumConstraints — false gap, its uint32_t return type hides it from coverage.sh's bound-name regex.
-GetNumManifolds	INTERNAL	ContactConstraintManager cache statistic.
-GetNumPositionSteps	INTERNAL	CalculateSolverSteps accumulator, read once per island inside the step.
-GetNumPositionStepsOverride	BOUND_ELSEWHERE	zjoltConstraintGetNumPositionStepsOverride — false gap, uint32_t return type hides it from coverage.sh.
-GetNumVelocitySteps	INTERNAL	CalculateSolverSteps accumulator.
-GetNumVelocityStepsOverride	BOUND_ELSEWHERE	zjoltConstraintGetNumVelocityStepsOverride — false gap, uint32_t return type hides it from coverage.sh.
-GetPathMaxFraction	BOUND_ELSEWHERE	zjoltPathConstraintPathGetMaxFraction — a rename, so the literal match misses it.
-GetPositionMotorSettings	BOUND_ELSEWHERE	zjoltPathConstraintGetMotorSettings — the path constraint has exactly one motor, so the name drops the qualifier.
-GetPositionMotorState	BOUND_ELSEWHERE	zjoltPathConstraintGetMotorState.
-GetQuaternion	INTERNAL	Mat44 math helper.
-GetRotationLimitsMax	BOUND_ELSEWHERE	zjoltSixDofConstraintGetLimits, per axis.
-GetRotationLimitsMin	BOUND_ELSEWHERE	zjoltSixDofConstraintGetLimits, per axis.
-GetSwingType	INTERNAL	SwingTwistConstraintPart, not a constraint class; the caller-facing knob is ZJoltSwingType in the swing-twist and six-DOF descriptors.
-GetTangents	INTERNAL	ContactConstraintManager contact-frame math.
-GetTargetAngularVelocityCS	BOUND_ELSEWHERE	zjoltSwingTwistConstraintGetTargetAngularVelocity / zjoltSixDofConstraintGetTargetAngularVelocity — both documented as constraint space.
-GetTargetOrientationCS	BOUND_ELSEWHERE	zjoltSwingTwistConstraintGetTargetOrientation / zjoltSixDofConstraintGetTargetOrientation.
-GetTargetPositionCS	BOUND_ELSEWHERE	zjoltSixDofConstraintGetTargetPosition.
-GetTargetVelocityCS	BOUND_ELSEWHERE	zjoltSixDofConstraintGetTargetVelocity.
-GetTotalLambdaPositionLimits	REAL_GAP	The impulse a slider's or path's position LIMIT applied — what a breakable joint compares against. Bound as zjoltSliderConstraintGetTotalLambdaPositionLimits and zjoltPathConstraintGetTotalLambdaPositionLimits.
-GetTotalLambdaRotationHinge	REAL_GAP	Bound as zjoltPathConstraintGetTotalLambdaRotationHinge.
-GetTotalLambdaRotationLimits	REAL_GAP	Bound as zjoltHingeConstraintGetTotalLambdaRotationLimits.
-GetTotalLambdaSwingY	REAL_GAP	Bound as zjoltSwingTwistConstraintGetTotalLambdaSwingY.
-GetTotalLambdaSwingZ	REAL_GAP	Bound as zjoltSwingTwistConstraintGetTotalLambdaSwingZ.
-GetTotalLambdaTwist	REAL_GAP	Bound as zjoltSwingTwistConstraintGetTotalLambdaTwist.
-GetTotalSwingYLambda	INTERNAL	SwingTwistConstraintPart accessor; SwingTwistConstraint::GetTotalLambdaSwingY is its public face and that is what is bound.
-GetTotalSwingZLambda	INTERNAL	SwingTwistConstraintPart accessor; the public face is GetTotalLambdaSwingZ.
-GetTotalTwistLambda	INTERNAL	SwingTwistConstraintPart accessor; the public face is GetTotalLambdaTwist.
-GetTranslationLimitsMax	BOUND_ELSEWHERE	zjoltSixDofConstraintGetLimits, per axis.
-GetTranslationLimitsMin	BOUND_ELSEWHERE	zjoltSixDofConstraintGetLimits, per axis.
-GetTwistMaxAngle	BOUND_ELSEWHERE	zjoltSwingTwistConstraintGetTwistLimits returns both.
-GetTwistMinAngle	BOUND_ELSEWHERE	zjoltSwingTwistConstraintGetTwistLimits returns both.
-GetType	BOUND_ELSEWHERE	zjoltConstraintGetSubType — every handle this ABI produces is a TwoBodyConstraint, so EConstraintType is constant and the sub-type is the discriminator a caller needs.
-GetUserData	BOUND_ELSEWHERE	zjoltConstraintGetUserData — false gap, its uint64_t return type hides it from coverage.sh's bound-name regex.
-GetWorldSpaceNormal	INTERNAL	ContactConstraintManager contact math.
-GetX	INTERNAL	Vec3/Quat component accessor.
-GetY	INTERNAL	Vec3/Quat component accessor.
-GetZ	INTERNAL	Vec3/Quat component accessor.
-HasStiffness	BOUND_ELSEWHERE	ZJoltSpringSettings.frequency_or_stiffness > 0 is the same predicate, and the struct is the caller's own — documented on the type.
-HasStiffnessOrDamping	BOUND_ELSEWHERE	ZJoltSpringSettings.frequency_or_stiffness / .damping are the caller's own fields.
-IsDynamic	INTERNAL	Body predicate; a constraint-part call site, not Constraints-area API.
-IsPositionMotor	BOUND_ELSEWHERE	ZJoltMotorState from zjolt*ConstraintGetMotorState — POSITION and POSITION_AND_VELOCITY carry Jolt's own bit layout, so the test is on the caller's enum.
-IsVelocityMotor	BOUND_ELSEWHERE	ZJoltMotorState from zjolt*ConstraintGetMotorState — VELOCITY and POSITION_AND_VELOCITY.
-IsZero	INTERNAL	Vec3/Vec2 math helper.
-LockAllConstraints	INTERNAL	ConstraintManager mutex; zjolt takes the locks it needs itself.
-MakeFixedAxis	BOUND_ELSEWHERE	ZJoltSixDofConstraintDesc.limit_min/limit_max (min > max is fixed, documented on the field) and zjoltSixDofConstraintIsFixedAxis to read it back.
-MakeFreeAxis	BOUND_ELSEWHERE	ZJoltSixDofConstraintDesc.limit_min/limit_max (-FLT_MAX, FLT_MAX) and zjoltSixDofConstraintIsFreeAxis.
-Multiply3x3	INTERNAL	Mat44 math helper.
-Multiply3x3RightTransposed	INTERNAL	Mat44 math helper.
-MultiplyWorldSpaceInverseInertiaByVector	INTERNAL	MotionProperties solver math.
-OnCCDContactAdded	INTERNAL	ContactConstraintManager member; the contact it reports surfaces to a host through ZJoltContactListener.on_contact_added.
-OnContactValidate	EXTENSION_POINT	ZJoltContactListener.on_contact_validate, installed with zjoltPhysicsSystemSetContactListener — the C callback struct that replaces subclassing JPH::ContactListener. Only the call site is in this area; the declaration is in Physics/Collision.
-PrepareConstraintBuffer	INTERNAL	ContactConstraintManager per-step buffer lifecycle.
-RecycleConstraintBuffer	INTERNAL	ContactConstraintManager per-step buffer lifecycle.
-RestoreBinaryState	INTERNAL	ConstraintSettings / SpringSettings stream deserialisation; BINDING.md — settings objects do not cross. Simulation STATE, which is a different thing, is bound as zjoltPhysicsSystemRestoreState.
-RotateAxisX	INTERNAL	Quat math helper.
-RotateAxisY	INTERNAL	Quat math helper.
-RotateAxisZ	INTERNAL	Quat math helper.
-SaveBinaryState	INTERNAL	ConstraintSettings / SpringSettings stream serialisation; BINDING.md — settings objects do not cross. Simulation state is bound as zjoltPhysicsSystemSaveState.
-SetColumn4	INTERNAL	Mat44 math helper.
-SetConstraintPriority	BOUND_ELSEWHERE	zjoltConstraintSetPriority.
-SetDrawConstraintSize	REAL_GAP	The per-constraint scale the bound zjoltPhysicsSystemDrawConstraintReferenceFrame uses. Bound as zjoltConstraintSetDrawSize.
-SetForceLimit	BOUND_ELSEWHERE	ZJoltMotorSettings.min_force_limit / .max_force_limit through zjolt*ConstraintSetMotorSettings — the symmetric helper is min = -x, max = x, and the asymmetric case Jolt's helper cannot express is the one the struct exists for.
-SetIsLooping	BOUND_ELSEWHERE	zjoltPathConstraintPathCreateHermite takes is_looping; zjoltPathConstraintPathIsLooping reads it. Flipping it under a live constraint changes GetPathMaxFraction beneath a fraction the constraint already holds.
-SetLimitedAxis	BOUND_ELSEWHERE	zjoltSixDofConstraintSetTranslationLimits / zjoltSixDofConstraintSetRotationLimits at run time, ZJoltSixDofConstraintDesc.limit_min/limit_max at creation.
-SetRatio	BOUND_ELSEWHERE	ZJoltGearConstraintDesc.ratio / ZJoltRackAndPinionConstraintDesc.ratio — Jolt's SetRatio is a settings-side convenience that computes the same float from tooth counts; there is no run-time SetRatio on any constraint class.
-SetSliderAxis	BOUND_ELSEWHERE	ZJoltSliderConstraintDesc.slider_axis1/2 and .normal_axis1/2 — the desc takes the frame explicitly rather than deriving a perpendicular.
-SetSwingType	INTERNAL	SwingTwistConstraintPart, not a constraint class; the caller-facing knob is ZJoltSwingType in the swing-twist and six-DOF descriptors.
-SetTargetAngularVelocityBS	REAL_GAP	The BODY-space twin of the bound constraint-space setter; without it a caller had no way to express a target in body 2's own frame. Bound as zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace.
-SetTargetAngularVelocityCS	BOUND_ELSEWHERE	zjoltSwingTwistConstraintSetTargetAngularVelocity / zjoltSixDofConstraintSetTargetAngularVelocity.
-SetTargetOrientationBS	REAL_GAP	Bound for the hinge already (zjoltHingeConstraintSetTargetOrientation); the swing-twist and six-DOF body-space variants were missing — the pose-matching call a ragdoll wants. Bound as zjoltSwingTwistConstraintSetTargetOrientationBodySpace and zjoltSixDofConstraintSetTargetOrientationBodySpace.
-SetTargetOrientationCS	BOUND_ELSEWHERE	zjoltSwingTwistConstraintSetTargetOrientation / zjoltSixDofConstraintSetTargetOrientation.
-SetTargetPositionCS	BOUND_ELSEWHERE	zjoltSixDofConstraintSetTargetPosition.
-SetTargetVelocityCS	BOUND_ELSEWHERE	zjoltSixDofConstraintSetTargetVelocity.
-SetTorqueLimit	BOUND_ELSEWHERE	ZJoltMotorSettings.min_torque_limit / .max_torque_limit through zjolt*ConstraintSetMotorSettings.
-SetTotalLambda	INTERNAL	ContactConstraintPart / DualAxisConstraintPart warm-start restore.
-SetTwistMaxAngle	BOUND_ELSEWHERE	zjoltSwingTwistConstraintSetTwistLimits sets both — deliberately, because each of Jolt's singles recomputes the constraint part immediately and moving a range through one of them passes through min > max, which is the assertion.
-SetTwistMinAngle	BOUND_ELSEWHERE	zjoltSwingTwistConstraintSetTwistLimits sets both, for the reason above.
-SetupVelocityConstraint	INTERNAL	Constraint solver interface, called once per step by the solver.
-SetZero	INTERNAL	Vec2/Mat math helper.
-SinCos	INTERNAL	Trig helper.
-SolvePositionConstraint	INTERNAL	Constraint / constraint-part solver interface.
-SolvePositionConstraints	INTERNAL	ContactConstraintManager solver interface.
-SolveVelocityConstraint	INTERNAL	Constraint / constraint-part solver interface.
-SolveVelocityConstraintApplyLambda	INTERNAL	ContactConstraintPart solver interface.
-SolveVelocityConstraintGetTotalLambda	INTERNAL	ContactConstraintPart solver interface.
-SolveVelocityConstraints	INTERNAL	ContactConstraintManager solver interface.
-SortContacts	INTERNAL	ContactConstraintManager determinism helper.
-Square	INTERNAL	Scalar math helper.
-StoreAppliedImpulses	INTERNAL	ContactConstraintManager cache write-back.
-StoreFloat3	INTERNAL	Vec3 math helper.
-SubAngularVelocityStep	INTERNAL	MotionProperties solver step.
-SubLinearVelocityStep	INTERNAL	MotionProperties solver step.
-SubPositionStep	INTERNAL	Body position step inside the position solver.
-SubRotationStep	INTERNAL	Body rotation step inside the position solver.
-ToHandle	INTERNAL	ContactConstraintManager cache handle conversion.
-TwoBodyConstraint	REAL_GAP	Base-class constructor: a caller cannot define a new constraint type through this ABI (Jolt reserves EConstraintSubType::User1..User4 for exactly that). DELIBERATELY NOT BOUND — see the note at the bottom of this file.
-UnlockAllConstraints	INTERNAL	ConstraintManager mutex.
-ValidateContactPoint	INTERNAL	ContactConstraintManager forwarder; the callback it forwards to is ZJoltContactListener.on_contact_validate.
-Vec4	INTERNAL	Math type constructor.
-WarmStartVelocityConstraint	INTERNAL	Constraint solver interface — warm-starting.
-WarmStartVelocityConstraints	INTERNAL	ContactConstraintManager solver interface — warm-starting.
-
-# Totals: 112 INTERNAL, 1 EXTENSION_POINT, 49 BOUND_ELSEWHERE, 21 REAL_GAP.
-#
-# The one REAL_GAP left unbound: TwoBodyConstraint.
-#
-# Binding it means letting a C caller define a constraint type, which means
-# mirroring the six-method solver vtable — SetupVelocityConstraint,
-# WarmStartVelocityConstraint, SolveVelocityConstraint, SolvePositionConstraint,
-# BuildIslands, BuildIslandSplits — across the boundary and calling it from
-# inside the solver loop, several times per step per island. BINDING.md rules
-# that out in as many words ("never as a mirrored C++ vtable"), and its
-# Callbacks section names the failure mode: an unwind out of one skips the
-# broad-phase shared_lock destructor and permanently deadlocks the next
-# PhysicsSystem::Update. Every one of those six methods is classified INTERNAL
-# above on its own merits, so binding the class would contradict the verdict on
-# its own members. zjoltConstraintCreateSixDof is what a caller reaches for
-# instead: per-axis free / fixed / limited, with a motor and friction on each.
-#
-# Four gaps outside this list were closed alongside it, because they are the
-# same capability under a name coverage.sh happened to match against a
-# different constraint's identically-named method:
-#   HingeConstraint::GetLocalSpacePoint1 / GetLocalSpacePoint2
-#     (matched zjoltPointConstraintGetLocalSpacePoint*, which is a different
-#      constraint) — bound as zjoltHingeConstraintGetLocalSpacePoint1/2.
-#   SliderConstraint::GetTotalLambdaPosition / GetTotalLambdaRotation,
-#   PathConstraint::GetTotalLambdaPosition / GetTotalLambdaRotation,
-#   HingeConstraint::GetTotalLambdaRotation
-#     (all matched some other kind's GetTotalLambdaPosition/Rotation) — bound,
-#      so that the breakable-joint impulse set is complete per kind rather than
-#      complete for whichever kinds the literal match happened to cover.
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Physics/Constraints	AddBodyPair	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	AddContactConstraint	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	ApplyVelocityStep	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintPart/AngleConstraintPart.h:38 (decl)
+Physics/Constraints	BuildIslandSplits	ZIG	src/tree.zig:SplitMasks.assignSplit
+Physics/Constraints	BuildIslands	ZIG	src/constraint.zig:Constraint.buildIslands
+Physics/Constraints	CalculateConstraintProperties	ZIG	src/constraint_part.zig:calculateConstraintProperties
+Physics/Constraints	CalculateConstraintPropertiesWithFrequencyAndDamping	ZIG	src/constraint_part.zig:calculateConstraintPropertiesWithFrequencyAndDamping
+Physics/Constraints	CalculateConstraintPropertiesWithSettingsForLimit	ZIG	src/constraint_part.zig:calculateConstraintPropertiesWithSettingsForLimit
+Physics/Constraints	CalculateConstraintPropertiesWithSettingsForMotor	ZIG	src/constraint_part.zig:calculateConstraintPropertiesWithSettingsForMotor
+Physics/Constraints	CalculateConstraintPropertiesWithStiffnessAndDamping	ZIG	src/constraint_part.zig:calculateConstraintPropertiesWithStiffnessAndDamping
+Physics/Constraints	CalculateFrictionConstraintProperties	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	CalculateInverseEffectiveMass	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintPart/AngleConstraintPart.h:61 (decl)
+Physics/Constraints	CalculateLagrangeMultiplier	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintPart/DualAxisConstraintPart.h:86 (decl)
+Physics/Constraints	CalculateNonPenetrationConstraintProperties	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	CalculateSolverSteps	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/CalculateSolverSteps.h:12 (class)
+Physics/Constraints	CalculateSpringPropertiesWithBias	ZIG	src/constraint_part.zig:calculateSpringPropertiesWithBias
+Physics/Constraints	CalculateSpringPropertiesWithFrequencyAndDamping	ZIG	src/constraint_part.zig:calculateSpringPropertiesWithFrequencyAndDamping
+Physics/Constraints	CalculateSpringPropertiesWithMassNormalizedStiffnessAndDamping	ZIG	src/constraint_part.zig:calculateSpringPropertiesWithMassNormalizedStiffnessAndDamping
+Physics/Constraints	CalculateSpringPropertiesWithSettings	ZIG	src/constraint_part.zig:calculateSpringPropertiesWithSettings
+Physics/Constraints	CalculateSpringPropertiesWithStiffnessAndDamping	ZIG	src/constraint_part.zig:calculateSpringPropertiesWithStiffnessAndDamping
+Physics/Constraints	ClampSwingTwist	ZIG	src/constraint_part.zig:clampSwingTwist
+Physics/Constraints	ConstraintIdxToConstraintOffset	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	ConstraintManager	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintManager.h:25 (file)
+Physics/Constraints	ContactConstraintManager	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	ContactPointRemovedCallbacks	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	DegreesToRadians	LANGUAGE	std.math and @Vector arithmetic
+Physics/Constraints	DrawPath	BOUND	zjoltPhysicsSystemDrawConstraints
+Physics/Constraints	FinalizeContactCacheAndCallContactPointRemovedCallbacks	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	FindOrCreate	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	FinishConstraintBuffer	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	FromHandle	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetActiveConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintManager.h:25 (file)
+Physics/Constraints	GetAffectedBodies	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetAllBodyPairsSorted	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetAllCCDManifoldsSorted	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetAllManifoldsSorted	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetBias	ZIG	src/constraint_part.zig:getBias
+Physics/Constraints	GetContactAllocator	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetContactsFromCache	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetLimitsMax	BOUND	zjoltHingeConstraintGetLimits zjoltSliderConstraintGetLimits zjoltSixDofConstraintGetLimits
+Physics/Constraints	GetLimitsMin	BOUND	zjoltHingeConstraintGetLimits zjoltSliderConstraintGetLimits zjoltSixDofConstraintGetLimits
+Physics/Constraints	GetMaxConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetMaxLength	BOUND	zjoltPulleyConstraintGetLength
+Physics/Constraints	GetMinDistance	BOUND	zjoltDistanceConstraintGetDistance
+Physics/Constraints	GetMinLength	BOUND	zjoltPulleyConstraintGetLength
+Physics/Constraints	GetNumBodyPairs	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetNumManifolds	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetPathMaxFraction	BOUND	zjoltPathConstraintPathGetMaxFraction
+Physics/Constraints	GetPositionMotorSettings	BOUND	zjoltPathConstraintGetMotorSettings
+Physics/Constraints	GetPositionMotorState	BOUND	zjoltPathConstraintGetMotorState
+Physics/Constraints	GetRotationLimitsMax	BOUND	zjoltSixDofConstraintGetLimits
+Physics/Constraints	GetRotationLimitsMin	BOUND	zjoltSixDofConstraintGetLimits
+Physics/Constraints	GetSwingType	ZIG	src/constraint_part.zig:getSwingType
+Physics/Constraints	GetTangents	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	GetTargetAngularVelocityCS	BOUND	zjoltSwingTwistConstraintGetTargetAngularVelocity zjoltSixDofConstraintGetTargetAngularVelocity
+Physics/Constraints	GetTargetOrientationCS	BOUND	zjoltSwingTwistConstraintGetTargetOrientation zjoltSixDofConstraintGetTargetOrientation
+Physics/Constraints	GetTargetPositionCS	BOUND	zjoltSixDofConstraintGetTargetPosition
+Physics/Constraints	GetTargetVelocityCS	BOUND	zjoltSixDofConstraintGetTargetVelocity
+Physics/Constraints	GetTotalSwingYLambda	ZIG	src/constraint_part.zig:getTotalSwingYLambda
+Physics/Constraints	GetTotalSwingZLambda	ZIG	src/constraint_part.zig:getTotalSwingZLambda
+Physics/Constraints	GetTotalTwistLambda	ZIG	src/constraint_part.zig:getTotalTwistLambda
+Physics/Constraints	GetTranslationLimitsMax	BOUND	zjoltSixDofConstraintGetLimits
+Physics/Constraints	GetTranslationLimitsMin	BOUND	zjoltSixDofConstraintGetLimits
+Physics/Constraints	GetTwistMaxAngle	BOUND	zjoltSwingTwistConstraintGetTwistLimits
+Physics/Constraints	GetTwistMinAngle	BOUND	zjoltSwingTwistConstraintGetTwistLimits
+Physics/Constraints	HasStiffness	BOUND	ZJoltSpringSettings
+Physics/Constraints	HasStiffnessOrDamping	BOUND	ZJoltSpringSettings
+Physics/Constraints	IsPositionMotor	BOUND	ZJoltMotorState zjolt*
+Physics/Constraints	IsVelocityMotor	BOUND	ZJoltMotorState zjolt*
+Physics/Constraints	LockAllConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintManager.h:25 (file)
+Physics/Constraints	MakeFixedAxis	BOUND	ZJoltSixDofConstraintDesc zjoltSixDofConstraintIsFixedAxis
+Physics/Constraints	MakeFreeAxis	BOUND	ZJoltSixDofConstraintDesc zjoltSixDofConstraintIsFreeAxis
+Physics/Constraints	OnCCDContactAdded	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	PrepareConstraintBuffer	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	RecycleConstraintBuffer	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	SetConstraintPriority	BOUND	zjoltConstraintSetPriority
+Physics/Constraints	SetDrawConstraintSize	BOUND	zjoltConstraintSetDrawSize
+Physics/Constraints	SetForceLimit	BOUND	ZJoltMotorSettings zjolt*
+Physics/Constraints	SetLimitedAxis	BOUND	zjoltSixDofConstraintSetTranslationLimits zjoltSixDofConstraintSetRotationLimits ZJoltSixDofConstraintDesc
+Physics/Constraints	SetSliderAxis	BOUND	ZJoltSliderConstraintDesc
+Physics/Constraints	SetSwingType	ZIG	src/constraint_part.zig:setSwingType
+Physics/Constraints	SetTargetAngularVelocityBS	BOUND	zjoltSwingTwistConstraintSetTargetAngularVelocityBodySpace
+Physics/Constraints	SetTargetAngularVelocityCS	BOUND	zjoltSwingTwistConstraintSetTargetAngularVelocity zjoltSixDofConstraintSetTargetAngularVelocity
+Physics/Constraints	SetTargetOrientationBS	BOUND	zjoltHingeConstraintSetTargetOrientation zjoltSwingTwistConstraintSetTargetOrientationBodySpace zjoltSixDofConstraintSetTargetOrientationBodySpace
+Physics/Constraints	SetTargetOrientationCS	BOUND	zjoltSwingTwistConstraintSetTargetOrientation zjoltSixDofConstraintSetTargetOrientation
+Physics/Constraints	SetTargetPositionCS	BOUND	zjoltSixDofConstraintSetTargetPosition
+Physics/Constraints	SetTargetVelocityCS	BOUND	zjoltSixDofConstraintSetTargetVelocity
+Physics/Constraints	SetTorqueLimit	BOUND	ZJoltMotorSettings zjolt*
+Physics/Constraints	SetTotalLambda	ZIG	src/constraint_part.zig:setTotalLambda
+Physics/Constraints	SetTwistMaxAngle	BOUND	zjoltSwingTwistConstraintSetTwistLimits
+Physics/Constraints	SetTwistMinAngle	BOUND	zjoltSwingTwistConstraintSetTwistLimits
+Physics/Constraints	SetupVelocityConstraint	EXTENSION	ZJoltCustomConstraintCallbacks zjoltConstraintCreateCustom
+Physics/Constraints	SixDOFConstraint	BOUND	zjoltConstraintCreateSixDof ZJoltSixDofConstraintDesc zjoltSixDofConstraint*
+Physics/Constraints	SolvePositionConstraint	ZIG	src/constraint_part.zig:solvePositionConstraint
+Physics/Constraints	SolvePositionConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	SolveVelocityConstraint	ZIG	src/constraint_part.zig:solveVelocityConstraint
+Physics/Constraints	SolveVelocityConstraintApplyLambda	ZIG	src/constraint_part.zig:solveVelocityConstraintApplyLambda
+Physics/Constraints	SolveVelocityConstraintGetTotalLambda	ZIG	src/constraint_part.zig:solveVelocityConstraintGetTotalLambda
+Physics/Constraints	SolveVelocityConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	SortContacts	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	Square	LANGUAGE	std.math and @Vector arithmetic
+Physics/Constraints	StoreAppliedImpulses	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	ToHandle	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	TwoBodyConstraint	BOUND	zjoltConstraintCreateCustom ZJoltCustomConstraintDesc
+Physics/Constraints	UnlockAllConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ConstraintManager.h:25 (file)
+Physics/Constraints	ValidateContactPoint	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	WarmStartVelocityConstraint	EXTENSION	ZJoltCustomConstraintCallbacks zjoltConstraintCreateCustom
+Physics/Constraints	WarmStartVelocityConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)

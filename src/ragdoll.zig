@@ -1,33 +1,17 @@
 //! Ragdolls: a skeleton, per-part bodies and constraints, driven or read
 //! back as a pose.
 //!
-//! Three pieces, built up in order:
+//! Built up in order: `Skeleton` is the joint hierarchy (names/parent
+//! indices only; reference counted). `RagdollSettings` is one
+//! body-and-constraint part per joint — a reusable template a live
+//! `Ragdoll` keeps referencing and consults on every
+//! `driveToPoseUsingMotors` call. `SkeletonPose` is one pose instance
+//! (root offset plus per-joint local rotation/translation; NOT reference
+//! counted) — convert to/from its internal matrices with
+//! `calculateJointMatrices`/`calculateJointStates`.
 //!
-//!   * `Skeleton` — the joint hierarchy: names and parent indices only, no
-//!     transforms. Reference counted.
-//!   * `RagdollSettings` — one body-and-constraint part per joint. This is
-//!     the reusable template; `createRagdoll` may be called more than once
-//!     to spawn more than one ragdoll from it. Reference counted, and NOT
-//!     flattened away on the C side the way a body's or a shape's settings
-//!     are: a live `Ragdoll` keeps a reference to the settings that created
-//!     it and consults it on every `driveToPoseUsingMotors` call.
-//!   * `SkeletonPose` — one instance of the hierarchy in a particular pose: a
-//!     root offset plus, per joint, a local rotation/translation relative to
-//!     its parent. NOT reference counted — a plain owning handle.
-//!
-//! A pose never carries a 4x4 matrix across the C boundary, because the ABI
-//! has none. `Ragdoll.setPose`/`getPose`/`driveToPoseUsingKinematics` work
-//! through the pose's internal flattened joint matrices; the caller only
-//! ever reads or writes local joint rotations/translations
-//! (`SkeletonPose.setJoints`/`getJoints`) plus the root offset, converting
-//! with `SkeletonPose.calculateJointMatrices` (before driving) and
-//! `calculateJointStates` (after reading back).
-//!
-//! `SkeletonMapper` is the fourth piece, and it is what a ragdoll is usually
-//! for: a ragdoll simulates a dozen-odd joints, while the mesh it stands in
-//! for is skinned to a hundred. It works out which joints of the two
-//! skeletons correspond and pushes a pose from one to the other, either way
-//! round. Reference counted.
+//! `SkeletonMapper`, the fourth piece, maps a low-joint ragdoll pose onto
+//! a higher-joint mesh skeleton and back. Reference counted.
 
 const std = @import("std");
 const c = @import("c/ragdoll.zig");
@@ -36,6 +20,7 @@ const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const constraint_mod = @import("constraint.zig");
 const system_mod = @import("system.zig");
+const stream_mod = @import("stream.zig");
 
 //=============================================================================
 // Skeleton
@@ -132,13 +117,10 @@ pub const SkeletonPose = struct {
         try err.check(c.zjoltSkeletonPoseSetSkeleton(self.handle, new_skeleton.handle));
     }
 
-    /// The one `@constCast` in this module, and it is here on purpose: Jolt
-    /// stores a pose's skeleton as a `RefConst`, so the C getter hands back a
-    /// `const` pointer, but `Skeleton` is a mutable handle — its own methods
-    /// mutate the joint list. Mutating a skeleton you got out of a pose is
-    /// legal; it is the same object the owner of the reference holds.
-    ///
-    /// `null` if none is assigned.
+    /// The skeleton assigned via `setSkeleton`. Borrowed as a mutable
+    /// handle — legal to mutate; it is the same object the owner's
+    /// reference points at, since `Skeleton`'s own methods mutate the
+    /// joint list. `null` if none is assigned.
     pub fn skeleton(self: SkeletonPose) ?Skeleton {
         const handle = c.zjoltSkeletonPoseGetSkeleton(self.handle) orelse return null;
         return .{ .handle = @constCast(handle) };
@@ -213,31 +195,174 @@ pub const SkeletonPose = struct {
 };
 
 //=============================================================================
+// SkeletalAnimation
+//=============================================================================
+
+/// A skinned animation: keyframed local-space rotation/translation per
+/// animated joint, sampled onto a `SkeletonPose`. Reference counted.
+pub const SkeletalAnimation = struct {
+    handle: *c.SkeletalAnimation,
+
+    /// An empty animation (no animated joints).
+    pub fn init() err.Error!SkeletalAnimation {
+        var handle: *c.SkeletalAnimation = undefined;
+        try err.check(c.zjoltSkeletalAnimationCreate(&handle));
+        return .{ .handle = handle };
+    }
+
+    pub fn addRef(self: SkeletalAnimation) void {
+        c.zjoltSkeletalAnimationAddRef(self.handle);
+    }
+
+    pub fn release(self: SkeletalAnimation) void {
+        c.zjoltSkeletalAnimationRelease(self.handle);
+    }
+
+    pub fn refCount(self: SkeletalAnimation) u32 {
+        return c.zjoltSkeletalAnimationGetRefCount(self.handle);
+    }
+
+    /// Appends an animated joint, initially with no keyframes, and returns
+    /// its index. `name` is what `sample` looks up in the pose's skeleton —
+    /// it need not match one yet.
+    pub fn addAnimatedJoint(self: SkeletalAnimation, name: ?[:0]const u8) err.Error!u32 {
+        var index: u32 = undefined;
+        try err.check(c.zjoltSkeletalAnimationAddAnimatedJoint(
+            self.handle,
+            if (name) |n| n.ptr else null,
+            &index,
+        ));
+        return index;
+    }
+
+    pub fn animatedJointCount(self: SkeletalAnimation) u32 {
+        return c.zjoltSkeletalAnimationGetAnimatedJointCount(self.handle);
+    }
+
+    /// Borrowed; valid until the animation is destroyed. Empty if
+    /// `joint_index` is out of range.
+    pub fn animatedJointName(self: SkeletalAnimation, joint_index: u32) [:0]const u8 {
+        return std.mem.span(c.zjoltSkeletalAnimationGetAnimatedJointName(self.handle, joint_index));
+    }
+
+    /// Appends a keyframe to animated joint `joint_index`. Keyframes must be
+    /// added in non-decreasing `time` order: `sample`'s binary search over
+    /// them assumes it, and Jolt does not check.
+    pub fn addKeyframe(
+        self: SkeletalAnimation,
+        joint_index: u32,
+        time: f32,
+        rotation: math.Quat,
+        translation: math.Vec3,
+    ) err.Error!void {
+        try err.check(c.zjoltSkeletalAnimationAddKeyframe(
+            self.handle,
+            joint_index,
+            time,
+            &rotation,
+            &translation,
+        ));
+    }
+
+    pub fn keyframeCount(self: SkeletalAnimation, joint_index: u32) u32 {
+        return c.zjoltSkeletalAnimationGetKeyframeCount(self.handle, joint_index);
+    }
+
+    pub const Keyframe = struct {
+        time: f32,
+        rotation: math.Quat,
+        translation: math.Vec3,
+    };
+
+    /// Fails if `joint_index` or `keyframe_index` is out of range.
+    pub fn keyframe(self: SkeletalAnimation, joint_index: u32, keyframe_index: u32) err.Error!Keyframe {
+        var out: Keyframe = undefined;
+        try err.check(c.zjoltSkeletalAnimationGetKeyframe(
+            self.handle,
+            joint_index,
+            keyframe_index,
+            &out.time,
+            &out.rotation,
+            &out.translation,
+        ));
+        return out;
+    }
+
+    /// The time (seconds) of the last keyframe of the FIRST animated joint.
+    /// 0 if there are no animated joints, or that joint has no keyframes.
+    pub fn duration(self: SkeletalAnimation) f32 {
+        return c.zjoltSkeletalAnimationGetDuration(self.handle);
+    }
+
+    /// Scales every keyframe's translation by `scale`.
+    pub fn scaleJoints(self: SkeletalAnimation, scale: f32) void {
+        c.zjoltSkeletalAnimationScaleJoints(self.handle, scale);
+    }
+
+    /// If the animation loops, `sample` wraps `time` modulo `duration`
+    /// instead of clamping to the last keyframe.
+    pub fn setIsLooping(self: SkeletalAnimation, is_looping: bool) void {
+        c.zjoltSkeletalAnimationSetIsLooping(self.handle, is_looping);
+    }
+
+    pub fn isLooping(self: SkeletalAnimation) bool {
+        return c.zjoltSkeletalAnimationIsLooping(self.handle);
+    }
+
+    /// Samples the (interpolated) joint transforms at `time` onto `pose`'s
+    /// LOCAL joint rotations/translations — `SkeletonPose.setJoints`'s form;
+    /// no `calculateJointMatrices` needed first.
+    ///
+    /// `time` must not be negative. Every animated joint's name must be a
+    /// joint of `pose`'s assigned skeleton.
+    pub fn sample(self: SkeletalAnimation, time: f32, pose: SkeletonPose) err.Error!void {
+        try err.check(c.zjoltSkeletalAnimationSample(self.handle, time, pose.handle));
+    }
+
+    /// Writes `self` through `stream` in Jolt's own binary form.
+    pub fn saveBinaryState(self: SkeletalAnimation, stream: stream_mod.Stream) err.Error!void {
+        try err.check(c.zjoltSkeletalAnimationSaveBinaryState(self.handle, &stream));
+    }
+
+    /// Reads an animation written by `saveBinaryState`.
+    pub fn restoreBinaryState(stream: stream_mod.Stream) err.Error!SkeletalAnimation {
+        var handle: *c.SkeletalAnimation = undefined;
+        try err.check(c.zjoltSkeletalAnimationRestoreBinaryState(&stream, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// The rotation/translation pair a keyframe carries, and the matrix
+    /// conversion `sample` uses internally.
+    pub const JointState = struct {
+        rotation: math.Quat,
+        translation: math.Vec3,
+
+        /// Decomposes a local-space matrix into a rotation and translation.
+        pub fn fromMatrix(matrix: math.Mat44) JointState {
+            var out: JointState = undefined;
+            c.zjoltSkeletalAnimationJointStateFromMatrix(&matrix, &out.rotation, &out.translation);
+            return out;
+        }
+
+        /// The inverse.
+        pub fn toMatrix(self: JointState) math.Mat44 {
+            var out: math.Mat44 = math.mat44_identity;
+            c.zjoltSkeletalAnimationJointStateToMatrix(&self.rotation, &self.translation, &out);
+            return out;
+        }
+    };
+};
+
+//=============================================================================
 // SkeletonMapper
 //=============================================================================
 
-/// One skeleton drives another: the low-detail skeleton a ragdoll simulates,
-/// onto the high-detail skeleton a mesh is skinned to, and back again.
+/// One skeleton drives another: the low-detail skeleton a ragdoll
+/// simulates, onto the high-detail skeleton a mesh is skinned to, and back.
 ///
-/// The order of operations is the whole of it, and getting it wrong produces
-/// a mapper that maps to nonsense rather than an error:
-///
-///   1. Pose each skeleton in its NEUTRAL pose and run
-///      `SkeletonPose.calculateJointMatrices` on both — `initialize` reads the
-///      model-space matrices, which are uninitialised until something writes
-///      them.
-///   2. `initialize(neutral_ragdoll, neutral_render, null, null)`, low-detail
-///      first. Check `mappingCount()`: a mapper that matched nothing is not
-///      an error, it just maps nothing.
-///   3. Optionally `lockAllTranslations`, so the render skeleton does not
-///      stretch when the ragdoll's constraints do.
-///   4. Every frame: `Ragdoll.getPose` into the ragdoll pose, set the render
-///      pose's joints from the animation, `map`, then
-///      `SkeletonPose.calculateJointStates` and `getJoints` to read the
-///      result.
-///
-/// Reference counted, and holds no reference to either skeleton — the poses
-/// are read during each call and not retained.
+/// Order matters — wrong order maps to nonsense, not an error: pose both
+/// skeletons NEUTRAL and `calculateJointMatrices`, THEN `initialize`
+/// (low-detail first). Reference counted; holds no reference to either skeleton.
 pub const SkeletonMapper = struct {
     handle: *c.SkeletonMapper,
 
@@ -264,27 +389,12 @@ pub const SkeletonMapper = struct {
         return c.zjoltSkeletonMapperGetRefCount(self.handle);
     }
 
-    /// Works out which joints of the two skeletons correspond, from the two
-    /// neutral poses. Every other method depends on this having run.
-    ///
-    /// `neutral1` must be the LOW-detail skeleton's pose — Jolt assumes every
-    /// joint of skeleton 1 maps to one of skeleton 2, and that skeleton 2 is
-    /// skeleton 1's hierarchy with extra joints between, above or below.
-    /// Passing them the wrong way round with more joints in `neutral1` is
-    /// refused; passing them the wrong way round with the same joint count is
-    /// not, and maps the wrong way.
-    ///
-    /// Both poses must be in MODEL space — `SkeletonPose.calculateJointMatrices`
-    /// since their joints were last set — and should agree as closely as
-    /// possible. Every mapped joint's transform is stored as the difference
-    /// between the two, so a difference that is really a mistake in the
-    /// neutral poses is applied to every frame afterwards.
-    ///
-    /// `can_map_joint` is `null` for Jolt's default, which is that the two
-    /// joint NAMES are equal. Supply one when the two skeletons name their
-    /// joints differently, or when a name appears twice and the first match is
-    /// the wrong one. It is called during this call only, and must not panic:
-    /// it runs inside Jolt's own loop, which is compiled without unwinding.
+    /// Works out which joints of the two skeletons correspond, from two
+    /// neutral poses (MODEL space, via `calculateJointMatrices`). Every
+    /// other method depends on this having run. `neutral1` must be the
+    /// LOW-detail skeleton's pose — reversed with equal joint counts is
+    /// not refused, and maps wrong. `can_map_joint` (`null` for
+    /// name-equality) must not panic: it runs where Jolt cannot unwind.
     pub fn initialize(
         self: SkeletonMapper,
         neutral1: SkeletonPose,
@@ -315,20 +425,65 @@ pub const SkeletonMapper = struct {
         return if (index < 0) null else @intCast(index);
     }
 
+    /// How many joint chains the mapper found between two 1-on-1 mapped
+    /// joints — runs of joints in skeleton 2 that skeleton 1 has no
+    /// equivalent for.
+    pub fn chainCount(self: SkeletonMapper) u32 {
+        return c.zjoltSkeletonMapperGetChainCount(self.handle);
+    }
+
+    /// The length of chain `chain_index`'s two joint-index runs: skeleton
+    /// 1's and skeleton 2's. Both 0 if `chain_index` is past the end.
+    pub fn chainJointCounts(self: SkeletonMapper, chain_index: u32) struct { count1: u32, count2: u32 } {
+        var count1: u32 = undefined;
+        var count2: u32 = undefined;
+        c.zjoltSkeletonMapperGetChainJointCounts(self.handle, chain_index, &count1, &count2);
+        return .{ .count1 = count1, .count2 = count2 };
+    }
+
+    /// One joint index of chain `chain_index`'s skeleton-1 run. `null` if
+    /// `chain_index` or `index` is out of range.
+    pub fn chainJointIndex1(self: SkeletonMapper, chain_index: u32, index: u32) ?u32 {
+        const i = c.zjoltSkeletonMapperGetChainJointIndex1(self.handle, chain_index, index);
+        return if (i < 0) null else @intCast(i);
+    }
+
+    /// One joint index of chain `chain_index`'s skeleton-2 run. `null` if
+    /// `chain_index` or `index` is out of range.
+    pub fn chainJointIndex2(self: SkeletonMapper, chain_index: u32, index: u32) ?u32 {
+        const i = c.zjoltSkeletonMapperGetChainJointIndex2(self.handle, chain_index, index);
+        return if (i < 0) null else @intCast(i);
+    }
+
+    /// How many joints of skeleton 2 could not be mapped to skeleton 1 at
+    /// all.
+    pub fn unmappedCount(self: SkeletonMapper) u32 {
+        return c.zjoltSkeletonMapperGetUnmappedCount(self.handle);
+    }
+
+    pub const Unmapped = struct {
+        /// Its own index, in skeleton 2.
+        joint_index: u32,
+        /// Its parent's index, in skeleton 2. `null` if it has none.
+        parent_joint_index: ?u32,
+    };
+
+    /// One unmapped joint of skeleton 2. Fails if `index` is out of range.
+    pub fn unmapped(self: SkeletonMapper, index: u32) err.Error!Unmapped {
+        var raw: c.SkeletonMapperUnmapped = undefined;
+        try err.check(c.zjoltSkeletonMapperGetUnmapped(self.handle, index, &raw));
+        return .{
+            .joint_index = @intCast(raw.joint_index),
+            .parent_joint_index = if (raw.parent_joint_index < 0) null else @intCast(raw.parent_joint_index),
+        };
+    }
+
     /// Pins the translation of the named joints of skeleton 2 to their
-    /// neutral pose, so only their rotation follows the ragdoll.
-    ///
-    /// A constraint is never perfectly rigid, so a ragdoll under load
-    /// stretches at the joints and mapping that stretch stretches the mesh
-    /// with it. Locking removes it, at the cost of the drawn skeleton no
-    /// longer being exactly where the simulated one is.
-    ///
-    /// `locked` has one entry per joint of `neutral2`, which must be the same
-    /// model-space neutral pose `initialize` was given. A joint with NO PARENT
-    /// is refused rather than locked: its translation positions the whole
-    /// skeleton, and Jolt would resolve its lock against parent joint -1.
-    ///
-    /// Calls accumulate, and there is no unlock.
+    /// neutral pose, so only their rotation follows the ragdoll — removes
+    /// mesh stretch at the cost of the drawn skeleton not exactly matching
+    /// the simulated one. `locked` has one entry per joint of `neutral2`
+    /// (the same pose `initialize` used); a joint with NO PARENT is
+    /// refused. Calls accumulate; there is no unlock.
     pub fn lockTranslations(
         self: SkeletonMapper,
         neutral2: SkeletonPose,
@@ -355,49 +510,22 @@ pub const SkeletonMapper = struct {
         return c.zjoltSkeletonMapperIsJointTranslationLocked(self.handle, joint2_index);
     }
 
-    /// Pushes `pose1` onto `pose2`: the frame call.
-    ///
-    /// Reads `pose1`'s MODEL-space matrices — the pose `Ragdoll.getPose` just
-    /// filled in, with no conversion in between — and `pose2`'s LOCAL joint
-    /// rotations/translations, the ones `SkeletonPose.setJoints` writes.
-    /// Writes `pose2`'s model-space matrices, which
-    /// `SkeletonPose.calculateJointStates` then turns back into joints.
-    ///
-    /// `pose2`'s local joints are read because the joints of skeleton 2 that
-    /// the ragdoll does not drive have to come from somewhere: they keep
-    /// their own local transform relative to wherever their parent ended up.
-    /// So `pose2` carries the animation and this overwrites the part of it
-    /// the ragdoll owns.
-    ///
-    /// `pose1`'s ROOT OFFSET is copied onto `pose2` as well. Jolt's own map
-    /// does not do that, and leaving it out is the trap it looks like: a
-    /// pose's joint matrices are relative to its root offset, and
-    /// `Ragdoll.getPose` puts the ragdoll's world position in the offset
-    /// rather than in the first matrix, so that a 32-bit matrix never has to
-    /// hold a double-precision world position. A target pose left at its own
-    /// offset draws the character correctly posed, at the origin.
-    ///
-    /// What is actually checked is that every joint index the mapper holds is
-    /// inside both poses. A pose of the wrong skeleton with enough joints
-    /// maps to nonsense rather than being caught.
+    /// Pushes `pose1`'s MODEL-space joint matrices onto `pose2` (combined
+    /// with `pose2`'s own LOCAL joints for anything the ragdoll does not
+    /// drive) and writes `pose2`'s MODEL-space matrices — read back via
+    /// `calculateJointStates`/`getJoints`. Unlike Jolt's own Map, `pose1`'s
+    /// ROOT OFFSET is copied onto `pose2` too (a pose's world position
+    /// lives there, not its matrices).
     pub fn map(self: SkeletonMapper, pose1: SkeletonPose, pose2: SkeletonPose) err.Error!void {
         try err.check(c.zjoltSkeletonMapperMap(self.handle, pose1.handle, pose2.handle));
     }
 
-    /// The other direction: reads `pose2`'s model-space matrices and writes
-    /// `pose1`'s. What drives a ragdoll from animation — sample into `pose2`,
-    /// `calculateJointMatrices`, map back, then `Ragdoll.setPose` or
-    /// `driveToPoseUsingKinematics` with `pose1`.
-    ///
-    /// `pose2`'s root offset travels onto `pose1` too, as in `map`.
-    ///
-    /// Only the joints that matched one-to-one are written; chains and
-    /// unmapped joints are not, because the correspondence they describe does
-    /// not run backwards. Every joint of skeleton 1 normally matches, which is
-    /// the case Jolt assumes — but one that did not keeps whatever matrix
-    /// `pose1` already held, which is uninitialised in a pose nothing has
-    /// written. Compare `mappingCount()` with `pose1.jointCount()` if that
-    /// matters.
+    /// The other direction: reads `pose2`'s MODEL-space matrices, writes
+    /// `pose1`'s — sample animation into `pose2`, `calculateJointMatrices`,
+    /// map back, then `Ragdoll.setPose`/`driveToPoseUsingKinematics` with
+    /// `pose1` (`pose2`'s root offset travels onto `pose1` too). Only
+    /// one-to-one mapped joints are written; an unmapped `pose1` joint
+    /// keeps whatever (possibly uninitialised) matrix it already held.
     pub fn mapReverse(self: SkeletonMapper, pose2: SkeletonPose, pose1: SkeletonPose) err.Error!void {
         try err.check(c.zjoltSkeletonMapperMapReverse(self.handle, pose2.handle, pose1.handle));
     }
@@ -416,12 +544,10 @@ pub const SwingType = c.SwingType;
 
 /// The swing-twist constraint attaching one part to its parent, in WORLD
 /// space — the same space as the parts' `body.position`/`body.rotation`.
-/// This is Jolt's own constraint for humanoid ragdolls, and the only
-/// non-hinge type `Ragdoll.driveToPoseUsingMotors` knows how to drive.
+/// Jolt's own constraint for humanoid ragdolls, and the only non-hinge
+/// type `Ragdoll.driveToPoseUsingMotors` can drive.
 ///
-/// Motor tuning is not exposed: driving uses Jolt's own default
-/// `MotorSettings` (a critically-damped position spring, unlimited torque),
-/// which is enough to reach a target pose.
+/// Motor tuning is not exposed: driving uses Jolt's default `MotorSettings` (critically-damped spring, unlimited torque).
 pub const RagdollConstraintDesc = struct {
     position1: math.RVec3 = math.rvec3_zero,
     twist_axis1: math.Vec3 = .{ .x = 1, .y = 0, .z = 0 },
@@ -523,13 +649,39 @@ pub const RagdollSettings = struct {
         return c.zjoltRagdollSettingsGetRefCount(self.handle);
     }
 
-    /// Assigns `new_skeleton` and builds one part per joint from `parts`, which
-    /// must have exactly `new_skeleton.jointCount()` entries in joint-index
-    /// order. Overwrites whatever `self` held before.
-    ///
-    /// `allocator` is used only for the duration of this call, to build the
-    /// flat C descriptors `to_parent` points into; nothing it allocates is
-    /// kept afterwards.
+    //=========================================================================
+    // Jolt's own object stream
+    //
+    // Same feature as `Scene.saveObjectStream`, on a different registered
+    // type, including the same loss (a part's SHAPE does not survive). `error.Unsupported` unless built with `-Dobject_stream=true`.
+    //=========================================================================
+
+    /// Writes `self` through `stream` in Jolt's own object-stream format.
+    /// `error.IoError` if `stream` reports failure while this runs. @see the
+    /// section comment above for what a part loses on the way through.
+    pub fn saveObjectStream(
+        self: RagdollSettings,
+        format: stream_mod.ObjectStreamFormat,
+        stream: stream_mod.Stream,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollSettingsSaveObjectStream(self.handle, format, &stream));
+    }
+
+    /// Reads settings written by `saveObjectStream`, or by a C++ host of
+    /// vanilla Jolt through `ObjectStreamOut::sWriteObject<RagdollSettings>`
+    /// — either form, sniffed from the stream. Not run through `build`,
+    /// but already carries the described skeleton and parts the same way
+    /// `build` would have; no part has a shape. @see the section comment above.
+    pub fn restoreObjectStream(stream: stream_mod.Stream) err.Error!RagdollSettings {
+        var handle: *c.RagdollSettings = undefined;
+        try err.check(c.zjoltRagdollSettingsRestoreObjectStream(&stream, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// Assigns `new_skeleton` and builds one part per joint from `parts`
+    /// (exactly `new_skeleton.jointCount()` entries, in joint-index order).
+    /// Overwrites whatever `self` held before. `allocator` is used only
+    /// for the duration of this call; nothing it allocates is kept after.
     pub fn build(
         self: RagdollSettings,
         allocator: std.mem.Allocator,
@@ -570,15 +722,12 @@ pub const RagdollSettings = struct {
         return .{ .handle = @constCast(handle) };
     }
 
-    /// Gives each part's constraint a solver priority counting UP toward the
-    /// root, so a joint nearer the root is solved before one nearer a leaf
-    /// and a shoulder under load stops fighting the wrist hanging off it.
-    ///
-    /// Call it after `build`, like `stabilize`: a ragdoll spawned afterwards
-    /// carries the priorities and one spawned before does not.
-    /// `base_priority` is the LOWEST priority used, given to the leaf-most
-    /// constraints; 0 unless the ragdoll's constraints have to sort against
-    /// other constraints in the same system.
+    /// Gives each part's constraint a solver priority counting UP toward
+    /// the root — a joint nearer the root solves before one nearer a
+    /// leaf, so a shoulder stops fighting the wrist hanging off it. Call
+    /// after `build`, like `stabilize`: only a ragdoll spawned afterwards
+    /// carries the priorities. `base_priority` is the LOWEST (leaf-most)
+    /// priority; 0 unless sorting against other constraints in the system.
     pub fn calculateConstraintPriorities(
         self: RagdollSettings,
         base_priority: u32,
@@ -614,14 +763,73 @@ pub const RagdollSettings = struct {
         c.zjoltRagdollSettingsCalculateBodyIndexToConstraintIndex(self.handle);
     }
 
+    /// The constraint index (into `Ragdoll.getConstraint`) attaching body
+    /// index `body_index` (into `Ragdoll.getBodyIds`) to its parent. `null`
+    /// if it has none — the root, or the table has not been built.
+    pub fn constraintIndexForBodyIndex(self: RagdollSettings, body_index: u32) ?u32 {
+        const index = c.zjoltRagdollSettingsGetConstraintIndexForBodyIndex(self.handle, body_index);
+        return if (index < 0) null else @intCast(index);
+    }
+
+    /// Every body index's answer to `constraintIndexForBodyIndex`: -1 where
+    /// that would answer `null`. `out` must have at least the part count
+    /// entries; a shorter one reports `error.BufferTooSmall`.
+    pub fn bodyIndexToConstraintIndex(self: RagdollSettings, out: []i32) err.Error![]i32 {
+        var count: u32 = undefined;
+        try err.check(c.zjoltRagdollSettingsGetBodyIndexToConstraintIndex(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return out[0..count];
+    }
+
+    /// Builds the constraint-index -> body-index-pair table
+    /// `bodyIndicesForConstraintIndex` and `constraintIndexToBodyIdxPair`
+    /// need. Call after `build`, like `calculateBodyIndexToConstraintIndex` —
+    /// the two tables are independent, so building one does not build the
+    /// other.
+    pub fn calculateConstraintIndexToBodyIdxPair(self: RagdollSettings) void {
+        c.zjoltRagdollSettingsCalculateConstraintIndexToBodyIdxPair(self.handle);
+    }
+
+    pub const BodyIndexPair = c.RagdollBodyIndexPair;
+
+    /// A constraint's two body indices, in the same order
+    /// `Ragdoll.getBodyIds` reports them. Fails if `constraint_index` is out
+    /// of range, including before `calculateConstraintIndexToBodyIdxPair`
+    /// has run.
+    pub fn bodyIndicesForConstraintIndex(self: RagdollSettings, constraint_index: u32) err.Error!BodyIndexPair {
+        var out: BodyIndexPair = undefined;
+        try err.check(c.zjoltRagdollSettingsGetBodyIndicesForConstraintIndex(
+            self.handle,
+            constraint_index,
+            &out,
+        ));
+        return out;
+    }
+
+    /// Every constraint index's answer to `bodyIndicesForConstraintIndex`.
+    /// `out` must have at least the constraint count entries; a shorter one
+    /// reports `error.BufferTooSmall`.
+    pub fn constraintIndexToBodyIdxPair(self: RagdollSettings, out: []BodyIndexPair) err.Error![]BodyIndexPair {
+        var count: u32 = undefined;
+        try err.check(c.zjoltRagdollSettingsGetConstraintIndexToBodyIdxPair(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return out[0..count];
+    }
+
     /// Spawns one body per part and one constraint per non-root part, in
-    /// `system` but NOT YET added to its simulation — see
-    /// `Ragdoll.addToPhysicsSystem`. `self` is left untouched and may be
-    /// used again to spawn more ragdolls from the same template.
+    /// `system` but NOT YET added to its simulation (see
+    /// `Ragdoll.addToPhysicsSystem`). `self` is untouched — reusable for more.
     ///
-    /// `collision_group` is the id every spawned body's collision group is
-    /// set to; give ragdolls sharing a `disableParentChildCollisions` filter
-    /// DIFFERENT ones — a filter is only ever consulted within one group id.
+    /// `collision_group`: ragdolls sharing a `disableParentChildCollisions`
+    /// filter need DIFFERENT ids — a filter is consulted within one id only.
     pub fn createRagdoll(
         self: RagdollSettings,
         system: system_mod.PhysicsSystem,
@@ -652,20 +860,11 @@ pub const Ragdoll = struct {
     }
 
     /// Drops one reference. The last one takes the ragdoll back out of its
-    /// physics system first if it is still in it — constraints and bodies
-    /// both, with body locking — and then destroys every body it owns.
+    /// physics system first if still in it (constraints and bodies both,
+    /// with body locking), then destroys every body it owns — `defer
+    /// ragdoll.release()` is the whole teardown either way.
     ///
-    /// So `defer ragdoll.release()` is the whole teardown, whether or not
-    /// `addToPhysicsSystem` was ever called. That is this package's doing
-    /// rather than Jolt's: `~Ragdoll` destroys the bodies where they stand,
-    /// and a `JPH::Ragdoll` does not expose the system it was spawned in for
-    /// anyone to remove them from. The handle keeps it, and asks whether the
-    /// ragdoll's first body is still added before removing anything —
-    /// removing one that was never added is an error in Jolt in its own
-    /// right.
-    ///
-    /// `removeFromPhysicsSystem` remains the call for taking a ragdoll out of
-    /// the simulation while keeping it alive.
+    /// `removeFromPhysicsSystem` removes it while keeping it alive.
     pub fn release(self: Ragdoll) void {
         c.zjoltRagdollRelease(self.handle);
     }
@@ -698,24 +897,11 @@ pub const Ragdoll = struct {
     }
 
     /// Writes the ragdoll's body ids into `out`, indexed by joint — so
-    /// `out[i]` is the body built from skeleton joint `i`.
+    /// `out[i]` is the body built from skeleton joint `i`. `out` must
+    /// have at least `bodyCount()` entries; a shorter one reports
+    /// `error.BufferTooSmall` and writes nothing.
     ///
-    /// This is how a contact or a ray hit gets mapped back to a limb, and how
-    /// `BodyInterface` reaches one part on its own. `out` must have at least
-    /// `bodyCount()` entries; a shorter one reports `error.BufferTooSmall`
-    /// and writes nothing.
-    ///
-    /// The ids stay valid until the ragdoll's last reference drops. They name
-    /// bodies the ragdoll owns — do not destroy one through `BodyInterface`.
-    ///
-    /// These ids are also how a ragdoll gets a constraint that is NOT one of
-    /// the parent-child joints — what closes a kinematic loop: two hands tied
-    /// together, a strap across a chest. Build one with any `Constraint.init*`
-    /// between two of these ids, which offers the whole constraint zoo rather
-    /// than only the swing-twist a part joint is. It is yours, though, not the
-    /// ragdoll's: `addToPhysicsSystem` and `removeFromPhysicsSystem` do not
-    /// move it, `constraintCount` does not count it, and it must be removed
-    /// before the ragdoll's last `release` destroys the bodies under it.
+    /// Ids stay valid until the ragdoll's last reference drops — do not destroy one through `BodyInterface`.
     pub fn getBodyIds(self: Ragdoll, out: []body_mod.BodyId) err.Error![]body_mod.BodyId {
         var count: u32 = undefined;
         try err.check(c.zjoltRagdollGetBodyIds(
@@ -744,32 +930,22 @@ pub const Ragdoll = struct {
         return c.zjoltRagdollGetConstraintCount(self.handle);
     }
 
-    /// One of them, `null` past the end. Borrowed: valid until the ragdoll's
-    /// last reference drops, and the ragdoll owns it — do not `release` it,
-    /// and do not `removeFrom` its system by hand, because
-    /// `removeFromPhysicsSystem` moves the whole ragdoll as one batch and a
-    /// constraint already removed is removed twice. `addRef` it if it has to
-    /// outlive your reference to the ragdoll.
+    /// One of them, `null` past the end. Borrowed, owned by the ragdoll:
+    /// do not `release` or remove it by hand (`removeFromPhysicsSystem`
+    /// moves the whole ragdoll as one batch).
     ///
-    /// Constraints are in joint order, skipping the root — constraint `i`
-    /// attaches the `i`-th non-root joint to its parent.
-    ///
-    /// This is what makes the `Constraint` surface reachable on a ragdoll:
-    /// retuning one joint's motor, disabling a joint, or reading how much
-    /// force a joint is taking to decide a limb comes off. Every ragdoll part
-    /// joint this package builds is a swing-twist constraint.
+    /// Joint-index order, skipping the root: constraint `i` attaches the
+    /// `i`-th non-root joint to its parent. Always a swing-twist constraint.
     pub fn getConstraint(self: Ragdoll, index: u32) ?constraint_mod.Constraint {
         const handle = c.zjoltRagdollGetConstraint(self.handle, index) orelse return null;
         return .{ .handle = handle };
     }
 
-    /// Where the ragdoll is: the world transform of the body built from the
-    /// skeleton's first joint, without reading every part back.
+    /// Where the ragdoll is: the world transform of the body built from
+    /// the skeleton's first joint, without reading every part back.
     ///
-    /// `error.InvalidArgument` for a ragdoll with no parts. When the body lock
-    /// fails instead — the one silent path Jolt keeps here — this reports
-    /// success with a zero position and an identity rotation, because Jolt
-    /// does not say which happened.
+    /// `error.InvalidArgument` for a ragdoll with no parts. If the body
+    /// lock fails, outputs are zeroed/identity but the call still succeeds.
     pub fn rootTransform(self: Ragdoll, lock_bodies: bool) err.Error!struct {
         position: math.RVec3,
         rotation: math.Quat,
@@ -785,16 +961,12 @@ pub const Ragdoll = struct {
         return .{ .position = position, .rotation = rotation };
     }
 
-    /// Moves every part into collision group `group_id`, keeping each part's
-    /// sub-group id and group filter — the id `createRagdoll` was given,
-    /// changed afterwards.
+    /// Moves every part into collision group `group_id` (keeping sub-group
+    /// id and filter), changing what `createRagdoll` was given.
     ///
-    /// Ragdolls spawned from settings that share a
-    /// `disableParentChildCollisions` filter must not hold the same id: a
-    /// filter is only ever consulted within one group id, so sharing one makes
-    /// every part of one ragdoll pass through every part of the other. So this
-    /// is the call for reusing a pooled ragdoll under a fresh id, and the call
-    /// that silently breaks a pool if the fresh id is not fresh.
+    /// Ragdolls sharing a `disableParentChildCollisions` filter must not
+    /// hold the same id: a filter is consulted only within one group id,
+    /// so sharing lets every part of one ragdoll pass through the other's.
     pub fn setGroupId(self: Ragdoll, group_id: u32, lock_bodies: bool) void {
         c.zjoltRagdollSetGroupId(self.handle, group_id, lock_bodies);
     }
@@ -808,7 +980,7 @@ pub const Ragdoll = struct {
     }
 
     /// Clears warm-start impulses on every constraint. Call after `setPose`
-    /// so the next step does not solve toward where the bodies used to be.
+    /// so the next step does not solve toward the bodies' prior position.
     pub fn resetWarmStart(self: Ragdoll) void {
         c.zjoltRagdollResetWarmStart(self.handle);
     }

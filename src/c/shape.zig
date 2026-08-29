@@ -12,6 +12,7 @@ const transformed = @import("transformed.zig");
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
 pub const AABox = core.AABox;
+pub const Mat44 = core.Mat44;
 pub const MassProperties = core.MassProperties;
 pub const PhysicsMaterial = core.PhysicsMaterial;
 pub const Quat = core.Quat;
@@ -25,6 +26,15 @@ pub const TransformedShape = transformed.TransformedShape;
 
 /// Bytes `zjoltShapeSave` prepends to Jolt's own payload.
 pub const shape_header_size: usize = 32;
+
+/// Bytes `zjoltShapeSaveStream` prepends to Jolt's own payload.
+pub const shape_stream_header_size: usize = 12;
+
+/// How hard mesh building works to balance its tree.
+pub const MeshBuildQuality = enum(c_int) {
+    favor_runtime_performance = 0,
+    favor_build_speed = 1,
+};
 
 pub const ShapeStats = extern struct {
     size_bytes: u64,
@@ -45,9 +55,9 @@ pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*cons
 
 pub extern fn zjoltShapeCreateCapsule(half_height_of_cylinder: f32, radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
 
-pub extern fn zjoltShapeCreateConvexHull(points: [*]const Vec3, num_points: u32, max_convex_radius: f32, hull_tolerance: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
+pub extern fn zjoltShapeCreateConvexHull(points: [*]const Vec3, num_points: u32, max_convex_radius: f32, hull_tolerance: f32, max_error_convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
 
-pub extern fn zjoltShapeCreateMesh(vertices: [*]const Vec3, num_vertices: u32, indices: [*]const u32, num_triangles: u32, triangle_materials: ?[*]const u32, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, max_triangles_per_leaf: u32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateMesh(vertices: [*]const Vec3, num_vertices: u32, indices: [*]const u32, num_triangles: u32, triangle_materials: ?[*]const u32, triangle_user_data: ?[*]const u32, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, max_triangles_per_leaf: u32, active_edge_cos_threshold_angle: f32, build_quality: MeshBuildQuality, out: **Shape) Result;
 
 pub extern fn zjoltShapeCreateScaled(inner: *const Shape, scale: *const Vec3, out: **Shape) Result;
 
@@ -55,11 +65,17 @@ pub extern fn zjoltShapeCreateRotatedTranslated(inner: *const Shape, translation
 
 pub extern fn zjoltShapeCreateOffsetCenterOfMass(inner: *const Shape, offset: *const Vec3, out: **Shape) Result;
 
+pub extern fn zjoltShapeGetInnerShape(shape: *const Shape, out: **const Shape) Result;
+
 pub extern fn zjoltShapeAddRef(shape: *const Shape) void;
 
 pub extern fn zjoltShapeRelease(shape: *const Shape) void;
 
 pub extern fn zjoltShapeGetRefCount(shape: *const Shape) u32;
+
+pub extern fn zjoltShapeGetUserData(shape: *const Shape) u64;
+
+pub extern fn zjoltShapeSetUserData(shape: *Shape, user_data: u64) void;
 
 pub extern fn zjoltShapeGetSubType(shape: *const Shape) ShapeSubType;
 
@@ -78,6 +94,10 @@ pub extern fn zjoltShapeGetStats(shape: *const Shape, out: *ShapeStats) void;
 //===----------------------------------------------------------------------===//
 
 pub extern fn zjoltShapeGetInnerRadius(shape: *const Shape) f32;
+
+pub extern fn zjoltShapeGetDensity(shape: *const Shape, out_density: *f32) Result;
+
+pub extern fn zjoltShapeSetDensity(shape: *Shape, density: f32) Result;
 
 pub extern fn zjoltShapeGetRadius(shape: *const Shape, out_radius: *f32) Result;
 
@@ -110,9 +130,54 @@ pub extern fn zjoltShapeGetPlanes(shape: *const Shape, out_planes: ?[*]Plane, ca
 
 pub extern fn zjoltShapeGetPlane(shape: *const Shape, out_plane: *Plane, out_half_extent: *f32) Result;
 
+/// How `zjoltShapeGetSupportFunction` folds in a convex primitive's
+/// rounding radius. Mirrors `ffi/zjolt_shape.h`'s `ZJoltShapeSupportMode`.
+pub const ShapeSupportMode = enum(c_int) {
+    exclude_convex_radius = 0,
+    include_convex_radius = 1,
+    default = 2,
+};
+
+/// Scratch space `zjoltShapeGetSupportFunction` places its support object
+/// into. Matches `ConvexShape::SupportBuffer` byte for byte; never read
+/// from Zig.
+pub const ShapeSupportBuffer = extern struct {
+    data: [4160]u8 align(16) = undefined,
+};
+
+pub const ShapeSupportFunction = opaque {};
+
+pub extern fn zjoltShapeGetSupportFunction(shape: *const Shape, mode: ShapeSupportMode, buffer: *ShapeSupportBuffer, scale: ?*const Vec3, out: **const ShapeSupportFunction) Result;
+
+pub extern fn zjoltShapeSupportFunctionGetSupport(support: *const ShapeSupportFunction, direction: *const Vec3, out: *Vec3) void;
+
+pub extern fn zjoltShapeSupportFunctionGetConvexRadius(support: *const ShapeSupportFunction) f32;
+
+pub extern fn zjoltShapeGetSubmergedVolume(shape: *const Shape, transform: *const Mat44, scale: ?*const Vec3, surface: *const Plane, out_total_volume: *f32, out_submerged_volume: *f32, out_center_of_buoyancy: *Vec3) Result;
+
+pub const PolyhedronSubmergedVolumeCalculator = opaque {};
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorCreate(transform: *const Mat44, points: [*]const Vec3, num_points: u32, surface: *const Plane, out: **PolyhedronSubmergedVolumeCalculator) Result;
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorDestroy(calc: ?*PolyhedronSubmergedVolumeCalculator) void;
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorAreAllAbove(calc: ?*const PolyhedronSubmergedVolumeCalculator) bool;
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorAreAllBelow(calc: ?*const PolyhedronSubmergedVolumeCalculator) bool;
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorGetReferencePointIdx(calc: ?*const PolyhedronSubmergedVolumeCalculator) u32;
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorAddFace(calc: *PolyhedronSubmergedVolumeCalculator, idx1: u32, idx2: u32, idx3: u32) Result;
+
+pub extern fn zjoltPolyhedronSubmergedVolumeCalculatorGetResult(calc: ?*const PolyhedronSubmergedVolumeCalculator, out_submerged_volume: *f32, out_center_of_buoyancy: *Vec3) void;
+
 pub extern fn zjoltShapeSave(shape: *const Shape, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 
+pub extern fn zjoltShapeSaveStream(shape: *const Shape, stream: *const core.Stream) Result;
+
 pub extern fn zjoltShapeRestore(data: [*]const u8, size: usize, out: **Shape) Result;
+
+pub extern fn zjoltShapeRestoreStream(stream: *const core.Stream, out: **Shape) Result;
 
 pub extern fn zjoltShapeCreateCylinder(half_height: f32, radius: f32, convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
 
@@ -126,7 +191,7 @@ pub extern fn zjoltShapeCreatePlane(normal: *const Vec3, constant: f32, half_ext
 
 pub extern fn zjoltShapeCreateEmpty(center_of_mass: ?*const Vec3, out: **Shape) Result;
 
-pub extern fn zjoltShapeCreateHeightField(samples: [*]const f32, sample_count: u32, offset: ?*const Vec3, scale: ?*const Vec3, material_indices: ?[*]const u8, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, block_size: u32, bits_per_sample: u32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateHeightField(samples: [*]const f32, sample_count: u32, offset: ?*const Vec3, scale: ?*const Vec3, material_indices: ?[*]const u8, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, block_size: u32, bits_per_sample: u32, min_height_value: f32, max_height_value: f32, active_edge_cos_threshold_angle: f32, out: **Shape) Result;
 
 pub extern fn zjoltShapeCreateStaticCompound(children: [*]const CompoundChild, num_children: u32, out: **Shape) Result;
 
@@ -136,15 +201,43 @@ pub extern fn zjoltShapeCompoundGetNumChildren(shape: *const Shape) u32;
 
 pub extern fn zjoltShapeCompoundGetChildUserData(shape: *const Shape, index: u32) u32;
 
+pub extern fn zjoltShapeCompoundSetChildUserData(shape: *Shape, index: u32, user_data: u32) Result;
+
+pub const SubShapeIdCreator = opaque {};
+
+pub extern fn zjoltSubShapeIdCreatorCreate(out: **SubShapeIdCreator) Result;
+
+pub extern fn zjoltSubShapeIdCreatorDestroy(creator: ?*SubShapeIdCreator) void;
+
+pub extern fn zjoltSubShapeIdCreatorPushID(creator: *SubShapeIdCreator, value: u32, bits: u32) Result;
+
+pub extern fn zjoltSubShapeIdCreatorGetID(creator: *const SubShapeIdCreator) SubShapeId;
+
+pub extern fn zjoltSubShapeIdCreatorGetNumBitsWritten(creator: *const SubShapeIdCreator) u32;
+
+pub extern fn zjoltSubShapeIdPopID(id: SubShapeId, bits: u32, out_value: *u32, out_remainder: *SubShapeId) Result;
+
+pub extern fn zjoltShapeGetSubShapeIDFromIndex(shape: *const Shape, index: u32, out: *SubShapeId) Result;
+
+pub extern fn zjoltShapeGetSubShapeIDFromIndexInto(shape: *const Shape, index: u32, creator: *SubShapeIdCreator) Result;
+
+pub extern fn zjoltShapeGetSubShapeIndexFromID(shape: *const Shape, sub_shape_id: SubShapeId, out_index: *u32, out_remainder: *SubShapeId) Result;
+
+pub extern fn zjoltShapeGetIntersectingSubShapes(shape: *const Shape, box: *const AABox, out_indices: ?[*]u32, capacity: u32, out_count: *u32) Result;
+
 pub extern fn zjoltShapeMutableCompoundAddChild(shape: *Shape, child: *const CompoundChild, out_index: *u32) Result;
 
 pub extern fn zjoltShapeMutableCompoundRemoveChild(shape: *Shape, index: u32) Result;
 
 pub extern fn zjoltShapeMutableCompoundMoveChild(shape: *Shape, index: u32, position: *const Vec3, rotation: ?*const Quat) Result;
 
+pub extern fn zjoltShapeMutableCompoundReplaceChild(shape: *Shape, index: u32, new_shape: *const Shape, position: *const Vec3, rotation: ?*const Quat) Result;
+
 pub extern fn zjoltShapeMutableCompoundAdjustCenterOfMass(shape: *Shape) Result;
 
 pub extern fn zjoltShapeGetMaterial(shape: *const Shape, sub_shape_id: SubShapeId) ?*const PhysicsMaterial;
+
+pub extern fn zjoltShapeSetMaterial(shape: *Shape, material: ?*const PhysicsMaterial) Result;
 
 /// Vertices `zjoltShapeGetSupportingFace` can report in one call.
 pub const shape_max_supporting_face_vertices: u32 = 32;
@@ -160,11 +253,15 @@ pub const ShapeTrianglesContext = extern struct {
 
 pub extern fn zjoltShapeGetSubShapeIDBits(shape: *const Shape) u32;
 
+pub extern fn zjoltShapeIsSubShapeIDValid(shape: *const Shape, sub_shape_id: SubShapeId) bool;
+
 pub extern fn zjoltShapeGetSurfaceNormal(shape: *const Shape, sub_shape_id: SubShapeId, local_surface_position: *const Vec3, out_normal: *Vec3) void;
 
 pub extern fn zjoltShapeGetSupportingFace(shape: *const Shape, sub_shape_id: SubShapeId, direction: *const Vec3, scale: ?*const Vec3, position: *const Vec3, rotation: *const Quat, out_vertices: [*]Vec3, out_count: *u32) Result;
 
 pub extern fn zjoltShapeGetSubShapeTransformedShape(shape: *const Shape, sub_shape_id: SubShapeId, position: ?*const Vec3, rotation: ?*const Quat, scale: ?*const Vec3, out: **TransformedShape, out_remainder: ?*SubShapeId) Result;
+
+pub extern fn zjoltShapeGetLeafShape(shape: *const Shape, sub_shape_id: SubShapeId, out_remainder: ?*SubShapeId) ?*const Shape;
 
 pub extern fn zjoltShapeScaleShape(shape: *const Shape, scale: *const Vec3, out: **Shape) Result;
 
@@ -199,3 +296,5 @@ pub extern fn zjoltShapeHeightFieldProjectOntoSurface(shape: *const Shape, local
 pub extern fn zjoltShapeHeightFieldGetSubShapeCoordinates(shape: *const Shape, sub_shape_id: SubShapeId, out_x: *u32, out_y: *u32, out_triangle_index: *u32) Result;
 
 pub extern fn zjoltShapeHeightFieldGetHeights(shape: *const Shape, x: u32, y: u32, size_x: u32, size_y: u32, out_heights: [*]f32, stride: u32) Result;
+
+pub extern fn zjoltShapeHeightFieldSetHeights(shape: *Shape, x: u32, y: u32, size_x: u32, size_y: u32, heights: [*]const f32, stride: u32, active_edge_cos_threshold_angle: f32) Result;

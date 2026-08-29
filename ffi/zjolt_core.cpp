@@ -9,9 +9,14 @@
 #include "zjolt_internal.h"
 
 #include <Jolt/Core/Factory.h>
+#include <Jolt/Core/FPFlushDenormals.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/RegisterTypes.h>
+
+#ifdef JPH_EXTERNAL_PROFILE
+#include <Jolt/Core/Profiler.h>
+#endif  // JPH_EXTERNAL_PROFILE
 
 #include <atomic>
 #include <cstdarg>
@@ -22,12 +27,7 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Per-thread error detail
 //
-// Jolt reports shape construction and deserialisation failures as strings. A
-// flat result enum would throw them away, and threading an out-parameter
-// through every constructor would make the common success path pay for the
-// rare failure. A thread-local buffer keeps the detail reachable without
-// either cost, and being per-thread means a cook running on a worker cannot
-// clobber the message another thread is about to read.
+// Jolt reports shape construction/deserialisation failures as strings; a flat result enum would throw them away, and an out-parameter on every constructor would make the common success path pay for the rare failure. Thread-local so a cook running on a worker cannot clobber the message another thread is about to read.
 //===----------------------------------------------------------------------===//
 
 constexpr size_t kErrorCapacity = 256;
@@ -47,9 +47,7 @@ void CopyMessage(const char *message) {
 //===----------------------------------------------------------------------===//
 // Allocator seam
 //
-// Jolt routes every allocation through five global function pointers. The host
-// table is held here and the five thunks below add the `user` argument Jolt's
-// signatures have no room for.
+// Jolt routes every allocation through five global function pointers; the host table is held here, and the five thunks below add the `user` argument Jolt's signatures have no room for.
 //===----------------------------------------------------------------------===//
 
 ZJoltAllocator g_allocator = {};
@@ -81,15 +79,12 @@ JPH::TraceFunction g_saved_trace = nullptr;
 JPH::AssertFailedFunction g_saved_assert_failed = nullptr;
 #endif
 
-/// Jolt's trace hook is varargs. Formatting here rather than in the ABI is
-/// what lets the C callback be an ordinary two-argument function that any
-/// language can implement.
+/// Jolt's trace hook is varargs; formatting here lets the C callback be an
+/// ordinary two-argument function any language can implement.
 ///
-/// This is installed unconditionally, even when the host supplies no callback,
-/// and that is not tidiness. Jolt's OWN default is `DummyTrace`, whose entire
-/// body is `JPH_ASSERT(false)` — so in a build with asserts on, the first time
-/// Jolt has anything to say it kills the process instead of saying it. Falling
-/// back to stderr turns that into a line of text.
+/// Installed unconditionally, even with no host callback: Jolt's OWN
+/// default, `DummyTrace`, is `JPH_ASSERT(false)`, so with asserts on the
+/// first trace would kill the process. Falling back to stderr instead.
 void TraceThunk(const char *format, ...) {
   char buffer[1024];
   va_list args;
@@ -131,6 +126,86 @@ void DestroyThreadPool(JPH::JobSystem *impl) {
 
 void DestroySingleThreaded(JPH::JobSystem *impl) {
   zjolt::Delete(static_cast<JPH::JobSystemSingleThreaded *>(impl));
+}
+
+//===----------------------------------------------------------------------===//
+// Host job system
+//
+// JobSystem::Job is `protected`, since Jolt expects only a JobSystem override to touch one. HostJobSystem below IS such a subclass; the free functions later (zjoltJobRun and friends) are not, and borrow the access through JobTypeAccess purely to name the type — every member they call through it (Execute, AddRef, Release) is itself public on Job.
+//===----------------------------------------------------------------------===//
+
+/// Runs Jolt's step on a host's own task graph instead of spawning threads
+/// of its own. JobSystemWithBarrier — the base JobSystemThreadPool also
+/// builds on — supplies every barrier virtual (CreateBarrier, WaitForJobs,
+/// Barrier::AddJob, Job::SetBarrier, OnJobFinished, ...), so this only
+/// implements the five answering "how many jobs at once" and "where does
+/// this one run": GetMaxConcurrency, CreateJob, QueueJob, QueueJobs, FreeJob.
+class HostJobSystem final : public JPH::JobSystemWithBarrier {
+ public:
+  HostJobSystem(const ZJoltHostJobSystem &host, JPH::uint max_barriers)
+      : JPH::JobSystemWithBarrier(max_barriers), host_(host) {}
+
+  int GetMaxConcurrency() const override {
+    return static_cast<int>(host_.get_max_concurrency(host_.user));
+  }
+
+  JobHandle CreateJob(const char *inJobName, JPH::ColorArg inColor,
+                      const JobFunction &inJobFunction,
+                      JPH::uint32 inNumDependencies) override {
+    // Job's own constructor and destructor are public; only the TYPE is
+    // protected, and this class has access to it as a JobSystem subclass.
+    // JPH_OVERRIDE_NEW_DELETE on Job routes this through JPH::Allocate, so a
+    // host allocator installed at zjoltInit sees this too.
+    Job *job = new Job(inJobName, inColor, this, inJobFunction, inNumDependencies);
+    JobHandle handle(job);
+    // Mirrors JobSystemThreadPool::CreateJob: a job with no dependencies is
+    // ready the instant it exists, and nothing else will ever queue it.
+    if (inNumDependencies == 0) QueueJob(job);
+    return handle;
+  }
+
+ protected:
+  void QueueJob(Job *inJob) override {
+    // Jolt's own contract (JobSystem.h): the job is guaranteed alive for the
+    // duration of this call only. The reference taken here is what the host
+    // gives back through zjoltJobRelease once it is done with it — exactly
+    // the same bookkeeping JobSystemThreadPool::QueueJobInternal does before
+    // handing a job to its own queue.
+    inJob->AddRef();
+    host_.queue_job(host_.user, reinterpret_cast<ZJoltJob *>(inJob));
+  }
+
+  void QueueJobs(Job **inJobs, JPH::uint inNumJobs) override {
+    for (JPH::uint i = 0; i < inNumJobs; ++i) inJobs[i]->AddRef();
+    // A ZJoltJob* is a bare reinterpret_cast tag over Job* (see the note on
+    // ZJoltShape in zjolt_internal.h for why that conversion is sound), so
+    // the whole array converts at once rather than element by element.
+    host_.queue_jobs(host_.user, reinterpret_cast<ZJoltJob *const *>(inJobs),
+                     static_cast<uint32_t>(inNumJobs));
+  }
+
+  void FreeJob(Job *inJob) override { delete inJob; }
+
+ private:
+  ZJoltHostJobSystem host_;
+};
+
+void DestroyHost(JPH::JobSystem *impl) {
+  zjolt::Delete(static_cast<HostJobSystem *>(impl));
+}
+
+/// See the section comment above: this borrows a JobSystem subclass's access
+/// to its own protected nested Job type, purely to name it from ordinary
+/// code. Never instantiated — JobSystem is abstract, and nothing here needs
+/// an instance, only the name.
+class JobTypeAccess : private JPH::JobSystem {
+ public:
+  using Job = JPH::JobSystem::Job;
+};
+using HostJob = JobTypeAccess::Job;
+
+inline HostJob *ToJoltJob(ZJoltJob *job) {
+  return reinterpret_cast<HostJob *>(job);
 }
 
 }  // namespace
@@ -367,9 +442,118 @@ ZJoltResult zjoltJobSystemCreateThreadPool(uint32_t max_jobs,
 
   handle->impl = pool;
   handle->destroy = DestroyThreadPool;
+  handle->kind = ZJoltJobSystemKind::ThreadPool;
   zjolt::HandleCreated();
   *out = handle;
   return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltJobSystemCreateThreadPoolWithHooks(
+    uint32_t max_jobs, uint32_t max_barriers, int32_t num_threads,
+    ZJoltThreadHookFn thread_init, ZJoltThreadHookFn thread_exit, void *user,
+    ZJoltJobSystem **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (max_jobs == 0 || max_barriers == 0) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "max_jobs and max_barriers must be positive");
+  }
+
+  ZJoltJobSystem *handle = zjolt::New<ZJoltJobSystem>();
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  // Default-constructed and left un-started: Init below is what launches the
+  // worker threads, and SetThreadInitFunction/SetThreadExitFunction only take
+  // effect on threads that start AFTER they are set — see the declaration's
+  // comment in zjolt_core.h for why this cannot be a setter on an already-
+  // created pool.
+  JPH::JobSystemThreadPool *pool = zjolt::New<JPH::JobSystemThreadPool>();
+  if (pool == nullptr) {
+    zjolt::Delete(handle);
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
+  }
+
+  if (thread_init != nullptr) {
+    pool->SetThreadInitFunction(
+        [thread_init, user](int index) { thread_init(user, static_cast<int32_t>(index)); });
+  }
+  if (thread_exit != nullptr) {
+    pool->SetThreadExitFunction(
+        [thread_exit, user](int index) { thread_exit(user, static_cast<int32_t>(index)); });
+  }
+  pool->Init(static_cast<JPH::uint>(max_jobs), static_cast<JPH::uint>(max_barriers),
+            static_cast<int>(num_threads));
+
+  handle->impl = pool;
+  handle->destroy = DestroyThreadPool;
+  handle->kind = ZJoltJobSystemKind::ThreadPool;
+  zjolt::HandleCreated();
+  *out = handle;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltJobSystemSetNumThreads(ZJoltJobSystem *job_system,
+                                        int32_t num_threads) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(job_system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (job_system->kind != ZJoltJobSystemKind::ThreadPool) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "zjoltJobSystemSetNumThreads only applies to a job system created by "
+        "zjoltJobSystemCreateThreadPool or zjoltJobSystemCreateThreadPoolWithHooks");
+  }
+  static_cast<JPH::JobSystemThreadPool *>(job_system->impl)
+      ->SetNumThreads(static_cast<int>(num_threads));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltJobSystemCreateHost(const ZJoltHostJobSystem *host,
+                                     uint32_t max_barriers,
+                                     ZJoltJobSystem **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(host, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (host->get_max_concurrency == nullptr || host->queue_job == nullptr ||
+      host->queue_jobs == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "a host job system needs get_max_concurrency, "
+                           "queue_job and queue_jobs");
+  }
+  if (max_barriers == 0) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "max_barriers must be positive");
+  }
+
+  ZJoltJobSystem *handle = zjolt::New<ZJoltJobSystem>();
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+  HostJobSystem *impl =
+      zjolt::New<HostJobSystem>(*host, static_cast<JPH::uint>(max_barriers));
+  if (impl == nullptr) {
+    zjolt::Delete(handle);
+    return ZJOLT_RESULT_OUT_OF_MEMORY;
+  }
+
+  handle->impl = impl;
+  handle->destroy = DestroyHost;
+  handle->kind = ZJoltJobSystemKind::Host;
+  zjolt::HandleCreated();
+  *out = handle;
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltJobRun(ZJoltJob *job) {
+  if (job == nullptr) return;
+  ToJoltJob(job)->Execute();
+}
+
+void zjoltJobAddRef(ZJoltJob *job) {
+  if (job == nullptr) return;
+  ToJoltJob(job)->AddRef();
+}
+
+void zjoltJobRelease(ZJoltJob *job) {
+  if (job == nullptr) return;
+  ToJoltJob(job)->Release();
 }
 
 ZJoltResult zjoltJobSystemCreateSingleThreaded(uint32_t max_jobs,
@@ -393,6 +577,7 @@ ZJoltResult zjoltJobSystemCreateSingleThreaded(uint32_t max_jobs,
 
   handle->impl = single;
   handle->destroy = DestroySingleThreaded;
+  handle->kind = ZJoltJobSystemKind::SingleThreaded;
   zjolt::HandleCreated();
   *out = handle;
   return ZJOLT_RESULT_OK;
@@ -408,6 +593,148 @@ void zjoltJobSystemDestroy(ZJoltJobSystem *job_system) {
 uint32_t zjoltJobSystemGetMaxConcurrency(const ZJoltJobSystem *job_system) {
   if (job_system == nullptr) return 0;
   return static_cast<uint32_t>(job_system->impl->GetMaxConcurrency());
+}
+
+//===----------------------------------------------------------------------===//
+// Factory
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+void FillRttiInfo(const JPH::RTTI *rtti, ZJoltRttiInfo *out) {
+  if (rtti == nullptr) {
+    *out = ZJoltRttiInfo{};
+    return;
+  }
+  out->name = rtti->GetName();
+  out->hash = rtti->GetHash();
+  out->size = static_cast<int32_t>(rtti->GetSize());
+  out->is_abstract = rtti->IsAbstract();
+}
+
+}  // namespace
+
+void zjoltFactoryFind(const char *name, ZJoltRttiInfo *out) {
+  if (out == nullptr) return;
+  *out = ZJoltRttiInfo{};
+  if (name == nullptr || JPH::Factory::sInstance == nullptr) return;
+  FillRttiInfo(JPH::Factory::sInstance->Find(name), out);
+}
+
+void zjoltFactoryFindByHash(uint32_t hash, ZJoltRttiInfo *out) {
+  if (out == nullptr) return;
+  *out = ZJoltRttiInfo{};
+  if (JPH::Factory::sInstance == nullptr) return;
+  FillRttiInfo(JPH::Factory::sInstance->Find(static_cast<JPH::uint32>(hash)), out);
+}
+
+ZJoltResult zjoltFactoryGetAllClasses(ZJoltRttiInfo *out, uint32_t capacity,
+                                      uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (JPH::Factory::sInstance == nullptr) {
+    *out_count = 0;
+    return ZJOLT_RESULT_OK;
+  }
+
+  const JPH::Array<const JPH::RTTI *> classes =
+      JPH::Factory::sInstance->GetAllClasses();
+  const uint32_t count = static_cast<uint32_t>(classes.size());
+  *out_count = count;
+  if (out == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  for (uint32_t i = 0; i < count; ++i) FillRttiInfo(classes[i], &out[i]);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Floating-point control word
+//
+// FPFlushDenormals.h stubs the guard to an empty, trivially
+// constructible/destructible class on a target with no control word (WASM,
+// RISC-V, PPC, LoongArch), so this needs no platform guard of its own.
+//===----------------------------------------------------------------------===//
+
+static_assert(sizeof(JPH::FPFlushDenormals) <= sizeof(ZJoltFPControlWordState),
+              "ZJoltFPControlWordState must be at least as large as JPH::FPFlushDenormals");
+static_assert(alignof(ZJoltFPControlWordState) >= alignof(JPH::FPFlushDenormals),
+              "ZJoltFPControlWordState must be at least as aligned as JPH::FPFlushDenormals");
+
+void zjoltFPFlushDenormalsEnter(ZJoltFPControlWordState *out) {
+  if (out == nullptr) return;
+  new (out) JPH::FPFlushDenormals();
+}
+
+void zjoltFPFlushDenormalsLeave(ZJoltFPControlWordState *state) {
+  if (state == nullptr) return;
+  reinterpret_cast<JPH::FPFlushDenormals *>(state)->~FPFlushDenormals();
+}
+
+//===----------------------------------------------------------------------===//
+// External profiler bridge
+//
+// JPH::ExternalProfileMeasurement is declared by Jolt only under
+// JPH_EXTERNAL_PROFILE, with its constructor/destructor left undefined for a
+// statically-linked build (Profiler.h's own comment) — zjolt is always
+// statically linked into this library, so these definitions are what makes
+// the type link at all when the macro is on.
+//===----------------------------------------------------------------------===//
+
+#ifdef JPH_EXTERNAL_PROFILE
+
+namespace {
+ZJoltExternalProfilerStartFn g_external_profiler_start = nullptr;
+ZJoltExternalProfilerEndFn g_external_profiler_end = nullptr;
+void *g_external_profiler_user = nullptr;
+}  // namespace
+
+JPH_NAMESPACE_BEGIN
+
+ExternalProfileMeasurement::ExternalProfileMeasurement(const char *inName, uint32 inColor) {
+  std::memset(mUserData, 0, sizeof(mUserData));
+  if (g_external_profiler_start != nullptr) {
+    g_external_profiler_start(g_external_profiler_user, inName, inColor, mUserData);
+  }
+}
+
+ExternalProfileMeasurement::~ExternalProfileMeasurement() {
+  if (g_external_profiler_end != nullptr) {
+    g_external_profiler_end(g_external_profiler_user, mUserData);
+  }
+}
+
+JPH_NAMESPACE_END
+
+#endif  // JPH_EXTERNAL_PROFILE
+
+ZJoltResult zjoltExternalProfilerSetHooks(ZJoltExternalProfilerStartFn start,
+                                          ZJoltExternalProfilerEndFn end,
+                                          void *user) {
+  ZJOLT_ENTER();
+#ifdef JPH_EXTERNAL_PROFILE
+  if (start == nullptr || end == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "zjoltExternalProfilerSetHooks requires both hooks");
+  }
+  g_external_profiler_start = start;
+  g_external_profiler_end = end;
+  g_external_profiler_user = user;
+  return ZJOLT_RESULT_OK;
+#else
+  (void)start;
+  (void)end;
+  (void)user;
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif  // JPH_EXTERNAL_PROFILE
+}
+
+void zjoltExternalProfilerClearHooks(void) {
+#ifdef JPH_EXTERNAL_PROFILE
+  g_external_profiler_start = nullptr;
+  g_external_profiler_end = nullptr;
+  g_external_profiler_user = nullptr;
+#endif  // JPH_EXTERNAL_PROFILE
 }
 
 }  // extern "C"

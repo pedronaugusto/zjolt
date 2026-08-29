@@ -43,6 +43,13 @@ typedef struct ZJoltBodyDesc {
   ZJoltOverrideMassProperties override_mass_properties;
   /// Used when override_mass_properties is CALCULATE_INERTIA.
   float mass;
+  /// Used when override_mass_properties is MASS_AND_INERTIA_PROVIDED, in
+  /// place of both `mass` and the shape's own computed inertia. `inertia` is
+  /// a direct (not inverse) tensor, the same convention
+  /// zjoltShapeGetMassProperties reads out in — decomposed into principal
+  /// axes at construction, so a non-diagonal tensor round-trips to an
+  /// equivalent one rather than byte-for-byte.
+  ZJoltMassProperties mass_properties_override;
   /// Lets a static body be switched to kinematic or dynamic later.
   bool allow_dynamic_or_kinematic;
   bool is_sensor;
@@ -72,17 +79,12 @@ ZJOLT_API ZJoltResult zjoltBodyCreateAndAdd(ZJoltPhysicsSystem *system,
                                             ZJoltActivation activation,
                                             ZJoltBodyId *out);
 
-/// As zjoltBodyCreate, but the body takes the id the caller names instead of
-/// the next one Jolt would assign — the id deterministic lockstep networking
-/// needs a body to carry identically on every peer.
-///
-/// `id` must not be ZJOLT_BODY_ID_INVALID, must not already name a live body,
-/// and must not set bit 31: that bit is reserved for the broad phase's own
-/// bookkeeping, and Jolt's own id constructor asserts on it rather than
-/// reporting it. An id round-tripped from zjoltBodyGetId or zjoltBodyCreate's
-/// own `out` always satisfies this; one built by hand from an arbitrary
-/// integer might not, which is why this checks rather than trusting the
-/// caller. A violation of any of the three is ZJOLT_RESULT_INVALID_ARGUMENT.
+/// As zjoltBodyCreate, but the body takes the id the caller names instead
+/// of the next one Jolt would assign — for deterministic lockstep
+/// networking. `id` must not be ZJOLT_BODY_ID_INVALID, must not already
+/// name a live body, and must not set bit 31 (reserved for the broad
+/// phase). An id round-tripped from zjoltBodyGetId or zjoltBodyCreate's
+/// own `out` always satisfies this; a violation is ZJOLT_RESULT_INVALID_ARGUMENT.
 ZJOLT_API ZJoltResult zjoltBodyCreateWithId(ZJoltPhysicsSystem *system,
                                             const ZJoltBodyDesc *desc,
                                             ZJoltBodyId id, ZJoltBodyId *out);
@@ -93,6 +95,14 @@ ZJOLT_API ZJoltResult zjoltBodyCreateAndAddWithId(ZJoltPhysicsSystem *system,
                                                   ZJoltBodyId id,
                                                   ZJoltActivation activation,
                                                   ZJoltBodyId *out);
+
+/// Overwrites `body`'s state from `desc`, as though it had just been created
+/// with it — Body::ApplyBodyCreationSettings. `body` must not currently be
+/// added to `system`: ZJOLT_RESULT_INVALID_ARGUMENT if it is, or if `desc`
+/// implies motion properties this body was created without (STATIC with
+/// allow_dynamic_or_kinematic false cannot gain any here).
+ZJOLT_API ZJoltResult zjoltBodyApplyBodyCreationSettings(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltBodyDesc *desc);
 
 /// Removes the body if it is still added, then destroys it. The id becomes
 /// stale; further calls with it report ZJOLT_RESULT_BODY_NOT_FOUND rather than
@@ -129,6 +139,14 @@ typedef enum ZJoltBodyType {
 ZJOLT_API ZJoltBodyType zjoltBodyGetBodyType(const ZJoltPhysicsSystem *system,
                                              ZJoltBodyId body);
 
+/// Isolates the 8-bit generation counter a ZJoltBodyId packs into bits
+/// [23:30] (bit 31 is the broad phase's reserved bit; bits [0:22] are the
+/// body index). A slot reused after its occupant was destroyed gets the
+/// next sequence number, distinguishing two ids that share an index.
+///
+/// Pure bit extraction: no ZJoltPhysicsSystem needed, live or not.
+ZJOLT_API uint8_t zjoltBodyIdGetSequenceNumber(ZJoltBodyId id);
+
 ZJOLT_API void zjoltBodySetMotionType(ZJoltPhysicsSystem *system,
                                       ZJoltBodyId body, ZJoltMotionType type,
                                       ZJoltActivation activation);
@@ -160,45 +178,157 @@ ZJOLT_API void zjoltBodyGetCenterOfMassPosition(
 /// The body's world transform: the rotation and translation that place the
 /// SHAPE's origin, column-major with the translation in the fourth column.
 ///
-/// Identity when `system` is NULL or the body lock fails. That is Jolt's own
-/// answer rather than one this binding invented — BodyInterface::
-/// GetWorldTransform returns RMat44::sIdentity() on a failed lock
-/// (BodyInterface.cpp:535) — so a stale id and a body sitting unrotated at the
-/// origin read the same. Ask zjoltBodyIsAdded if the difference matters.
+/// Identity when `system` is NULL or the body lock fails (Jolt's own
+/// default) — a stale id and a body sitting unrotated at the origin read
+/// the same. Ask zjoltBodyIsAdded if the difference matters.
 ZJOLT_API void zjoltBodyGetWorldTransform(const ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body, ZJoltRMat44 *out);
 
-/// As zjoltBodyGetWorldTransform, but placing the body's CENTRE OF MASS rather
-/// than the shape's origin. This is the space Jolt simulates in, and the two
-/// differ by the shape's centre of mass offset — which is not zero for a
-/// capsule, a compound, or anything wrapped in an offset-centre-of-mass shape.
+/// As zjoltBodyGetWorldTransform, but placing the body's CENTRE OF MASS
+/// rather than the shape's origin — the space Jolt simulates in. The two
+/// differ by the shape's centre of mass offset (nonzero for a capsule, a
+/// compound, or an offset-centre-of-mass shape).
 ///
-/// Identity on a NULL system or a failed body lock, again Jolt's own default
-/// (BodyInterface.cpp:544).
+/// Identity on a NULL system or a failed body lock, Jolt's own default.
 ZJOLT_API void zjoltBodyGetCenterOfMassTransform(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltRMat44 *out);
 
 /// The body's inverse inertia tensor, rotated into world space, as a 3x3
 /// matrix padded out to 4x4 the way Jolt stores one.
 ///
-/// Only a DYNAMIC body has one, and asking a body that is not is refused with
-/// ZJOLT_RESULT_INVALID_ARGUMENT rather than forwarded. Jolt's own
-/// BodyInterface::GetInverseInertia checks only whether the body lock
-/// succeeded (BodyInterface.cpp:917) and then calls Body::GetInverseInertia,
-/// which asserts IsDynamic (Body.inl:122) and, in a build without asserts,
-/// dereferences the motion properties a static body does not have. So the
-/// identity-on-failed-lock default that call documents is not reachable
-/// through here: a stale id is ZJOLT_RESULT_BODY_NOT_FOUND instead.
+/// Only a DYNAMIC body has one; asking of a body that is not is
+/// ZJOLT_RESULT_INVALID_ARGUMENT rather than forwarded. A stale id is
+/// ZJOLT_RESULT_BODY_NOT_FOUND.
 ZJOLT_API ZJoltResult zjoltBodyGetInverseInertia(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out);
 
+//===----------------------------------------------------------------------===//
+// Mass and inertia
+//
+// Runtime changes to mass/inertia set once from the shape at creation. Live
+// on MotionProperties rather than BodyInterface, so each takes its own lock.
+//===----------------------------------------------------------------------===//
+
+/// As zjoltBodyGetInverseInertia, but in LOCAL (body) space rather than
+/// rotated into world space — MotionProperties::GetLocalSpaceInverseInertia.
+/// Same DYNAMIC-only requirement and the same refusal on a body that is not.
+ZJOLT_API ZJoltResult zjoltBodyGetLocalSpaceInverseInertia(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out);
+
+/// As zjoltBodyGetInverseInertia, but for the hypothetical orientation
+/// `rotation` instead of the body's actual current one —
+/// MotionProperties::GetInverseInertiaForRotation. Only the rotation part of
+/// `rotation` is used; translation is ignored. Same DYNAMIC-only requirement.
+ZJOLT_API ZJoltResult zjoltBodyGetInverseInertiaForRotation(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+    const ZJoltMat44 *rotation, ZJoltMat44 *out);
+
+/// Inverse mass (1/kg), without the DYNAMIC check zjoltBodyGetInverseInertia
+/// makes — MotionProperties::GetInverseMassUnchecked. Meaningful on a
+/// currently-KINEMATIC body too, if it was created with
+/// allow_dynamic_or_kinematic and therefore has a real mass ready for the
+/// moment it becomes dynamic. 0 on a STATIC body, which has no motion
+/// properties to hold this, exactly as for a NULL system or a stale id.
+ZJOLT_API float zjoltBodyGetInverseMassUnchecked(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Which axes this body is allowed to move along — the same bit mask
+/// ZJoltBodyDesc::allowed_dofs sets at creation, read back via a body lock
+/// like the accessors above. ZJOLT_ALLOWED_DOFS_ALL, Jolt's own
+/// MotionProperties default, on a STATIC body, a NULL system, or a stale id.
+ZJOLT_API uint32_t zjoltBodyGetAllowedDOFs(const ZJoltPhysicsSystem *system,
+                                           ZJoltBodyId body);
+
+/// Whether this body currently has motion properties allocated at all. A
+/// STATIC body has none; a KINEMATIC or DYNAMIC one always does. A body
+/// created STATIC with allow_dynamic_or_kinematic true is the one case
+/// this distinguishes from an ordinary static body (both report
+/// ZJOLT_MOTION_TYPE_STATIC). False for a NULL system or a stale id.
+ZJOLT_API bool zjoltBodyHasMotionProperties(const ZJoltPhysicsSystem *system,
+                                            ZJoltBodyId body);
+
+/// Sets the inverse mass (1 / mass) directly, with no validation and no
+/// derived recomputation. Read back via zjoltBodyGetInverseMassUnchecked.
+///
+/// Unlike zjoltBodySetMassProperties (which asserts mass > 0), this can
+/// express inverse_mass == 0 on a still-translating body. No-op on a
+/// STATIC body.
+ZJOLT_API ZJoltResult zjoltBodySetInverseMass(ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body,
+                                              float inverse_mass);
+
+/// Sets the already-diagonalised inverse inertia tensor directly: a
+/// diagonal and the rotation carrying it into local space. Unlike
+/// zjoltBodySetMassProperties — whose eigen-solver CAN FAIL and silently
+/// substitutes a unit-sphere inverse inertia on failure — this sets exactly
+/// what is given. `rotation` is renormalised rather than asserting on a
+/// non-unit input. No-op on a STATIC body.
+ZJOLT_API ZJoltResult zjoltBodySetInverseInertia(ZJoltPhysicsSystem *system,
+                                                 ZJoltBodyId body,
+                                                 const ZJoltVec3 *diagonal,
+                                                 const ZJoltQuat *rotation);
+
+/// Rescales an already-live body's mass and inertia together, keeping their
+/// ratio. `mass` must be positive.
+///
+/// A no-op on a STATIC body, or one whose current inverse mass is zero
+/// (every translation DOF locked, or a never-massed KINEMATIC body). Read
+/// zjoltBodyGetInverseMassUnchecked back to confirm it changed anything.
+ZJOLT_API ZJoltResult zjoltBodyScaleToMass(ZJoltPhysicsSystem *system,
+                                           ZJoltBodyId body, float mass);
+
+/// Gives a body a fully custom mass and inertia tensor, and sets its
+/// allowed degrees of freedom at once. Pass zjoltBodyGetAllowedDOFs back to
+/// leave the existing ones alone. `mass_properties->inertia` is direct
+/// (not inverse). No-op on a STATIC body. `allowed_dofs` of 0, or
+/// `mass_properties->mass` <= 0 with any translation axis allowed, is
+/// ZJOLT_RESULT_INVALID_ARGUMENT.
+ZJOLT_API ZJoltResult zjoltBodySetMassProperties(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, uint32_t allowed_dofs,
+    const ZJoltMassProperties *mass_properties);
+
+/// `v` with the translation axes zjoltBodyGetAllowedDOFs excludes zeroed out
+/// — MotionProperties::LockTranslation. `v` unchanged on a STATIC body, a
+/// NULL system, or a stale id, matching zjoltBodyGetAllowedDOFs's ALL
+/// default. `v` and `out` are required; a NULL either is a no-op.
+ZJOLT_API void zjoltBodyMaskTranslationDOFs(const ZJoltPhysicsSystem *system,
+                                            ZJoltBodyId body,
+                                            const ZJoltVec3 *v, ZJoltVec3 *out);
+/// As zjoltBodyMaskTranslationDOFs, but for the rotation axes —
+/// MotionProperties::LockAngular.
+ZJOLT_API void zjoltBodyMaskAngularDOFs(const ZJoltPhysicsSystem *system,
+                                        ZJoltBodyId body, const ZJoltVec3 *v,
+                                        ZJoltVec3 *out);
+
+/// Rescales the body's current linear velocity down to
+/// zjoltBodyGetMaxLinearVelocity if it exceeds it, in place —
+/// MotionProperties::ClampLinearVelocity. No-op below the limit or on a
+/// STATIC body.
+ZJOLT_API ZJoltResult zjoltBodyClampLinearVelocity(ZJoltPhysicsSystem *system,
+                                                   ZJoltBodyId body);
+/// As zjoltBodyClampLinearVelocity, for angular velocity and
+/// zjoltBodyGetMaxAngularVelocity — MotionProperties::ClampAngularVelocity.
+ZJOLT_API ZJoltResult zjoltBodyClampAngularVelocity(ZJoltPhysicsSystem *system,
+                                                    ZJoltBodyId body);
+
+/// I_world^-1 * v, using the body's current rotation —
+/// MotionProperties::MultiplyWorldSpaceInverseInertiaByVector. Same
+/// DYNAMIC-only requirement as zjoltBodyGetInverseInertia.
+ZJOLT_API ZJoltResult zjoltBodyMultiplyWorldSpaceInverseInertiaByVector(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltVec3 *v,
+    ZJoltVec3 *out);
+
+/// As zjoltBodyGetLocalSpaceInverseInertia, but answers for a KINEMATIC body
+/// too instead of refusing — MotionProperties::GetLocalSpaceInverseInertiaUnchecked.
+/// Only a STATIC body (no motion properties) is ZJOLT_RESULT_INVALID_ARGUMENT.
+ZJOLT_API ZJoltResult zjoltBodyGetLocalSpaceInverseInertiaUnchecked(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body, ZJoltMat44 *out);
+
 /// As zjoltBodySetPositionAndRotation, but skips the broad-phase update and
-/// the activation check entirely when the new pose is close enough to the old
-/// one. Worth using in place of the plain teleport when the caller cannot
-/// already tell "did this actually move" — a networked snapshot applied every
-/// tick, for instance — since that is what would otherwise wake a resting
-/// body and dirty its broad-phase node for nothing. `rotation` may be NULL to
-/// keep the current orientation.
+/// activation check when the new pose is close enough to the old one — for
+/// a caller that cannot already tell "did this move" (a networked snapshot
+/// applied every tick), avoiding waking a resting body for nothing.
+/// `rotation` may be NULL to keep the current orientation.
 ZJOLT_API void zjoltBodySetPositionAndRotationWhenChanged(
     ZJoltPhysicsSystem *system, ZJoltBodyId body, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, ZJoltActivation activation);
@@ -252,9 +382,9 @@ ZJOLT_API void zjoltBodyAddLinearAndAngularVelocity(
     const ZJoltVec3 *linear_velocity, const ZJoltVec3 *angular_velocity);
 
 /// Velocity of the point on this body that is currently at `point` (world
-/// space), including the contribution from spin. Zero for a static body, and
-/// zero when the body lock fails — the same answer, which is why
-/// zjoltBodyIsAdded is the way to tell them apart if that matters.
+/// space), including the contribution from spin. Zero for a static body,
+/// and zero when the body lock fails; ask zjoltBodyIsAdded to tell them
+/// apart.
 ZJOLT_API void zjoltBodyGetPointVelocity(const ZJoltPhysicsSystem *system,
                                          ZJoltBodyId body,
                                          const ZJoltRVec3 *point,
@@ -278,6 +408,25 @@ ZJOLT_API void zjoltBodyAddForceAndTorque(ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body,
                                           const ZJoltVec3 *force,
                                           const ZJoltVec3 *torque);
+
+/// What zjoltBodyAddForce/AddForceAtPoint/AddTorque/AddForceAndTorque have
+/// accumulated on this body since the last step consumed it. Zero for a
+/// body that is not DYNAMIC or whose lock fails.
+///
+/// A step clears both automatically; zjoltBodyResetForce/ResetTorque cancel
+/// one early instead.
+ZJOLT_API void zjoltBodyGetAccumulatedForce(const ZJoltPhysicsSystem *system,
+                                            ZJoltBodyId body, ZJoltVec3 *out);
+ZJOLT_API void zjoltBodyGetAccumulatedTorque(const ZJoltPhysicsSystem *system,
+                                             ZJoltBodyId body, ZJoltVec3 *out);
+
+/// A no-op on a body that is not DYNAMIC or whose lock fails, same as the
+/// getters above.
+ZJOLT_API void zjoltBodyResetForce(ZJoltPhysicsSystem *system,
+                                   ZJoltBodyId body);
+ZJOLT_API void zjoltBodyResetTorque(ZJoltPhysicsSystem *system,
+                                    ZJoltBodyId body);
+
 ZJOLT_API void zjoltBodyAddImpulse(ZJoltPhysicsSystem *system,
                                    ZJoltBodyId body,
                                    const ZJoltVec3 *impulse);
@@ -290,12 +439,11 @@ ZJOLT_API void zjoltBodyAddAngularImpulse(ZJoltPhysicsSystem *system,
                                           const ZJoltVec3 *angular_impulse);
 
 /// Applies drag and buoyancy for a body partly submerged at
-/// `surface_position`/`surface_normal` (surface plane in world space, normal
-/// pointing out of the fluid) and activates it on success.
+/// `surface_position`/`surface_normal` (surface plane in world space,
+/// normal pointing out of the fluid) and activates it on success.
 ///
-/// Returns false, and does nothing, for a body that is not dynamic or whose
-/// lock fails — the same false Jolt returns, forwarded rather than replaced
-/// with an invented error.
+/// Returns false, and does nothing, for a body that is not dynamic or
+/// whose lock fails.
 ZJOLT_API bool zjoltBodyApplyBuoyancyImpulse(
     ZJoltPhysicsSystem *system, ZJoltBodyId body,
     const ZJoltRVec3 *surface_position, const ZJoltVec3 *surface_normal,
@@ -334,15 +482,11 @@ ZJOLT_API void zjoltBodySetGravityFactor(ZJoltPhysicsSystem *system,
 ZJOLT_API float zjoltBodyGetGravityFactor(const ZJoltPhysicsSystem *system,
                                           ZJoltBodyId body);
 
-/// A static or kinematic body has no motion properties to hold this, so these
-/// two are no-ops on one. `velocity` must not be negative — Jolt asserts that
-/// in a build with asserts enabled and reads it as-is otherwise, so passing a
-/// negative one is undefined rather than refused.
+/// No-op on a static or kinematic body (no motion properties). `velocity`
+/// must not be negative — a negative one is undefined, not refused.
 ///
-/// The getters answer 500 and 15*pi (Jolt's own construction-time defaults,
-/// `BodyCreationSettings::mMaxLinearVelocity`/`mMaxAngularVelocity`) when
-/// `system` is NULL or the body lock fails — Jolt's own fallback, forwarded
-/// rather than replaced with zero.
+/// Getters answer 500 / 15*pi (Jolt's construction-time defaults) when
+/// `system` is NULL or the body lock fails.
 ZJOLT_API void zjoltBodySetMaxLinearVelocity(ZJoltPhysicsSystem *system,
                                              ZJoltBodyId body, float velocity);
 ZJOLT_API float zjoltBodyGetMaxLinearVelocity(const ZJoltPhysicsSystem *system,
@@ -365,31 +509,23 @@ ZJOLT_API void zjoltBodySetUseManifoldReduction(ZJoltPhysicsSystem *system,
 ZJOLT_API bool zjoltBodyGetUseManifoldReduction(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body);
 
-/// Whether this body is allowed to settle and go to sleep. Disabling it on a
-/// body that is already asleep does not wake it — pair with zjoltBodyActivate
-/// when it should.
+/// Whether this body is allowed to settle and go to sleep. Disabling it
+/// does not wake an already-sleeping body — pair with zjoltBodyActivate.
 ///
-/// Both are a no-op on a STATIC body, which has no motion properties to hold
-/// this — Jolt's own `Body::GetAllowSleeping` dereferences one unconditionally
-/// rather than asserting, so this checks the body's motion type first rather
-/// than forwarding a crash. The getter then answers true, Jolt's own
-/// construction-time default (`BodyCreationSettings::mAllowSleeping`),
-/// exactly as it does for a NULL system or a stale id.
+/// Both are a no-op on a STATIC body (no motion properties); this checks
+/// the motion type first rather than forwarding Jolt's unconditional
+/// dereference. Getter answers true (Jolt's default) for a NULL system too.
 ZJOLT_API void zjoltBodySetAllowSleeping(ZJoltPhysicsSystem *system,
                                          ZJoltBodyId body, bool allow);
 ZJOLT_API bool zjoltBodyGetAllowSleeping(const ZJoltPhysicsSystem *system,
                                          ZJoltBodyId body);
 
-/// Runtime linear and angular damping: dv/dt = -c * v. ZJoltBodyDesc sets the
-/// starting value at creation; these are the missing other half, for a
-/// caller that wants to change drag after the fact instead of destroying and
-/// recreating the body — a mud patch, an underwater volume, a speed limiter.
+/// Runtime linear and angular damping: dv/dt = -c * v. ZJoltBodyDesc sets
+/// the starting value; these change drag after the fact (a mud patch, an
+/// underwater volume, a speed limiter).
 ///
-/// `damping` must not be negative: Jolt asserts that in a build with asserts
-/// enabled, so it is checked here and refused instead of forwarded. Both are
-/// a no-op (the setters) or answer 0.05, Jolt's own construction-time default
-/// (the getters), on a STATIC body, which has no motion properties to hold
-/// this, exactly as for a NULL system or a stale id.
+/// `damping` must not be negative (ZJOLT_RESULT_INVALID_ARGUMENT). No-op
+/// (setters) / answers 0.05 (getters) on a STATIC body or a stale id.
 ZJOLT_API ZJoltResult zjoltBodySetLinearDamping(ZJoltPhysicsSystem *system,
                                                 ZJoltBodyId body,
                                                 float damping);
@@ -409,31 +545,71 @@ ZJOLT_API void zjoltBodySetIsSensor(ZJoltPhysicsSystem *system,
 ZJOLT_API bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system,
                                  ZJoltBodyId body);
 
+//===----------------------------------------------------------------------===//
+// Flags with no BodyInterface wrapper
+//
+// The three below live on Body itself (Body::mFlags), so they read
+// correctly even for a body with no motion properties; a lock is still taken.
+//===----------------------------------------------------------------------===//
+
+/// Whether this body applies the gyroscopic force (the Dzhanibekov "tennis
+/// racket" effect) as part of the step — Body::GetApplyGyroscopicForce.
+/// false, Jolt's own construction-time default, on a NULL system or a stale
+/// id.
+ZJOLT_API bool zjoltBodyGetApplyGyroscopicForce(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Whether a KINEMATIC body generates contacts against other kinematic or
+/// static bodies — Body::GetCollideKinematicVsNonDynamic. Meaningless for a
+/// dynamic body, which already collides with everything its object layer
+/// allows regardless of this flag. false, Jolt's own construction-time
+/// default, on a NULL system or a stale id.
+ZJOLT_API bool zjoltBodyGetCollideKinematicVsNonDynamic(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Whether this body gets the extra ghost-contact suppression a convex shape
+/// sliding over a mesh's internal edges needs —
+/// Body::GetEnhancedInternalEdgeRemoval. false, Jolt's own construction-time
+/// default, on a NULL system or a stale id.
+ZJOLT_API bool zjoltBodyGetEnhancedInternalEdgeRemoval(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
+/// Whether this body changed in a way that invalidates cached contact
+/// results for every pair touching it — Body::IsCollisionCacheInvalid, set
+/// by zjoltBodyInvalidateContactCache and cleared once the next step
+/// reprocesses those pairs. false for a NULL system or a stale id.
+ZJOLT_API bool zjoltBodyIsCollisionCacheInvalid(const ZJoltPhysicsSystem *system,
+                                                ZJoltBodyId body);
+
+/// Whether a contact between `body1` and `body2` uses manifold reduction —
+/// Body::GetUseManifoldReductionWithBody, true only when BOTH allow it. true,
+/// matching zjoltBodyGetUseManifoldReduction's own default, if either body's
+/// lock fails.
+ZJOLT_API bool zjoltBodyGetUseManifoldReductionWithBody(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body1, ZJoltBodyId body2);
+/// Whether a contact between `body1` and `body2` gets enhanced internal-edge
+/// removal — Body::GetEnhancedInternalEdgeRemovalWithBody, true if EITHER
+/// body requests it. false, matching zjoltBodyGetEnhancedInternalEdgeRemoval's
+/// own default, if either body's lock fails.
+ZJOLT_API bool zjoltBodyGetEnhancedInternalEdgeRemovalWithBody(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body1, ZJoltBodyId body2);
+
 /// The material of one leaf of the body's shape. @see zjoltShapeGetMaterial
-/// for what a material is and for the sub-shape id rules.
+/// for what a material is and the sub-shape id rules.
 ///
-/// THIS IS NOT A WAY TO TEST WHETHER A BODY EXISTS. Jolt takes a body lock and
-/// returns the shared default material when it fails, so a body that was
-/// destroyed and a body whose shape has no materials of its own answer
-/// identically. That answer is forwarded rather than replaced with an invented
-/// NULL, because reporting a failure Jolt did not report would be a different
-/// contract, not a stricter one. Use zjoltBodyIsAdded when the question is
-/// about the body, or take the lock yourself and read the shape through
-/// zjoltBodyGetShapeLocked.
-///
-/// NULL only when `system` is NULL or the library is not initialised.
+/// NOT A WAY TO TEST WHETHER A BODY EXISTS: a destroyed body and a body
+/// whose shape has no materials of its own both answer with the shared
+/// default. Use zjoltBodyIsAdded instead. NULL only when `system` is NULL.
 ZJOLT_API const ZJoltPhysicsMaterial *zjoltBodyGetMaterial(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body,
     ZJoltSubShapeId sub_shape_id);
 
-/// Tells the system a body's shape changed underneath it — which is what the
-/// zjoltShapeMutableCompound* calls do.
+/// Tells the system a body's shape changed underneath it — required after
+/// any zjoltShapeMutableCompound* call.
 ///
-/// `previous_center_of_mass` is the shape's centre of mass BEFORE the change,
-/// read with zjoltShapeGetCenterOfMass; the body is moved so that its geometry
-/// stays where it was. With `update_mass_properties` the mass and inertia are
-/// recomputed from the new shape. Without this call the broad phase and the
-/// contact cache go on describing the shape as it used to be.
+/// `previous_center_of_mass` is the shape's centre of mass BEFORE the
+/// change; the body is moved so its geometry stays in place. Without this
+/// call the broad phase and contact cache keep describing the old shape.
 ZJOLT_API void zjoltBodyNotifyShapeChanged(
     ZJoltPhysicsSystem *system, ZJoltBodyId body,
     const ZJoltVec3 *previous_center_of_mass, bool update_mass_properties,
@@ -442,13 +618,8 @@ ZJOLT_API void zjoltBodyNotifyShapeChanged(
 //===----------------------------------------------------------------------===//
 // Bulk read-back
 //
-// The accessors above are one ABI crossing and one body lock each. That is the
-// right shape for the occasional query and the wrong shape for the thing a
-// renderer does every frame: read the transform of every body that moved.
-//
-// These two calls exist so that per-frame read-back is two crossings and one
-// lock acquisition rather than 2N of each. Reach for them in the frame loop
-// and for the single-body accessors everywhere else.
+// Wrong to pay one ABI crossing and one body lock per body per frame. These
+// two do every body in two crossings and one lock acquisition instead.
 //===----------------------------------------------------------------------===//
 
 /// Ids of the bodies that are awake, which is the set whose transforms can
@@ -467,11 +638,10 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemGetBodies(
 
 /// Reads `count` body transforms under a single lock.
 ///
-/// `out_positions` and `out_rotations` are parallel arrays of `count` entries;
-/// either may be NULL if that half is not wanted. An id that no longer names a
-/// live body writes the identity transform and is reported through
-/// `out_missing` (which may be NULL) rather than failing the whole batch —
-/// a body destroyed between the step and the read is normal, not an error.
+/// `out_positions` and `out_rotations` are parallel arrays of `count`
+/// entries; either may be NULL if that half is not wanted. An id that no
+/// longer names a live body writes the identity transform and is reported
+/// through `out_missing` (may be NULL) rather than failing the whole batch.
 ZJOLT_API ZJoltResult zjoltBodyGetTransforms(const ZJoltPhysicsSystem *system,
                                              const ZJoltBodyId *ids,
                                              uint32_t count,
@@ -489,16 +659,23 @@ ZJOLT_API ZJoltResult zjoltBodyGetMotions(const ZJoltPhysicsSystem *system,
                                           uint32_t *out_missing);
 
 //===----------------------------------------------------------------------===//
+// A shape query, not a body one
+//
+// Jolt never checks Shape::MustBeStatic when attaching a shape to a body,
+// so nothing refuses a mesh or height field handed to a dynamic body.
+//===----------------------------------------------------------------------===//
+
+/// Whether a body wearing `shape` is only ever allowed to be STATIC —
+/// Shape::MustBeStatic. true for a height field, a plane, a mesh, and any
+/// compound or decorated shape with one of those somewhere inside it; false
+/// for every other kind, and for NULL.
+ZJOLT_API bool zjoltShapeMustBeStatic(const ZJoltShape *shape);
+
+//===----------------------------------------------------------------------===//
 // Body locks
 //
-// The accessors above take a lock per call, which is the right default and the
-// wrong tool for reading six properties of the same body. A lock holds the
-// body still for a scope, and hands out a borrowed ZJoltBody that must not
-// outlive it.
-//
-// This maps Jolt's RAII lock one-to-one, which means the release call is the
-// caller's responsibility. `body` is NULL when the id was stale — check it,
-// and release either way.
+// Holds the body for a scope, handing out a borrowed ZJoltBody (must not
+// outlive it); release is the caller's job. `body` is NULL for a stale id.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltBodyLock {
@@ -519,6 +696,12 @@ ZJOLT_API void zjoltBodyLockWrite(ZJoltPhysicsSystem *system, ZJoltBodyId body,
 ZJOLT_API void zjoltBodyLockWriteRelease(ZJoltBodyLock *lock);
 
 ZJOLT_API ZJoltBodyId zjoltBodyGetId(const ZJoltBody *body);
+
+/// Position, rotation and velocity below assume ordinary caller code,
+/// outside PhysicsSystem::Update. Jolt narrows this window itself during
+/// its own step — a contact listener, a custom constraint's
+/// SetupVelocityConstraint — and asserts a violation in a debug build;
+/// mind the same split (BodyAccess::Grant) from inside one of those.
 ZJOLT_API void zjoltBodyGetPosition(const ZJoltBody *body, ZJoltRVec3 *out);
 ZJOLT_API void zjoltBodyGetRotation(const ZJoltBody *body, ZJoltQuat *out);
 ZJOLT_API void zjoltBodyGetCenterOfMassPositionLocked(const ZJoltBody *body,
@@ -547,6 +730,126 @@ ZJOLT_API void zjoltBodySetFrictionLocked(ZJoltBody *body, float friction);
 ZJOLT_API void zjoltBodySetRestitutionLocked(ZJoltBody *body, float restitution);
 ZJOLT_API void zjoltBodyAddImpulseLocked(ZJoltBody *body,
                                       const ZJoltVec3 *impulse);
+
+/// Timing for the simulation island this body was part of during its last
+/// step. Requires a lock, same as the accessors above.
+///
+/// ZJOLT_RESULT_UNSUPPORTED (leaving `*out` zeroed) unless built with
+/// JPH_TRACK_SIMULATION_STATS. A STATIC body reads back all zeroes with
+/// ZJOLT_RESULT_OK instead — nothing tracked, not an unsupported build.
+typedef struct ZJoltSimulationStats {
+  uint64_t broad_phase_ticks;
+  uint64_t narrow_phase_ticks;
+  uint64_t velocity_constraint_ticks;
+  uint64_t position_constraint_ticks;
+  uint64_t update_bounds_ticks;
+  uint64_t ccd_ticks;
+  uint32_t num_contact_constraints;
+  uint8_t num_collision_steps;
+  uint8_t num_velocity_steps;
+  uint8_t num_position_steps;
+  bool is_large_island;
+} ZJoltSimulationStats;
+
+ZJOLT_API ZJoltResult zjoltBodyGetSimulationStatsLocked(
+    const ZJoltBody *body, ZJoltSimulationStats *out);
+
+/// Debug check: the body's cached broad-phase bounds still match its
+/// shape's actual bounds — Body::ValidateCachedBounds, asserting on a
+/// mismatch (a mutable compound edited without zjoltBodyNotifyShapeChanged).
+///
+/// ZJOLT_RESULT_UNSUPPORTED (no-op) when Jolt is built without asserts,
+/// where the check does not exist to run.
+ZJOLT_API ZJoltResult zjoltBodyValidateCachedBoundsLocked(const ZJoltBody *body);
+
+/// Debug check: a sleeping body has zero velocity — Body::ValidateMotion.
+/// Catches a velocity set directly on MotionProperties, bypassing
+/// zjoltBodySetLinearVelocity/AngularVelocity, which wake the body first.
+///
+/// ZJOLT_RESULT_UNSUPPORTED (no-op) without asserts, same as
+/// zjoltBodyValidateCachedBoundsLocked.
+ZJOLT_API ZJoltResult zjoltBodyValidateMotionLocked(const ZJoltBody *body);
+
+//===----------------------------------------------------------------------===//
+// Multi-body locks
+//
+// Reads several bodies CONSISTENTLY under one mutex mask, unlike
+// zjoltBodyLockRead/Write one at a time. What GetTransforms/GetMotions use.
+//===----------------------------------------------------------------------===//
+
+typedef struct ZJoltBodyLockMulti {
+  /// Implementation detail. Do not read, do not copy this struct while held.
+  const ZJoltBodyId *_reserved_ids;
+  uint32_t _reserved_count;
+  uint64_t _reserved_mask;
+  void *_reserved_interface;
+} ZJoltBodyLockMulti;
+
+/// Takes a shared lock over every body in `ids` at once. `ids` must stay
+/// valid until the matching release — Jolt's own BodyLockMultiRead holds the
+/// same borrowed pointer, not a copy, and zjoltBodyLockMultiGet reads it
+/// again on every call.
+ZJOLT_API void zjoltBodyLockMultiRead(const ZJoltPhysicsSystem *system,
+                                      const ZJoltBodyId *ids, uint32_t count,
+                                      ZJoltBodyLockMulti *out_lock);
+ZJOLT_API void zjoltBodyLockMultiReadRelease(ZJoltBodyLockMulti *lock);
+
+/// Takes an exclusive lock over every body in `ids` at once. Same borrowing
+/// rule as zjoltBodyLockMultiRead.
+ZJOLT_API void zjoltBodyLockMultiWrite(ZJoltPhysicsSystem *system,
+                                       const ZJoltBodyId *ids, uint32_t count,
+                                       ZJoltBodyLockMulti *out_lock);
+ZJOLT_API void zjoltBodyLockMultiWriteRelease(ZJoltBodyLockMulti *lock);
+
+/// The body at `index` in the set the lock was taken over, or NULL if that id
+/// no longer names a live body — BodyLockMultiBase::GetBody. `index` must be
+/// < the `count` passed to zjoltBodyLockMultiRead/Write; Jolt's own bound is
+/// only an assert, so this checks it rather than reading past what was
+/// locked when asserts are compiled out.
+ZJOLT_API ZJoltBody *zjoltBodyLockMultiGet(const ZJoltBodyLockMulti *lock,
+                                           uint32_t index);
+
+//===----------------------------------------------------------------------===//
+// Detaching a body from its id
+//
+// Unlike zjoltBodyDestroy, frees a live body's id for reuse while it
+// survives, in its own owning handle rather than ZJoltBody.
+//===----------------------------------------------------------------------===//
+
+/// A body that was added and then had zjoltBodyUnassignId(s) called on it: it
+/// keeps its shape, transform, velocity and every other property, but no
+/// longer has an id and cannot be queried, stepped, or found by any
+/// zjoltBody* call until it is given one back. Owned outright — release it
+/// with zjoltUnassignedBodyAssignId or zjoltUnassignedBodyDestroy, exactly
+/// one of the two.
+typedef struct ZJoltUnassignedBody ZJoltUnassignedBody;
+
+/// Removes `body`'s id and hands back the still-alive object, added or
+/// not — zjoltBodyRemove (if added) followed by BodyInterface::UnassignBodyID.
+///
+/// `body` must currently name a live body in `system`; a stale id is
+/// ZJOLT_RESULT_BODY_NOT_FOUND. Liveness is checked under a body lock
+/// first — the same hazard the batch calls in zjolt_batch.h document.
+ZJOLT_API ZJoltResult zjoltBodyUnassignId(ZJoltPhysicsSystem *system,
+                                          ZJoltBodyId body,
+                                          ZJoltUnassignedBody **out);
+
+/// Gives `unassigned` the id `id`, consuming the handle. `id` is checked
+/// like zjoltBodyCreateWithId: not ZJOLT_BODY_ID_INVALID, bit 31 clear, and
+/// not already naming a live body.
+///
+/// `unassigned` must have come from `system`; from another system's is
+/// ZJOLT_RESULT_INVALID_ARGUMENT, and the handle is left untouched.
+ZJOLT_API ZJoltResult zjoltUnassignedBodyAssignId(ZJoltPhysicsSystem *system,
+                                                  ZJoltUnassignedBody *unassigned,
+                                                  ZJoltBodyId id,
+                                                  ZJoltBodyId *out);
+
+/// Destroys the object outright instead of giving it back an id. `system`
+/// must be present; `unassigned` may be NULL, in which case this does
+/// nothing.
+ZJOLT_API ZJoltResult zjoltUnassignedBodyDestroy(
+    ZJoltPhysicsSystem *system, ZJoltUnassignedBody *unassigned);
 
 #ifdef __cplusplus
 }  // extern "C"

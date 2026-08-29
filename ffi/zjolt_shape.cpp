@@ -11,11 +11,15 @@
 #include "zjolt_internal.h"
 #include "zjolt_transformed.h"
 
+#include <vector>
+
 #include <Jolt/Core/UnorderedSet.h>
+#include <Jolt/Math/Math.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/CompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexShape.h>
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/DecoratedShape.h>
 #include <Jolt/Physics/Collision/Shape/EmptyShape.h>
@@ -24,6 +28,7 @@
 #include <Jolt/Physics/Collision/Shape/MutableCompoundShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/Shape/PlaneShape.h>
+#include <Jolt/Physics/Collision/Shape/PolyhedronSubmergedVolumeCalculator.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
@@ -34,13 +39,11 @@
 
 namespace {
 
-/// Turns Jolt's ShapeResult into the ABI's convention: a reference handed to
-/// the caller on success, or an error whose message survives in zjoltLastError.
+/// Turns Jolt's ShapeResult into the ABI's convention: a reference
+/// handed to the caller on success, or an error surviving in zjoltLastError.
 ///
-/// The extra AddRef is deliberate. Jolt's ShapeResult holds a Ref that drops
-/// its reference when the result goes out of scope at the end of the calling
-/// function; taking one here is what makes "every constructor returns a shape
-/// with a reference count of one" true.
+/// The extra AddRef is deliberate: ShapeResult's Ref drops its own
+/// reference when it goes out of scope, so this is what makes "every constructor returns a shape with a reference count of one" true.
 ZJoltResult Finish(JPH::Shape::ShapeResult &result, ZJoltShape **out) {
   if (result.HasError()) {
     return zjolt::SetError(ZJOLT_RESULT_SHAPE_INVALID, result.GetError().c_str());
@@ -94,14 +97,25 @@ ZJoltShapeSubType ToCSubType(JPH::EShapeSubType sub_type) {
     case JPH::EShapeSubType::SoftBody:
       return ZJOLT_SHAPE_SUB_TYPE_SOFT_BODY;
     default:
-      // Every shape kind Jolt itself defines is named above, so what is left
-      // here is the sixteen User1..UserConvex8 slots the enum reserves for
-      // shape types registered by C++ outside this library — unconstructible
-      // from here and unnameable from here, because their meaning belongs to
-      // whoever registered them. It is deliberately NOT the same value a NULL
-      // handle reports: this arm says "a shape, of a kind I cannot name", and
-      // ZJOLT_SHAPE_SUB_TYPE_NONE says "not a shape".
+      // Every shape kind Jolt itself defines is named above; what's left
+      // is the sixteen User1..UserConvex8 slots for types registered by
+      // C++ outside this library — unconstructible and unnameable here.
+      // Deliberately NOT the same value a NULL handle reports: this arm
+      // says "a shape, of a kind I cannot name", ZJOLT_SHAPE_SUB_TYPE_NONE says "not a shape".
       return ZJOLT_SHAPE_SUB_TYPE_USER_DEFINED;
+  }
+}
+
+// Takes the raw integer, not the enum: see zjolt::RawEnum in
+// zjolt_internal.h. zjoltShapeCreateMesh converts with it at the boundary,
+// before this ever sees the value.
+JPH::MeshShapeSettings::EBuildQuality ToJoltBuildQuality(int32_t quality) {
+  switch (quality) {
+    case ZJOLT_MESH_BUILD_QUALITY_FAVOR_BUILD_SPEED:
+      return JPH::MeshShapeSettings::EBuildQuality::FavorBuildSpeed;
+    case ZJOLT_MESH_BUILD_QUALITY_FAVOR_RUNTIME_PERFORMANCE:
+    default:
+      return JPH::MeshShapeSettings::EBuildQuality::FavorRuntimePerformance;
   }
 }
 
@@ -116,11 +130,9 @@ const JPH::PhysicsMaterial *ToJoltMaterial(
 
 /// Copies a caller's material table into the list Jolt's settings want.
 ///
-/// An empty list is a distinct state from a one-entry list, and both are
-/// reachable: a shape with no materials reports the shared default for every
-/// leaf, a shape with one reports that one. Jolt enforces the same distinction
-/// in the other direction — it refuses a triangle whose material index is
-/// non-zero when the list is empty.
+/// Empty and one-entry lists are distinct, reachable states: no
+/// materials reports the shared default for every leaf, one reports
+/// that one. Jolt enforces the same distinction the other way — a triangle with a non-zero material index is refused when the list is empty.
 ZJoltResult BuildMaterialList(const ZJoltPhysicsMaterial *const *materials,
                               uint32_t num_materials,
                               JPH::PhysicsMaterialList &out) {
@@ -144,19 +156,12 @@ ZJoltResult BuildMaterialList(const ZJoltPhysicsMaterial *const *materials,
   return ZJOLT_RESULT_OK;
 }
 
-/// The fewest children a compound that STAYS a compound may have.
-///
-/// Not a style rule. `CompoundShape::GetSubShapeIDBits` is
-/// `32 - CountLeadingZeros(count - 1)`, and Jolt's CountLeadingZeros guards a
-/// zero argument on x86 and on several other architectures but NOT on ARM,
-/// where it is a bare `__builtin_clz` — undefined behaviour for zero. So a
-/// compound of one child is undefined on some targets and merely lucky on the
-/// rest, and a compound of none underflows the subtraction first.
-///
-/// A static compound never reaches it, because Jolt simplifies one child away
-/// into the child itself or a rotated-translated shape. A mutable compound
-/// does not simplify, so this is where the floor has to be enforced. See
-/// UPSTREAM.md.
+/// The fewest children a compound that STAYS a compound may have — not
+/// a style rule: `CompoundShape::GetSubShapeIDBits` is `32 -
+/// CountLeadingZeros(count - 1)`, UB on ARM (`__builtin_clz(0)`) for a
+/// single-child compound, guarded elsewhere but not there. A static
+/// compound never reaches this (Jolt simplifies one child away); a
+/// mutable one does not simplify, so the floor is enforced here. See UPSTREAM.md.
 constexpr uint32_t kMinCompoundChildren = 2;
 
 /// Fills a compound settings object from the caller's child array.
@@ -196,13 +201,91 @@ const JPH::CompoundShape *AsCompound(const ZJoltShape *shape) {
   return static_cast<const JPH::CompoundShape *>(jolt);
 }
 
-/// Opens a mutating compound entry point: the shape must be up, must be a
-/// mutable compound, and `index` must name a child it actually has.
+/// The shape as a convex primitive, or null if it is any other kind. @see
+/// AsCompound for why this is a GetType dispatch rather than a dynamic_cast.
+/// ConvexShape::GetDensity/SetDensity and SetMaterial are the only places
+/// this ABI needs the base convex type rather than one of its concrete
+/// subtypes.
+const JPH::ConvexShape *AsConvex(const ZJoltShape *shape) {
+  if (shape == nullptr) return nullptr;
+  const JPH::Shape *jolt = zjolt::ToJolt(shape);
+  if (jolt->GetType() != JPH::EShapeType::Convex) return nullptr;
+  return static_cast<const JPH::ConvexShape *>(jolt);
+}
+
+/// Whether `shape` or anything beneath it is one of the three leaf
+/// kinds whose GetSubmergedVolume vendored Jolt 5.6.0 implements as
+/// JPH_ASSERT(false), leaving its out-parameters uninitialised: Mesh,
+/// HeightField, Plane. Walks every compound and decoration, since the hazard is just as real several levels down as at the root.
+bool ContainsSubmergedVolumeHazard(const JPH::Shape *shape) {
+  if (shape == nullptr) return false;
+  switch (shape->GetSubType()) {
+    case JPH::EShapeSubType::Mesh:
+    case JPH::EShapeSubType::HeightField:
+    case JPH::EShapeSubType::Plane:
+      return true;
+    default:
+      break;
+  }
+  if (shape->GetType() == JPH::EShapeType::Compound) {
+    const auto *compound = static_cast<const JPH::CompoundShape *>(shape);
+    for (const JPH::CompoundShape::SubShape &sub : compound->GetSubShapes()) {
+      if (ContainsSubmergedVolumeHazard(sub.mShape.GetPtr())) return true;
+    }
+    return false;
+  }
+  if (shape->GetType() == JPH::EShapeType::Decorated) {
+    const auto *decorated = static_cast<const JPH::DecoratedShape *>(shape);
+    return ContainsSubmergedVolumeHazard(decorated->GetInnerShape());
+  }
+  return false;
+}
+
+/// The recursive half of zjoltShapeIsSubShapeIDValid. @see its header comment
+/// for what each branch means; this is the same logic, just in the shape of
+/// a function that can call itself.
+bool IsSubShapeIdValid(const JPH::Shape *shape, JPH::SubShapeID id) {
+  if (shape == nullptr) return false;
+
+  const uint32_t bits = shape->GetSubShapeIDBitsRecursive();
+  if (bits == 0) {
+    // A leafless shape: every convex primitive, and a plane. Jolt asserts on
+    // anything but the empty id here (see zjoltShapeGetMaterial's own doc).
+    return id.IsEmpty();
+  }
+
+  if (shape->GetType() == JPH::EShapeType::Compound) {
+    const auto *compound = static_cast<const JPH::CompoundShape *>(shape);
+    // IsSubShapeIDValid, unlike GetSubShapeIndexFromID, does not assert on a
+    // bad id -- that is the whole reason it exists in C++.
+    if (!compound->IsSubShapeIDValid(id)) return false;
+    JPH::SubShapeID remainder;
+    const uint32_t index = compound->GetSubShapeIndexFromID(id, remainder);
+    return IsSubShapeIdValid(compound->GetSubShape(index).mShape.GetPtr(),
+                             remainder);
+  }
+
+  if (shape->GetType() == JPH::EShapeType::Decorated) {
+    const auto *decorated = static_cast<const JPH::DecoratedShape *>(shape);
+    return IsSubShapeIdValid(decorated->GetInnerShape(), id);
+  }
+
+  // A leaf with its own private id space (mesh, height field) or a kind this
+  // ABI cannot inspect further (soft body, a shape type registered outside
+  // this library). All that can be checked without duplicating Jolt's own
+  // internal decode is that this shape's bit budget accounts for the whole
+  // id -- the same structural guarantee CompoundShape::IsSubShapeIDValid
+  // gives at its own level.
+  JPH::SubShapeID remainder;
+  id.PopID(bits, remainder);
+  return remainder.IsEmpty();
+}
+
+/// Opens a mutating compound entry point: the shape must be up, must
+/// be a mutable compound, and `index` must name a child it actually has.
 ///
-/// The range check is the load-bearing half. `MutableCompoundShape::
-/// RemoveShape` and `ModifyShape` index `mSubShapes` with no bounds check and
-/// no assertion, so an out-of-range index there is not a diagnosable abort but
-/// a write past the end of a live array.
+/// The range check is load-bearing: `RemoveShape`/`ModifyShape` index
+/// `mSubShapes` with no bounds check or assertion, so an out-of-range index there is a write past the end of a live array, not a diagnosable abort.
 ZJoltResult OpenMutableCompound(ZJoltShape *shape, uint32_t index,
                                 bool check_index,
                                 JPH::MutableCompoundShape **out_compound) {
@@ -243,14 +326,24 @@ const JPH::HeightFieldShape *AsHeightField(const ZJoltShape *shape) {
   return static_cast<const JPH::HeightFieldShape *>(jolt);
 }
 
+/// The mutable counterpart of AsHeightField, for zjoltShapeHeightFieldSetHeights
+/// — the one height-field entry point that writes through the pointer. @see
+/// OpenMutableCompound for why this const_casts rather than taking a second
+/// ToJolt overload: only ffi/zjolt_internal.h converts handles, and it only
+/// hands out `const JPH::Shape *`.
+JPH::HeightFieldShape *AsMutableHeightField(ZJoltShape *shape) {
+  if (shape == nullptr) return nullptr;
+  JPH::Shape *jolt = const_cast<JPH::Shape *>(zjolt::ToJolt(shape));
+  if (jolt->GetSubType() != JPH::EShapeSubType::HeightField) return nullptr;
+  return static_cast<JPH::HeightFieldShape *>(jolt);
+}
+
 /// The handle, cast to `T` if `shape` is exactly `sub_type` — null otherwise.
 ///
-/// Every convex-primitive dimension getter below opens with this. Jolt's
-/// per-subtype dimension accessors (SphereShape::GetRadius and its siblings)
-/// are plain, non-virtual methods, so nothing but GetSubType() can confirm a
-/// static_cast is safe — and -fno-rtti rules out asking dynamic_cast instead.
-/// @see AsCompound/AsMesh/AsHeightField above, the same idea for the shapes
-/// that needed it first.
+/// Every convex-primitive dimension getter below opens with this: Jolt's
+/// per-subtype dimension accessors (SphereShape::GetRadius and its
+/// siblings) are plain, non-virtual methods, so only GetSubType() can
+/// confirm a static_cast is safe (-fno-rtti rules out dynamic_cast).
 template <typename T>
 const T *NarrowShape(const ZJoltShape *shape, JPH::EShapeSubType sub_type) {
   if (shape == nullptr) return nullptr;
@@ -336,7 +429,9 @@ ZJoltResult zjoltShapeCreateCapsule(float half_height_of_cylinder, float radius,
 ZJoltResult zjoltShapeCreateConvexHull(const ZJoltVec3 *points,
                                        uint32_t num_points,
                                        float max_convex_radius,
-                                       float hull_tolerance, float density,
+                                       float hull_tolerance,
+                                       float max_error_convex_radius,
+                                       float density,
                                        const ZJoltPhysicsMaterial *material,
                                        ZJoltShape **out) {
   ZJOLT_ENTER(out);
@@ -354,6 +449,8 @@ ZJoltResult zjoltShapeCreateConvexHull(const ZJoltVec3 *points,
   JPH::ConvexHullShapeSettings settings(hull_points, max_convex_radius,
                                         ToJoltMaterial(material));
   if (hull_tolerance > 0.0f) settings.mHullTolerance = hull_tolerance;
+  if (max_error_convex_radius > 0.0f)
+    settings.mMaxErrorConvexRadius = max_error_convex_radius;
   if (density > 0.0f) settings.SetDensity(density);
   JPH::Shape::ShapeResult result = settings.Create();
   return Finish(result, out);
@@ -476,9 +573,14 @@ ZJoltResult zjoltShapeCreateEmpty(const ZJoltVec3 *center_of_mass,
 ZJoltResult zjoltShapeCreateMesh(
     const ZJoltVec3 *vertices, uint32_t num_vertices, const uint32_t *indices,
     uint32_t num_triangles, const uint32_t *triangle_materials,
+    const uint32_t *triangle_user_data,
     const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t max_triangles_per_leaf, ZJoltShape **out) {
+    uint32_t max_triangles_per_leaf, float active_edge_cos_threshold_angle,
+    ZJoltMeshBuildQuality build_quality, ZJoltShape **out) {
   ZJOLT_ENTER(out);
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_build_quality = zjolt::RawEnum(build_quality);
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (vertices == nullptr || indices == nullptr || num_vertices == 0 ||
       num_triangles == 0) {
@@ -522,7 +624,8 @@ ZJoltResult zjoltShapeCreateMesh(
   for (uint32_t i = 0; i < num_triangles; ++i) {
     triangle_list.push_back(JPH::IndexedTriangle(
         indices[i * 3 + 0], indices[i * 3 + 1], indices[i * 3 + 2],
-        triangle_materials != nullptr ? triangle_materials[i] : 0u));
+        triangle_materials != nullptr ? triangle_materials[i] : 0u,
+        triangle_user_data != nullptr ? triangle_user_data[i] : 0u));
   }
 
   JPH::MeshShapeSettings settings(std::move(vertex_list),
@@ -530,6 +633,13 @@ ZJoltResult zjoltShapeCreateMesh(
                                   std::move(material_list));
   if (max_triangles_per_leaf > 0)
     settings.mMaxTrianglesPerLeaf = max_triangles_per_leaf;
+  settings.mActiveEdgeCosThresholdAngle = active_edge_cos_threshold_angle;
+  settings.mBuildQuality = ToJoltBuildQuality(raw_build_quality);
+  // Storing a value nobody can read back would just cost memory: Jolt
+  // defaults this off, and turning it on is what makes
+  // zjoltShapeMeshGetTriangleUserData report what was actually asked for
+  // instead of its own pre-reorder fallback.
+  settings.mPerTriangleUserData = triangle_user_data != nullptr;
   JPH::Shape::ShapeResult result = settings.Create();
   return Finish(result, out);
 }
@@ -542,7 +652,9 @@ ZJoltResult zjoltShapeCreateHeightField(
     const float *samples, uint32_t sample_count, const ZJoltVec3 *offset,
     const ZJoltVec3 *scale, const uint8_t *material_indices,
     const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t block_size, uint32_t bits_per_sample, ZJoltShape **out) {
+    uint32_t block_size, uint32_t bits_per_sample, float min_height_value,
+    float max_height_value, float active_edge_cos_threshold_angle,
+    ZJoltShape **out) {
   ZJOLT_ENTER(out);
   if (!zjolt::Present(samples, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
@@ -562,6 +674,14 @@ ZJoltResult zjoltShapeCreateHeightField(
   settings.mSampleCount = sample_count;
   if (block_size > 0) settings.mBlockSize = block_size;
   if (bits_per_sample > 0) settings.mBitsPerSample = bits_per_sample;
+  // Fixes the 16-bit quantisation range once and for all: Jolt widens it to
+  // fit whatever the samples below actually need (DetermineMinAndMaxSample),
+  // but never narrows it, so passing a wider pair than the samples span here
+  // is what reserves headroom a later zjoltShapeHeightFieldSetHeights can
+  // move a sample into without being clamped.
+  settings.mMinHeightValue = min_height_value;
+  settings.mMaxHeightValue = max_height_value;
+  settings.mActiveEdgeCosThresholdAngle = active_edge_cos_threshold_angle;
 
   settings.mHeightSamples.assign(
       samples, samples + static_cast<size_t>(sample_count) * sample_count);
@@ -603,6 +723,7 @@ ZJoltResult zjoltShapeCreateStaticCompound(const ZJoltCompoundChild *children,
       BuildCompound(children, num_children, 1, settings);
   if (children_ok != ZJOLT_RESULT_OK) return children_ok;
 
+  settings.ClearCachedResult();
   JPH::Shape::ShapeResult result = settings.Create();
   return Finish(result, out);
 }
@@ -618,6 +739,7 @@ ZJoltResult zjoltShapeCreateMutableCompound(const ZJoltCompoundChild *children,
       BuildCompound(children, num_children, kMinCompoundChildren, settings);
   if (children_ok != ZJOLT_RESULT_OK) return children_ok;
 
+  settings.ClearCachedResult();
   JPH::Shape::ShapeResult result = settings.Create();
   return Finish(result, out);
 }
@@ -634,6 +756,195 @@ uint32_t zjoltShapeCompoundGetChildUserData(const ZJoltShape *shape,
   if (compound == nullptr) return 0;
   if (index >= compound->GetNumSubShapes()) return 0;
   return compound->GetCompoundUserData(index);
+}
+
+ZJoltResult zjoltShapeCompoundSetChildUserData(ZJoltShape *shape,
+                                               uint32_t index,
+                                               uint32_t user_data) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  // Not gated behind AsMutableCompound / OpenMutableCompound: unlike adding,
+  // removing or moving a child, SetCompoundUserData is a plain field write
+  // Jolt declares on the base CompoundShape, reachable on a static compound
+  // too.
+  JPH::Shape *jolt = const_cast<JPH::Shape *>(zjolt::ToJolt(shape));
+  if (jolt->GetType() != JPH::EShapeType::Compound) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a compound");
+  }
+  auto *compound = static_cast<JPH::CompoundShape *>(jolt);
+  if (index >= compound->GetNumSubShapes()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "no child of this compound has that index");
+  }
+  compound->SetCompoundUserData(index, user_data);
+  return ZJOLT_RESULT_OK;
+}
+
+struct ZJoltSubShapeIdCreator {
+  JPH::SubShapeIDCreator creator;
+};
+
+ZJoltResult zjoltSubShapeIdCreatorCreate(ZJoltSubShapeIdCreator **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  ZJoltSubShapeIdCreator *handle = zjolt::New<ZJoltSubShapeIdCreator>();
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+  zjolt::HandleCreated();
+  *out = handle;
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltSubShapeIdCreatorDestroy(ZJoltSubShapeIdCreator *creator) {
+  if (creator == nullptr) return;
+  zjolt::Delete(creator);
+  zjolt::HandleDestroyed();
+}
+
+ZJoltResult zjoltSubShapeIdCreatorPushID(ZJoltSubShapeIdCreator *creator,
+                                         uint32_t value, uint32_t bits) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(creator)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (bits < 32 && value >= (uint32_t(1) << bits)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "value: does not fit in `bits` bits");
+  }
+  if (creator->creator.GetNumBitsWritten() + bits > JPH::SubShapeID::MaxBits) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "bits: would write past SubShapeID::MaxBits (32) total");
+  }
+  creator->creator = creator->creator.PushID(value, bits);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltSubShapeId zjoltSubShapeIdCreatorGetID(const ZJoltSubShapeIdCreator *creator) {
+  if (creator == nullptr) return ZJOLT_SUB_SHAPE_ID_EMPTY;
+  return zjolt::ToC(creator->creator.GetID());
+}
+
+uint32_t zjoltSubShapeIdCreatorGetNumBitsWritten(const ZJoltSubShapeIdCreator *creator) {
+  if (creator == nullptr) return 0;
+  return creator->creator.GetNumBitsWritten();
+}
+
+ZJoltResult zjoltSubShapeIdPopID(ZJoltSubShapeId id, uint32_t bits,
+                                 uint32_t *out_value,
+                                 ZJoltSubShapeId *out_remainder) {
+  ZJOLT_ENTER(out_value, out_remainder);
+  if (!zjolt::Present(out_value, out_remainder)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  if (bits > JPH::SubShapeID::MaxBits) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "bits: exceeds JPH::SubShapeID::MaxBits (32)");
+  }
+  JPH::SubShapeID remainder;
+  *out_value = zjolt::ToJoltSubShapeId(id).PopID(bits, remainder);
+  *out_remainder = zjolt::ToC(remainder);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetSubShapeIDFromIndex(const ZJoltShape *shape,
+                                             uint32_t index,
+                                             ZJoltSubShapeId *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(shape, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::CompoundShape *compound = AsCompound(shape);
+  if (compound == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a compound");
+  }
+  // Bounds-checked here rather than left to Jolt: SubShapeIDCreator::PushID
+  // asserts on an index its bit width cannot represent, which an
+  // out-of-range (but in-width) index would otherwise reach silently.
+  if (index >= compound->GetNumSubShapes()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "no child of this compound has that index");
+  }
+  const JPH::SubShapeIDCreator id = compound->GetSubShapeIDFromIndex(
+      static_cast<int>(index), JPH::SubShapeIDCreator());
+  *out = zjolt::ToC(id.GetID());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetSubShapeIDFromIndexInto(const ZJoltShape *shape,
+                                                 uint32_t index,
+                                                 ZJoltSubShapeIdCreator *creator) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, creator)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::CompoundShape *compound = AsCompound(shape);
+  if (compound == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a compound");
+  }
+  if (index >= compound->GetNumSubShapes()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "no child of this compound has that index");
+  }
+  creator->creator = compound->GetSubShapeIDFromIndex(
+      static_cast<int>(index), creator->creator);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetSubShapeIndexFromID(const ZJoltShape *shape,
+                                             ZJoltSubShapeId sub_shape_id,
+                                             uint32_t *out_index,
+                                             ZJoltSubShapeId *out_remainder) {
+  ZJOLT_ENTER(out_index, out_remainder);
+  if (!zjolt::Present(shape, out_index, out_remainder))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::CompoundShape *compound = AsCompound(shape);
+  if (compound == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a compound");
+  }
+  const JPH::SubShapeID id = zjolt::ToJoltSubShapeId(sub_shape_id);
+  // IsSubShapeIDValid never asserts; GetSubShapeIndexFromID does on a bad id,
+  // so this is what keeps that assert unreachable from here.
+  if (!compound->IsSubShapeIDValid(id)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "sub_shape_id does not name a direct child of this compound");
+  }
+  JPH::SubShapeID remainder;
+  *out_index = compound->GetSubShapeIndexFromID(id, remainder);
+  *out_remainder = zjolt::ToC(remainder);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeGetIntersectingSubShapes(const ZJoltShape *shape,
+                                               const ZJoltAABox *box,
+                                               uint32_t *out_indices,
+                                               uint32_t capacity,
+                                               uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(shape, box, out_count))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::CompoundShape *compound = AsCompound(shape);
+  if (compound == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a compound");
+  }
+
+  const uint32_t num_children =
+      static_cast<uint32_t>(compound->GetNumSubShapes());
+  if (out_indices == nullptr || capacity < num_children) {
+    *out_count = num_children;
+    return out_indices == nullptr ? ZJOLT_RESULT_OK
+                                  : ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  }
+
+  static_assert(sizeof(JPH::uint) == sizeof(uint32_t) &&
+                    alignof(JPH::uint) == alignof(uint32_t),
+                "JPH::uint must lay out the same as uint32_t for this cast");
+  const JPH::AABox jolt_box(zjolt::ToJolt(box->min), zjolt::ToJolt(box->max));
+  const int found = compound->GetIntersectingSubShapes(
+      jolt_box, reinterpret_cast<JPH::uint *>(out_indices),
+      static_cast<int>(capacity));
+  *out_count = static_cast<uint32_t>(found);
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltShapeMutableCompoundAddChild(ZJoltShape *shape,
@@ -694,6 +1005,26 @@ ZJoltResult zjoltShapeMutableCompoundMoveChild(ZJoltShape *shape,
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltShapeMutableCompoundReplaceChild(ZJoltShape *shape,
+                                                  uint32_t index,
+                                                  const ZJoltShape *new_shape,
+                                                  const ZJoltVec3 *position,
+                                                  const ZJoltQuat *rotation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, new_shape, position))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::MutableCompoundShape *compound = nullptr;
+  const ZJoltResult ready = OpenMutableCompound(shape, index, true, &compound);
+  if (ready != ZJOLT_RESULT_OK) return ready;
+
+  compound->ModifyShape(index, zjolt::ToJolt(*position),
+                        rotation != nullptr ? zjolt::ToJoltRotation(*rotation)
+                                            : JPH::Quat::sIdentity(),
+                        zjolt::ToJolt(new_shape));
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltShapeMutableCompoundAdjustCenterOfMass(ZJoltShape *shape) {
   ZJOLT_ENTER();
   if (!zjolt::Present(shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
@@ -748,6 +1079,22 @@ ZJoltResult zjoltShapeCreateOffsetCenterOfMass(const ZJoltShape *inner,
   return Finish(result, out);
 }
 
+ZJoltResult zjoltShapeGetInnerShape(const ZJoltShape *shape,
+                                    const ZJoltShape **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(shape, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Shape *jolt = zjolt::ToJolt(shape);
+  if (jolt->GetType() != JPH::EShapeType::Decorated) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "shape is not decorated (scaled, rotated-translated, or "
+        "offset-center-of-mass)");
+  }
+  *out = zjolt::ToC(static_cast<const JPH::DecoratedShape *>(jolt)->GetInnerShape());
+  return ZJOLT_RESULT_OK;
+}
+
 //===----------------------------------------------------------------------===//
 // Lifetime and introspection
 //===----------------------------------------------------------------------===//
@@ -767,6 +1114,16 @@ uint32_t zjoltShapeGetRefCount(const ZJoltShape *shape) {
   return static_cast<uint32_t>(zjolt::ToJolt(shape)->GetRefCount());
 }
 
+uint64_t zjoltShapeGetUserData(const ZJoltShape *shape) {
+  if (shape == nullptr) return 0;
+  return zjolt::ToJolt(shape)->GetUserData();
+}
+
+void zjoltShapeSetUserData(ZJoltShape *shape, uint64_t user_data) {
+  if (shape == nullptr) return;
+  const_cast<JPH::Shape *>(zjolt::ToJolt(shape))->SetUserData(user_data);
+}
+
 ZJoltShapeSubType zjoltShapeGetSubType(const ZJoltShape *shape) {
   if (shape == nullptr) return ZJOLT_SHAPE_SUB_TYPE_NONE;
   return ToCSubType(zjolt::ToJolt(shape)->GetSubType());
@@ -777,6 +1134,23 @@ const ZJoltPhysicsMaterial *zjoltShapeGetMaterial(
   if (shape == nullptr) return nullptr;
   return zjolt::ToC(
       zjolt::ToJolt(shape)->GetMaterial(zjolt::ToJoltSubShapeId(sub_shape_id)));
+}
+
+ZJoltResult zjoltShapeSetMaterial(ZJoltShape *shape,
+                                  const ZJoltPhysicsMaterial *material) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexShape *convex = AsConvex(shape);
+  if (convex == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex primitive");
+  }
+  // RefConst<PhysicsMaterial>'s own assignment operator does the reference
+  // counting: releases whatever material this shape held, adds one to
+  // `material`. NULL is a valid material here the same way it is at
+  // creation, and clears the shape back to Jolt's shared default.
+  const_cast<JPH::ConvexShape *>(convex)->SetMaterial(zjolt::ToJolt(material));
+  return ZJOLT_RESULT_OK;
 }
 
 float zjoltShapeGetVolume(const ZJoltShape *shape) {
@@ -844,6 +1218,30 @@ void zjoltShapeGetStats(const ZJoltShape *shape, ZJoltShapeStats *out) {
 float zjoltShapeGetInnerRadius(const ZJoltShape *shape) {
   if (shape == nullptr) return 0.0f;
   return zjolt::ToJolt(shape)->GetInnerRadius();
+}
+
+ZJoltResult zjoltShapeGetDensity(const ZJoltShape *shape, float *out_density) {
+  ZJOLT_ENTER(out_density);
+  if (!zjolt::Present(shape, out_density)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexShape *convex = AsConvex(shape);
+  if (convex == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex primitive");
+  }
+  *out_density = convex->GetDensity();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeSetDensity(ZJoltShape *shape, float density) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexShape *convex = AsConvex(shape);
+  if (convex == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex primitive");
+  }
+  const_cast<JPH::ConvexShape *>(convex)->SetDensity(density);
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltShapeGetRadius(const ZJoltShape *shape, float *out_radius) {
@@ -1085,33 +1483,229 @@ ZJoltResult zjoltShapeGetPlane(const ZJoltShape *shape, ZJoltPlane *out_plane,
   return ZJOLT_RESULT_OK;
 }
 
+static_assert(sizeof(ZJoltShapeSupportBuffer) ==
+                  sizeof(JPH::ConvexShape::SupportBuffer) &&
+              alignof(ZJoltShapeSupportBuffer) ==
+                  alignof(JPH::ConvexShape::SupportBuffer),
+             "ZJoltShapeSupportBuffer must match "
+             "JPH::ConvexShape::SupportBuffer exactly");
+
+ZJoltResult zjoltShapeGetSupportFunction(const ZJoltShape *shape,
+                                         ZJoltShapeSupportMode mode,
+                                         ZJoltShapeSupportBuffer *buffer,
+                                         const ZJoltVec3 *scale,
+                                         const ZJoltShapeSupportFunction **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(shape, buffer, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  const JPH::ConvexShape *convex = AsConvex(shape);
+  if (convex == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "shape is not a convex primitive");
+  }
+
+  JPH::ConvexShape::ESupportMode jolt_mode;
+  switch (mode) {
+    case ZJOLT_SHAPE_SUPPORT_MODE_INCLUDE_CONVEX_RADIUS:
+      jolt_mode = JPH::ConvexShape::ESupportMode::IncludeConvexRadius;
+      break;
+    case ZJOLT_SHAPE_SUPPORT_MODE_DEFAULT:
+      jolt_mode = JPH::ConvexShape::ESupportMode::Default;
+      break;
+    case ZJOLT_SHAPE_SUPPORT_MODE_EXCLUDE_CONVEX_RADIUS:
+    default:
+      jolt_mode = JPH::ConvexShape::ESupportMode::ExcludeConvexRadius;
+      break;
+  }
+
+  const JPH::Vec3 jolt_scale =
+      scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
+  auto *jolt_buffer =
+      reinterpret_cast<JPH::ConvexShape::SupportBuffer *>(buffer);
+  const JPH::ConvexShape::Support *support =
+      convex->GetSupportFunction(jolt_mode, *jolt_buffer, jolt_scale);
+  *out = reinterpret_cast<const ZJoltShapeSupportFunction *>(support);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltShapeSupportFunctionGetSupport(
+    const ZJoltShapeSupportFunction *support, const ZJoltVec3 *direction,
+    ZJoltVec3 *out) {
+  if (out != nullptr) *out = ZJoltVec3{0, 0, 0};
+  if (support == nullptr || direction == nullptr) return;
+  const auto *jolt_support =
+      reinterpret_cast<const JPH::ConvexShape::Support *>(support);
+  const JPH::Vec3 result = jolt_support->GetSupport(zjolt::ToJolt(*direction));
+  if (out != nullptr) *out = zjolt::ToC(result);
+}
+
+float zjoltShapeSupportFunctionGetConvexRadius(
+    const ZJoltShapeSupportFunction *support) {
+  if (support == nullptr) return 0.0f;
+  const auto *jolt_support =
+      reinterpret_cast<const JPH::ConvexShape::Support *>(support);
+  return jolt_support->GetConvexRadius();
+}
+
+ZJoltResult zjoltShapeGetSubmergedVolume(
+    const ZJoltShape *shape, const ZJoltMat44 *transform,
+    const ZJoltVec3 *scale, const ZJoltPlane *surface,
+    float *out_total_volume, float *out_submerged_volume,
+    ZJoltVec3 *out_center_of_buoyancy) {
+  ZJOLT_ENTER(out_total_volume, out_submerged_volume, out_center_of_buoyancy);
+  if (!zjolt::Present(shape, transform, surface, out_total_volume,
+                      out_submerged_volume, out_center_of_buoyancy)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::Shape *jolt_shape = zjolt::ToJolt(shape);
+  if (ContainsSubmergedVolumeHazard(jolt_shape)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "shape or one of its descendants is a mesh, a height field, or a "
+        "plane; Jolt's own GetSubmergedVolume for those asserts false "
+        "instead of computing an answer");
+  }
+
+  const JPH::Vec3 jolt_scale =
+      scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
+  float total_volume = 0.0f;
+  float submerged_volume = 0.0f;
+  JPH::Vec3 center_of_buoyancy = JPH::Vec3::sZero();
+  jolt_shape->GetSubmergedVolume(
+      zjolt::ToJolt(*transform), jolt_scale,
+      JPH::Plane(zjolt::ToJolt(surface->normal), surface->constant),
+      total_volume, submerged_volume,
+      center_of_buoyancy JPH_IF_DEBUG_RENDERER(, JPH::RVec3::sZero()));
+
+  *out_total_volume = total_volume;
+  *out_submerged_volume = submerged_volume;
+  *out_center_of_buoyancy = zjolt::ToC(center_of_buoyancy);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Submerged-volume accumulation for an arbitrary convex polyhedron
+//===----------------------------------------------------------------------===//
+
+struct ZJoltPolyhedronSubmergedVolumeCalculator {
+  /// Constructed before `calc` below (declaration order), and outlives it:
+  /// Jolt's own class only borrows a pointer into this for its lifetime.
+  std::vector<JPH::PolyhedronSubmergedVolumeCalculator::Point> points;
+  uint32_t num_points;
+  JPH::PolyhedronSubmergedVolumeCalculator calc;
+
+  ZJoltPolyhedronSubmergedVolumeCalculator(const JPH::Mat44 &transform,
+                                           const JPH::Vec3 *positions,
+                                           uint32_t count,
+                                           const JPH::Plane &surface)
+      : points(count),
+        num_points(count),
+        calc(transform, positions, sizeof(JPH::Vec3),
+             static_cast<int>(count), surface, points.data()) {}
+};
+
+ZJoltResult zjoltPolyhedronSubmergedVolumeCalculatorCreate(
+    const ZJoltMat44 *transform, const ZJoltVec3 *points, uint32_t num_points,
+    const ZJoltPlane *surface,
+    ZJoltPolyhedronSubmergedVolumeCalculator **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (transform == nullptr || points == nullptr || num_points == 0 ||
+      surface == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "transform, points and surface are required, and num_points must "
+        "be at least one");
+  }
+
+  std::vector<JPH::Vec3> jolt_points;
+  jolt_points.reserve(num_points);
+  for (uint32_t i = 0; i < num_points; ++i) {
+    jolt_points.push_back(zjolt::ToJolt(points[i]));
+  }
+  const JPH::Plane jolt_surface(zjolt::ToJolt(surface->normal),
+                                surface->constant);
+
+  ZJoltPolyhedronSubmergedVolumeCalculator *handle =
+      zjolt::New<ZJoltPolyhedronSubmergedVolumeCalculator>(
+          zjolt::ToJolt(*transform), jolt_points.data(), num_points,
+          jolt_surface);
+  if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+  zjolt::HandleCreated();
+  *out = handle;
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltPolyhedronSubmergedVolumeCalculatorDestroy(
+    ZJoltPolyhedronSubmergedVolumeCalculator *calc) {
+  if (calc == nullptr) return;
+  zjolt::Delete(calc);
+  zjolt::HandleDestroyed();
+}
+
+bool zjoltPolyhedronSubmergedVolumeCalculatorAreAllAbove(
+    const ZJoltPolyhedronSubmergedVolumeCalculator *calc) {
+  if (calc == nullptr) return false;
+  return calc->calc.AreAllAbove();
+}
+
+bool zjoltPolyhedronSubmergedVolumeCalculatorAreAllBelow(
+    const ZJoltPolyhedronSubmergedVolumeCalculator *calc) {
+  if (calc == nullptr) return false;
+  return calc->calc.AreAllBelow();
+}
+
+uint32_t zjoltPolyhedronSubmergedVolumeCalculatorGetReferencePointIdx(
+    const ZJoltPolyhedronSubmergedVolumeCalculator *calc) {
+  if (calc == nullptr) return 0;
+  return static_cast<uint32_t>(calc->calc.GetReferencePointIdx());
+}
+
+ZJoltResult zjoltPolyhedronSubmergedVolumeCalculatorAddFace(
+    ZJoltPolyhedronSubmergedVolumeCalculator *calc, uint32_t idx1,
+    uint32_t idx2, uint32_t idx3) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(calc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (idx1 >= calc->num_points || idx2 >= calc->num_points ||
+      idx3 >= calc->num_points) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "a face index is at or beyond num_points");
+  }
+  const uint32_t ref =
+      static_cast<uint32_t>(calc->calc.GetReferencePointIdx());
+  if (idx1 == ref || idx2 == ref || idx3 == ref) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a face using the reference point contributes no volume; skip it "
+        "instead of adding it");
+  }
+  calc->calc.AddFace(static_cast<int>(idx1), static_cast<int>(idx2),
+                     static_cast<int>(idx3));
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltPolyhedronSubmergedVolumeCalculatorGetResult(
+    const ZJoltPolyhedronSubmergedVolumeCalculator *calc,
+    float *out_submerged_volume, ZJoltVec3 *out_center_of_buoyancy) {
+  if (out_submerged_volume != nullptr) *out_submerged_volume = 0.0f;
+  if (out_center_of_buoyancy != nullptr) {
+    *out_center_of_buoyancy = ZJoltVec3{0, 0, 0};
+  }
+  if (calc == nullptr) return;
+  float volume = 0.0f;
+  JPH::Vec3 center = JPH::Vec3::sZero();
+  calc->calc.GetResult(volume, center);
+  if (out_submerged_volume != nullptr) *out_submerged_volume = volume;
+  if (out_center_of_buoyancy != nullptr) {
+    *out_center_of_buoyancy = zjolt::ToC(center);
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Serialisation
 //
-// SaveWithChildren / sRestoreWithChildren rather than the plain binary state,
-// because a decorated or compound shape is a graph: the plain form saves one
-// node and leaves the caller to re-supply the children in the original order,
-// which is not something a flat C ABI can promise.
-//
-// Jolt's payload is wrapped in a small container, and that is load-bearing
-// rather than decorative. Jolt validates its own reads — it tests IsEOF after
-// every stage — but only AFTER it has already used the first field it read.
-// `Shape::sRestoreFromBinaryState` reads an EShapeSubType and passes it
-// straight to `ShapeFunctions::sGet`, which indexes a fixed table; a byte
-// outside the enum range is an out-of-bounds index, and in a build with
-// asserts it is an abort before the EOF check is ever reached. Reproduced
-// here by handing `zjoltShapeRestore` a buffer of ordinary text.
-//
-// So the container answers a question Jolt cannot: is this buffer a shape at
-// all? A magic tag rejects the wrong file entirely; the recorded length
-// rejects truncation and trailing bytes before Jolt sees them; the build
-// stamp rejects a cache written by a different Jolt or a different precision
-// setting, which would otherwise deserialise into a plausible-looking wrong
-// shape; and the checksum rejects a payload damaged in storage.
-//
-// What it does NOT claim: this is not a defence against a deliberately
-// crafted payload that carries a matching checksum. Treat a shape cache as
-// something your own cook wrote, not as untrusted input.
+// SaveWithChildren/sRestoreWithChildren, not plain binary state, since a graph shape cannot re-supply children order through a flat ABI. The container exists because Jolt validates AFTER using an unchecked field first (sRestoreFromBinaryState indexes a table with the shape-type byte before its own EOF check) — magic/length/build-stamp/checksum catch a bad buffer first.
+// NOT a defence against a deliberately crafted payload with a matching checksum — treat a shape cache as your own cook's output, not untrusted input.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -1134,6 +1728,10 @@ constexpr size_t kHeaderSize = kContainer.HeaderSize();
 static_assert(kHeaderSize == ZJOLT_SHAPE_HEADER_SIZE,
               "ZJOLT_SHAPE_HEADER_SIZE no longer matches the header "
               "zjoltShapeSave writes");
+
+static_assert(zjolt::kStreamHeaderSize == ZJOLT_SHAPE_STREAM_HEADER_SIZE,
+              "ZJOLT_SHAPE_STREAM_HEADER_SIZE no longer matches the header "
+              "zjoltShapeSaveStream writes");
 
 }  // namespace
 
@@ -1204,12 +1802,87 @@ ZJoltResult zjoltShapeRestore(const void *data, size_t size,
 }
 
 //===----------------------------------------------------------------------===//
+// The stream form
+//
+// Jolt's own payload behind a twelve-byte header (not the 32-byte buffer container above) — @see ZJoltStream in zjolt_core.h.
+// The twelve bytes do NOT close the upstream bug the buffer form's length/CRC-32 route around (sRestoreFromBinaryState uses the shape-type byte before its own EOF check — see UPSTREAM.md): a stream restore is no safer against a CORRUPTED payload than handing Jolt's StreamIn directly. Treat a shape stream like a shape cache — your own pipeline's output, not an arbitrary transport.
+//===----------------------------------------------------------------------===//
+
+namespace {
+constexpr uint8_t kStreamMagic[4] = {'Z', 'S', 'S', 'H'};
+}  // namespace
+
+ZJoltResult zjoltShapeSaveStream(const ZJoltShape *shape,
+                                 const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+
+  zjolt::HostStream host(*stream);
+  zjolt::WriteStreamHeader(host, kStreamMagic);
+
+  JPH::Shape::ShapeToIDMap shape_map;
+  JPH::Shape::MaterialToIDMap material_map;
+  zjolt::ToJolt(shape)->SaveWithChildren(host, shape_map, material_map);
+
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while writing the shape");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeRestoreStream(const ZJoltStream *stream,
+                                    ZJoltShape **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(
+      host, kStreamMagic, "not a shape saved by zjoltShapeSaveStream");
+  if (header != ZJOLT_RESULT_OK) return header;
+
+  JPH::Shape::IDToShapeMap shape_map;
+  JPH::Shape::IDToMaterialMap material_map;
+  JPH::Shape::ShapeResult result =
+      JPH::Shape::sRestoreWithChildren(host, shape_map, material_map);
+
+  if (result.HasError()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT, result.GetError().c_str());
+  }
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while reading the shape");
+  }
+  if (!result.IsValid() || host.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the stream ended before the shape did");
+  }
+  return Finish(result, out);
+}
+
+//===----------------------------------------------------------------------===//
 // Introspection Jolt puts on every leaf shape
 //===----------------------------------------------------------------------===//
 
 uint32_t zjoltShapeGetSubShapeIDBits(const ZJoltShape *shape) {
   if (shape == nullptr) return 0;
   return zjolt::ToJolt(shape)->GetSubShapeIDBitsRecursive();
+}
+
+bool zjoltShapeIsSubShapeIDValid(const ZJoltShape *shape,
+                                 ZJoltSubShapeId sub_shape_id) {
+  if (shape == nullptr) return false;
+  return IsSubShapeIdValid(zjolt::ToJolt(shape),
+                           zjolt::ToJoltSubShapeId(sub_shape_id));
 }
 
 void zjoltShapeGetSurfaceNormal(const ZJoltShape *shape,
@@ -1272,19 +1945,31 @@ ZJoltResult zjoltShapeGetSubShapeTransformedShape(
           jolt_scale, remainder);
   if (out_remainder != nullptr) *out_remainder = zjolt::ToC(remainder);
 
-  // Built from the child's own public fields rather than by reaching into
-  // JPH::TransformedShape's insides: zjoltTransformedShapeCreate is the one
-  // place a ZJoltTransformedShape is constructed, and going through it here
-  // keeps that true instead of adding a second path with its own chance to
-  // drift. The body id is always invalid, matching what
-  // Shape::GetSubShapeTransformedShape itself documents: this relates two
-  // shapes, not a shape and a body.
+  // Built from the child's own public fields, not by reaching into
+  // JPH::TransformedShape's insides: zjoltTransformedShapeCreate is the
+  // one place a ZJoltTransformedShape is constructed, and this keeps
+  // that true instead of adding a second path with its own chance to
+  // drift. The body id is always invalid — this relates two shapes, not a shape and a body.
   const ZJoltRVec3 child_position = zjolt::ToCR(child.mShapePositionCOM);
   const ZJoltQuat child_rotation = zjolt::ToC(child.mShapeRotation);
   const ZJoltVec3 child_scale = zjolt::ToC(child.GetShapeScale());
   return zjoltTransformedShapeCreate(zjolt::ToC(child.mShape.GetPtr()),
                                      &child_position, &child_rotation,
                                      &child_scale, ZJOLT_BODY_ID_INVALID, out);
+}
+
+const ZJoltShape *zjoltShapeGetLeafShape(const ZJoltShape *shape,
+                                         ZJoltSubShapeId sub_shape_id,
+                                         ZJoltSubShapeId *out_remainder) {
+  if (shape == nullptr) {
+    if (out_remainder != nullptr) *out_remainder = ZJOLT_SUB_SHAPE_ID_EMPTY;
+    return nullptr;
+  }
+  JPH::SubShapeID remainder;
+  const JPH::Shape *leaf = zjolt::ToJolt(shape)->GetLeafShape(
+      zjolt::ToJoltSubShapeId(sub_shape_id), remainder);
+  if (out_remainder != nullptr) *out_remainder = zjolt::ToC(remainder);
+  return zjolt::ToC(leaf);
 }
 
 ZJoltResult zjoltShapeScaleShape(const ZJoltShape *shape,
@@ -1547,6 +2232,64 @@ ZJoltResult zjoltShapeHeightFieldGetHeights(const ZJoltShape *shape,
 
   hf->GetHeights(x, y, size_x, size_y, out_heights,
                 static_cast<intptr_t>(stride));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeHeightFieldSetHeights(
+    ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
+    uint32_t size_y, const float *heights, uint32_t stride,
+    float active_edge_cos_threshold_angle) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, heights)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (size_x == 0 || size_y == 0) return ZJOLT_RESULT_OK;
+
+  JPH::HeightFieldShape *hf = AsMutableHeightField(shape);
+  if (hf == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this shape is not a height field");
+  }
+
+  // Same bounds zjoltShapeHeightFieldGetHeights checks, for the same reason:
+  // Jolt asserts on all four instead of clamping.
+  const uint32_t block_size = hf->GetBlockSize();
+  const uint32_t sample_count = hf->GetSampleCount();
+  if (block_size == 0 || x % block_size != 0 || y % block_size != 0 ||
+      x >= sample_count || y >= sample_count ||
+      x + size_x > sample_count || y + size_y > sample_count ||
+      stride < size_x) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "x and y must be a multiple of the block size, the requested block "
+        "must fit within the sample grid, and stride must be at least size_x");
+  }
+
+  // Jolt's own doc says a height outside [Min,Max] "will be clamped", but
+  // quantization (`(int)floor((h - offset) / scale)`) runs before that
+  // clamp, which is UB for an `h` far enough outside range — reachable
+  // when a flat field's zero-width-range guard leaves `scale` small
+  // enough to overflow int. So the clamp happens here, on the values
+  // themselves, first. `cNoCollisionValue` is left untouched (a sentinel, not a height — Jolt excludes it from quantization too).
+  JPH::Array<float> clamped(static_cast<size_t>(size_x) * size_y);
+  const float min_height = hf->GetMinHeightValue();
+  const float max_height = hf->GetMaxHeightValue();
+  for (uint32_t row = 0; row < size_y; ++row) {
+    for (uint32_t col = 0; col < size_x; ++col) {
+      const float h = heights[static_cast<size_t>(row) * stride + col];
+      clamped[static_cast<size_t>(row) * size_x + col] =
+          h == JPH::HeightFieldShapeConstants::cNoCollisionValue
+              ? h
+              : JPH::Clamp(h, min_height, max_height);
+    }
+  }
+
+  // A plain malloc-backed allocator rather than the physics system's own
+  // arena: this shape need not belong to any system yet, and the memory
+  // SetHeights needs is bounded by the touched block plus a border of one
+  // block size, not something worth threading a shared arena in for.
+  JPH::TempAllocatorMalloc allocator;
+  hf->SetHeights(x, y, size_x, size_y, clamped.data(),
+                static_cast<intptr_t>(size_x), allocator,
+                active_edge_cos_threshold_angle);
   return ZJOLT_RESULT_OK;
 }
 

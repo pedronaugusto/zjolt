@@ -1,17 +1,16 @@
 //===----------------------------------------------------------------------===//
 // zjolt — constraints.
 //
-// Almost all of this file is precondition checking, and that is the point.
-// Jolt's constraints carry more caller-trippable assertions than anything else
-// in the library — a hinge whose limits have the wrong sign, a motor switched
-// on before its settings are valid, a gear handed a slider where it wanted a
-// hinge — and every one of them is an abort in an asserts-on build, at a
-// stack that names the solver rather than the call that was wrong. The rule
-// here is the one in BINDING.md: never forward a call that would abort.
+// Almost all of this file is precondition checking, and that is the
+// point: Jolt's constraints carry more caller-trippable assertions than
+// anything else in the library — a hinge with backwards limits, a motor
+// enabled before its settings are valid — and each is an abort in an
+// asserts-on build, at a stack naming the solver, not the bad call. The
+// rule here is BINDING.md's: never forward a call that would abort.
 //
-// The rest is the shape of the boundary. Descriptors are flat plain data; the
-// Jolt `*Settings` object is built on the stack from one, used once, and
-// dropped. Nothing of Jolt's crosses.
+// The rest is the shape of the boundary: descriptors are flat plain
+// data; the Jolt `*Settings` object is built on the stack from one, used
+// once, and dropped. Nothing of Jolt's crosses.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -30,22 +29,16 @@
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
+#include <Jolt/Physics/StateRecorder.h>
 
 #include <cfloat>
 
 //===----------------------------------------------------------------------===//
 // Handle mapping
 //
-// Two more of the incomplete tags described at the top of zjolt_internal.h.
-// Both name objects Jolt constructs and reference counts itself, so neither
-// can be a struct of ours without a second identity, and both are converted
-// through exactly as ZJoltShape is: never completed, never dereferenced as the
-// tag, every use going back through the Jolt type first.
-//
-// They live here rather than in zjolt_internal.h because they are the only two
-// handles this subsystem introduces and nothing outside it converts one. The
-// rule the internal header states — one conversion, in one place — is about
-// there being a single definition, not about which file it sits in.
+// Two more of the incomplete tags from zjolt_internal.h, converted
+// exactly as ZJoltShape is. Live here (not zjolt_internal.h) since only this subsystem introduces or converts them — the "one conversion, one place" rule is about a single definition, not which file it sits in.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -67,6 +60,27 @@ inline ZJoltPathConstraintPath *ToC(JPH::PathConstraintPath *path) {
   return reinterpret_cast<ZJoltPathConstraintPath *>(path);
 }
 
+inline JPH::ConstraintSettings *ToJolt(ZJoltConstraintSettings *settings) {
+  return reinterpret_cast<JPH::ConstraintSettings *>(settings);
+}
+inline const JPH::ConstraintSettings *ToJolt(const ZJoltConstraintSettings *settings) {
+  return reinterpret_cast<const JPH::ConstraintSettings *>(settings);
+}
+inline ZJoltConstraintSettings *ToC(JPH::ConstraintSettings *settings) {
+  return reinterpret_cast<ZJoltConstraintSettings *>(settings);
+}
+
+/// `ZJoltStateRecorder` names a live `JPH::StateRecorder&` Jolt hands the
+/// shim during a step, not an object either side owns — nothing here
+/// constructs or destroys one, only converts the reference for the length of
+/// one SaveState/RestoreState call.
+inline JPH::StateRecorder *ToJolt(ZJoltStateRecorder *recorder) {
+  return reinterpret_cast<JPH::StateRecorder *>(recorder);
+}
+inline ZJoltStateRecorder *ToC(JPH::StateRecorder *recorder) {
+  return reinterpret_cast<ZJoltStateRecorder *>(recorder);
+}
+
 }  // namespace zjolt
 
 namespace {
@@ -74,10 +88,8 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Scalar and vector validation
 //
-// A NaN reaching Jolt does not abort; it spreads. Every float a descriptor
-// carries is checked for finiteness before it is used, because the failure
-// that follows one otherwise surfaces as a body that has vanished, several
-// frames later, in a different subsystem.
+// A NaN reaching Jolt does not abort; it spreads. Every float a
+// descriptor carries is checked for finiteness before use — otherwise the failure surfaces as a body that has vanished, several frames later, in a different subsystem.
 //===----------------------------------------------------------------------===//
 
 bool IsFinite(float v) { return std::isfinite(v); }
@@ -104,11 +116,9 @@ ZJoltResult CheckFloat(float v, const char *what) {
 
 /// An axis a constraint frame is built from.
 ///
-/// Jolt does not assert on a degenerate one — it feeds it to
-/// `Mat44::GetQuaternion`, which produces a quaternion that is not a rotation,
-/// and the joint then holds a frame that is not a frame. That is worse than an
-/// abort, not better, so the check is here: finite, and long enough to
-/// normalise.
+/// Jolt does not assert on a degenerate one — it feeds `Mat44::GetQuaternion`,
+/// producing a non-rotation quaternion and a joint whose frame is not a
+/// frame. Worse than an abort, so checked here: finite, and long enough to normalise.
 ZJoltResult CheckAxis(const ZJoltVec3 &v, const char *what) {
   if (!IsFinite(v)) return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, what);
   const float length_sq = v.x * v.x + v.y * v.y + v.z * v.z;
@@ -119,11 +129,9 @@ ZJoltResult CheckAxis(const ZJoltVec3 &v, const char *what) {
 
 /// Two axes that have to span a plane.
 ///
-/// Tolerant rather than exact: a caller's axes have usually been through a
-/// transform, and demanding an exact right angle would refuse frames that are
-/// perfectly usable. What is refused is a pair so close to parallel that their
-/// cross product carries no direction — which is the case Jolt cannot recover
-/// from.
+/// Tolerant rather than exact: a caller's axes have usually been
+/// through a transform, so an exact right angle is not demanded — only
+/// a pair so close to parallel that their cross product carries no direction, the case Jolt cannot recover from.
 ZJoltResult CheckPerpendicular(const ZJoltVec3 &a, const ZJoltVec3 &b,
                                const char *what) {
   const JPH::Vec3 ja = zjolt::ToJolt(a).NormalizedOr(JPH::Vec3::sZero());
@@ -136,13 +144,11 @@ ZJoltResult CheckPerpendicular(const ZJoltVec3 &a, const ZJoltVec3 &b,
 //===----------------------------------------------------------------------===//
 // Enumeration conversion
 //
-// A C caller can pass any integer for an enum parameter, so every one of these
-// refuses a value it does not know rather than falling through to a default.
-// A silently substituted default here is a joint that does not do what the
-// call said, which is exactly the class of bug an ABI should not invent.
+// A C caller can pass any integer for an enum parameter, so every one refuses an unknown value rather than falling through to a silently wrong default.
+// Callers take int32_t, not the enum, and convert via zjolt::RawEnum (zjolt_internal.h) — ToC* converts what zjolt itself computed and needs none of this.
 //===----------------------------------------------------------------------===//
 
-ZJoltResult ToJoltSpace(ZJoltConstraintSpace space, JPH::EConstraintSpace *out) {
+ZJoltResult ToJoltSpace(int32_t space, JPH::EConstraintSpace *out) {
   switch (space) {
     case ZJOLT_CONSTRAINT_SPACE_LOCAL_TO_BODY_COM:
       *out = JPH::EConstraintSpace::LocalToBodyCOM;
@@ -155,7 +161,7 @@ ZJoltResult ToJoltSpace(ZJoltConstraintSpace space, JPH::EConstraintSpace *out) 
                          "space is not a ZJoltConstraintSpace");
 }
 
-ZJoltResult ToJoltMotorState(ZJoltMotorState state, JPH::EMotorState *out) {
+ZJoltResult ToJoltMotorState(int32_t state, JPH::EMotorState *out) {
   switch (state) {
     case ZJOLT_MOTOR_STATE_OFF:
       *out = JPH::EMotorState::Off;
@@ -188,7 +194,7 @@ ZJoltMotorState ToCMotorState(JPH::EMotorState state) {
   return ZJOLT_MOTOR_STATE_POSITION_AND_VELOCITY;
 }
 
-ZJoltResult ToJoltSwingType(ZJoltSwingType type, JPH::ESwingType *out) {
+ZJoltResult ToJoltSwingType(int32_t type, JPH::ESwingType *out) {
   switch (type) {
     case ZJOLT_SWING_TYPE_CONE:
       *out = JPH::ESwingType::Cone;
@@ -201,7 +207,7 @@ ZJoltResult ToJoltSwingType(ZJoltSwingType type, JPH::ESwingType *out) {
                          "swing_type is not a ZJoltSwingType");
 }
 
-ZJoltResult ToJoltPathRotation(ZJoltPathRotationConstraintType type,
+ZJoltResult ToJoltPathRotation(int32_t type,
                                JPH::EPathRotationConstraintType *out) {
   switch (type) {
     case ZJOLT_PATH_ROTATION_CONSTRAINT_TYPE_FREE:
@@ -254,10 +260,15 @@ ZJoltConstraintSubType ToCSubType(JPH::EConstraintSubType sub_type) {
       return ZJOLT_CONSTRAINT_SUB_TYPE_RACK_AND_PINION;
     case JPH::EConstraintSubType::Pulley:
       return ZJOLT_CONSTRAINT_SUB_TYPE_PULLEY;
+    case JPH::EConstraintSubType::User1:
+      // The only C++ type in this library that claims a User* slot — see
+      // ZJoltCustomConstraint below.
+      return ZJOLT_CONSTRAINT_SUB_TYPE_CUSTOM;
     default:
       break;
   }
-  // Vehicle, and the four User* slots. Named rather than guessed at.
+  // Vehicle, and the three remaining User* slots. Named rather than guessed
+  // at.
   return ZJOLT_CONSTRAINT_SUB_TYPE_OTHER;
 }
 
@@ -267,11 +278,9 @@ ZJoltConstraintSubType ToCSubType(JPH::EConstraintSubType sub_type) {
 
 /// A spring the constraint parts will accept.
 ///
-/// `MotorSettings::IsValid` — the thing `SetMotorState` asserts on — requires
-/// a non-negative frequency and damping, so a spring is validated wherever it
-/// crosses rather than only where it is attached to a motor. The same struct
-/// also drives limit springs, which have no IsValid of their own but produce
-/// the same nonsense from a negative stiffness.
+/// `MotorSettings::IsValid` requires non-negative frequency and
+/// damping, so a spring is validated wherever it crosses, not only when
+/// attached to a motor — the same struct also drives limit springs, which have no IsValid of their own but produce the same nonsense from a negative stiffness.
 ZJoltResult ToJoltSpring(const ZJoltSpringSettings &spring,
                          JPH::SpringSettings *out) {
   if (!IsFinite(spring.frequency_or_stiffness) || !IsFinite(spring.damping)) {
@@ -284,7 +293,10 @@ ZJoltResult ToJoltSpring(const ZJoltSpringSettings &spring,
         "spring frequency/stiffness and damping must not be negative; 0 "
         "frequency is how a hard limit is spelled");
   }
-  switch (spring.mode) {
+  // `mode` is a field of a struct the host filled in, so it is read as a
+  // plain integer here: switching on it as its enum type would itself be the
+  // load. See zjolt::RawEnum in zjolt_internal.h.
+  switch (zjolt::RawEnum(spring.mode)) {
     case ZJOLT_SPRING_MODE_FREQUENCY_AND_DAMPING:
       out->mMode = JPH::ESpringMode::FrequencyAndDamping;
       break;
@@ -324,17 +336,10 @@ ZJoltSpringSettings ToCSpring(const JPH::SpringSettings &spring) {
 
 /// A motor that `SetMotorState` will accept.
 ///
-/// This is the precondition that costs the most to get wrong. Every joint with
-/// a motor asserts `mMotorSettings.IsValid()` before switching one on, so a
-/// motor built from a descriptor with crossed limits does not fail at the
-/// descriptor — it fails, in an asserts-on build, at whatever later frame
-/// first turns the motor on. Validating here means the assertion is
-/// unreachable rather than merely unlikely.
-///
-/// The fields are assigned rather than passed to a MotorSettings constructor
-/// on purpose: every one of those constructors asserts IsValid() itself, so
-/// building an invalid one to inspect it would abort before it could be
-/// refused.
+/// Every joint with a motor asserts `mMotorSettings.IsValid()` before
+/// switching one on, so an invalid descriptor otherwise fails several
+/// frames later, not here. Fields are assigned rather than passed to a
+/// MotorSettings constructor: those assert IsValid() themselves, so building one to inspect would abort first.
 ZJoltResult ToJoltMotor(const ZJoltMotorSettings &motor,
                         JPH::MotorSettings *out) {
   const ZJoltResult spring = ToJoltSpring(motor.spring, &out->mSpringSettings);
@@ -429,12 +434,10 @@ ZJoltResult CheckLimitsNotDegenerate(float min, float max,
 
 /// Resolves two body ids and hands the bodies to `build`.
 ///
-/// The bodies are held under one multi-body WRITE lock for the duration:
-/// a constraint reads both transforms and then stores raw pointers to them,
-/// and a single multi-lock is what makes taking two of them at once free of a
-/// lock-ordering question. ZJOLT_BODY_ID_WORLD is not a body and is not
-/// locked; Jolt's own `Body::sFixedToWorld` stands in for it, which is exactly
-/// what that object exists for.
+/// Held under one multi-body WRITE lock for the duration — a constraint
+/// reads both transforms and stores raw pointers, and one multi-lock
+/// avoids a lock-ordering question. ZJOLT_BODY_ID_WORLD is not a body
+/// and is not locked; Jolt's own `Body::sFixedToWorld` stands in for it.
 template <typename Build>
 ZJoltResult BuildConstraint(ZJoltPhysicsSystem *system, ZJoltBodyId body1,
                             ZJoltBodyId body2, ZJoltConstraint **out,
@@ -496,15 +499,12 @@ ZJoltResult Narrow(const ZJoltConstraint *constraint,
   return ZJOLT_RESULT_OK;
 }
 
-/// The handle as a TwoBodyConstraint, which is what carries the two bodies and
+/// The handle as a TwoBodyConstraint, which carries the two bodies and
 /// the constraint frame.
 ///
-/// Every kind this ABI can create is one, so this cannot fail for a handle
-/// that came out of zjoltConstraintCreate*. It is still asked rather than
-/// assumed, because that is not the only source of one:
-/// zjoltVehicleConstraintAsConstraint hands back a handle to a
-/// JPH::VehicleConstraint, which derives from Constraint DIRECTLY and is not a
-/// TwoBodyConstraint at all. Assuming would be a cast to the wrong type.
+/// Every kind this ABI can create is one, so this cannot fail for a
+/// zjoltConstraintCreate* handle — but it is checked, not assumed:
+/// zjoltVehicleConstraintAsConstraint hands back a JPH::VehicleConstraint, which derives from Constraint DIRECTLY, not a TwoBodyConstraint.
 ZJoltResult NarrowTwoBody(const ZJoltConstraint *constraint,
                           const JPH::TwoBodyConstraint **out) {
   if (constraint == nullptr) {
@@ -521,12 +521,10 @@ ZJoltResult NarrowTwoBody(const ZJoltConstraint *constraint,
 
 /// Whether `constraint` is in `system`'s constraint list.
 ///
-/// Jolt exposes membership only as a copy of the whole list — the index it
-/// keeps per constraint is private, with ConstraintManager as its only friend
-/// — so this is a scan. It is exact, which a cached flag would not stay:
-/// destroying a physics system drops its constraints without telling anyone
-/// holding one, and a flag set at add time would then be a lie about a system
-/// that no longer exists.
+/// Jolt exposes membership only as a copy of the whole list — its
+/// per-constraint index is private to ConstraintManager — so this is a
+/// scan. Exact, unlike a cached flag: destroying a system drops its
+/// constraints without telling anyone still holding one.
 bool IsInSystem(const ZJoltPhysicsSystem *system,
                 const JPH::Constraint *constraint) {
   const JPH::Constraints constraints = system->system.GetConstraints();
@@ -537,11 +535,9 @@ bool IsInSystem(const ZJoltPhysicsSystem *system,
 
 /// Whether both of a constraint's bodies live in `system`.
 ///
-/// Adding a constraint whose bodies belong to a different system hands Jolt's
-/// island builder body indices from a body manager it is not looking at —
-/// out-of-bounds, and silent in a build without asserts. Comparing the
-/// POINTER the id resolves to in this system against the one the constraint
-/// holds is what makes that exact rather than approximate.
+/// Adding one whose bodies belong to a different system hands Jolt's
+/// island builder body indices from a body manager it is not looking at
+/// — out-of-bounds, silent without asserts. Compares the POINTER the id resolves to here against the one the constraint holds, for an exact answer.
 bool BodiesBelongTo(const ZJoltPhysicsSystem *system,
                     const JPH::TwoBodyConstraint *constraint) {
   const JPH::Body *bodies[2] = {constraint->GetBody1(), constraint->GetBody2()};
@@ -559,14 +555,13 @@ bool BodiesBelongTo(const ZJoltPhysicsSystem *system,
 
 /// A six-DOF axis, checked to be one.
 ///
-/// SixDOFConstraint indexes `mLimitMin`, `mMaxFriction`, `mMotorSettings` and
-/// friends with the enumerator directly and has no bounds check of its own, so
-/// a value outside the enum is an out-of-bounds access rather than an
-/// assertion. `translations_only` covers the narrower case: soft limits exist
-/// for the translation axes and Jolt asserts on the rest.
-ZJoltResult CheckSixDofAxis(ZJoltSixDofAxis axis, bool translations_only,
+/// SixDOFConstraint indexes `mLimitMin`/`mMaxFriction`/`mMotorSettings`
+/// with the enumerator directly, no bounds check of its own — an
+/// out-of-range value is an out-of-bounds access, not an assertion.
+/// `translations_only` covers soft limits (translation axes only). Takes the raw integer, like the conversions above (zjolt::RawEnum).
+ZJoltResult CheckSixDofAxis(int32_t axis, bool translations_only,
                             JPH::SixDOFConstraintSettings::EAxis *out) {
-  const int value = static_cast<int>(axis);
+  const int value = axis;
   const int limit = translations_only
                         ? ZJOLT_SIX_DOF_TRANSLATION_AXIS_COUNT
                         : ZJOLT_SIX_DOF_AXIS_COUNT;
@@ -584,11 +579,9 @@ ZJoltResult CheckSixDofAxis(ZJoltSixDofAxis axis, bool translations_only,
 
 /// One of the auxiliary constraints a gear or rack and pinion is told about.
 ///
-/// NULL is allowed and means "none": both of those joints check for it and
-/// fall back to matching velocities only. What is not allowed is a constraint
-/// of the wrong kind. SolvePositionConstraint casts to the kind it expects and
-/// asserts `false, "Unsupported"` otherwise, which fires during a step rather
-/// than at the call that was wrong.
+/// NULL means "none": both joints fall back to matching velocities
+/// only. A constraint of the wrong kind is refused here, since
+/// SolvePositionConstraint's own cast asserts `false, "Unsupported"` during a step, not at the call that was wrong.
 ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
                            JPH::EConstraintSubType expected, const char *what,
                            const JPH::Constraint **out) {
@@ -603,14 +596,204 @@ ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
   return ZJOLT_RESULT_OK;
 }
 
+//===----------------------------------------------------------------------===//
+// Custom constraints
+//
+// ZJoltCustomConstraint forwards every solver virtual to a host's function pointers, once per virtual rather than once per Jacobian operation.
+// What crosses is ZJoltSolverBodyPair, a POD snapshot built from the live bodies before the callback and written back after.
+//===----------------------------------------------------------------------===//
+
+/// A settings object with nowhere to round-trip a host's callbacks or user
+/// pointer through: those live only on the constraint itself. `Create` is
+/// therefore unreachable in practice — nothing in this library calls it, and
+/// a host cannot either, since ZJoltCustomConstraintSettings is not a type
+/// this ABI exposes — but TwoBodyConstraintSettings declares it pure virtual,
+/// so a concrete override is what the type system asks for.
+class ZJoltCustomConstraintSettings final : public JPH::TwoBodyConstraintSettings {
+ public:
+  JPH::TwoBodyConstraint *Create(JPH::Body &, JPH::Body &) const override {
+    return nullptr;
+  }
+};
+
+class ZJoltCustomConstraint final : public JPH::TwoBodyConstraint {
+ public:
+  ZJoltCustomConstraint(JPH::Body &inBody1, JPH::Body &inBody2,
+                        const ZJoltCustomConstraintSettings &inSettings,
+                        const ZJoltCustomConstraintCallbacks &inCallbacks,
+                        void *inUser, JPH::Mat44Arg inToBody1,
+                        JPH::Mat44Arg inToBody2)
+      : JPH::TwoBodyConstraint(inBody1, inBody2, inSettings),
+        callbacks_(inCallbacks),
+        user_(inUser),
+        to_body1_(inToBody1),
+        to_body2_(inToBody2) {}
+
+  ~ZJoltCustomConstraint() override {
+    if (callbacks_.destroy != nullptr) callbacks_.destroy(user_);
+  }
+
+  void *UserData() const { return user_; }
+
+  JPH::EConstraintSubType GetSubType() const override {
+    return JPH::EConstraintSubType::User1;
+  }
+
+  void NotifyShapeChanged(const JPH::BodyID &inBodyID,
+                          JPH::Vec3Arg inDeltaCOM) override {
+    callbacks_.notify_shape_changed(user_, zjolt::ToC(inBodyID),
+                                    zjolt::ToC(inDeltaCOM));
+  }
+
+  void ResetWarmStart() override { callbacks_.reset_warm_start(user_); }
+
+  bool IsActive() const override {
+    return JPH::TwoBodyConstraint::IsActive() && callbacks_.is_active(user_);
+  }
+
+  // Jolt's own solver does not grant every phase the same body access:
+  // JobSetupVelocityConstraints and JobSolvePositionConstraints both take
+  // BodyAccess::Grant(velocity = None, ...) (PhysicsSystem.cpp), the same
+  // grant every built-in constraint's own SetupVelocityConstraint /
+  // SolvePositionConstraint honours by never touching velocity. Snapshot
+  // and WriteBackVelocity below follow that split — see Snapshot's `bool`.
+
+  void SetupVelocityConstraint(float inDeltaTime) override {
+    ZJoltSolverBodyPair pair = Snapshot(/*include_velocity=*/false);
+    callbacks_.setup_velocity(user_, &pair, inDeltaTime);
+  }
+
+  void WarmStartVelocityConstraint(float inWarmStartImpulseRatio) override {
+    ZJoltSolverBodyPair pair = Snapshot(/*include_velocity=*/true);
+    callbacks_.warm_start_velocity(user_, &pair, inWarmStartImpulseRatio);
+    WriteBackVelocity(pair);
+  }
+
+  bool SolveVelocityConstraint(float inDeltaTime) override {
+    ZJoltSolverBodyPair pair = Snapshot(/*include_velocity=*/true);
+    const bool changed = callbacks_.solve_velocity(user_, &pair, inDeltaTime);
+    WriteBackVelocity(pair);
+    return changed;
+  }
+
+  bool SolvePositionConstraint(float inDeltaTime, float inBaumgarte) override {
+    ZJoltSolverBodyPair pair = Snapshot(/*include_velocity=*/false);
+    const bool changed =
+        callbacks_.solve_position(user_, &pair, inDeltaTime, inBaumgarte);
+    ApplyPositionDeltas(pair);
+    return changed;
+  }
+
+  JPH::Mat44 GetConstraintToBody1Matrix() const override { return to_body1_; }
+  JPH::Mat44 GetConstraintToBody2Matrix() const override { return to_body2_; }
+
+#ifdef JPH_DEBUG_RENDERER
+  void DrawConstraint(JPH::DebugRenderer *inRenderer) const override {
+    // Deliberately unwired. `inRenderer` is a live JPH::DebugRenderer* and
+    // the callback wants a ZJoltDebugRenderer*, and the only conversion
+    // between the two lives inside zjolt_debug.cpp, out of reach here — see
+    // this file's implementer's report for the rest of that note.
+    (void)inRenderer;
+  }
+#endif  // JPH_DEBUG_RENDERER
+
+  void SaveState(JPH::StateRecorder &inStream) const override {
+    JPH::TwoBodyConstraint::SaveState(inStream);
+    callbacks_.save_state(user_, zjolt::ToC(&inStream));
+  }
+
+  void RestoreState(JPH::StateRecorder &inStream) override {
+    JPH::TwoBodyConstraint::RestoreState(inStream);
+    callbacks_.restore_state(user_, zjolt::ToC(&inStream));
+  }
+
+  JPH::Ref<JPH::ConstraintSettings> GetConstraintSettings() const override {
+    ZJoltCustomConstraintSettings *settings =
+        zjolt::New<ZJoltCustomConstraintSettings>();
+    if (settings == nullptr) return nullptr;
+    ToConstraintSettings(*settings);
+    return settings;
+  }
+
+ private:
+  // `include_velocity` is false from SetupVelocityConstraint and
+  // SolvePositionConstraint: Jolt's own solver grants no velocity access at
+  // all during those two phases (see the note above), and
+  // `Body::GetLinearVelocity`/`GetAngularVelocity` assert exactly that.
+  // Reading them there — even a value the callback goes on to ignore — is
+  // the abort this shim exists to never forward.
+  static void FillSolverBody(ZJoltSolverBody &out, const JPH::Body &body,
+                             bool include_velocity) {
+    out.is_dynamic = body.IsDynamic();
+    out.center_of_mass = zjolt::ToC(JPH::Vec3(body.GetCenterOfMassPosition()));
+    out.rotation = zjolt::ToC(body.GetRotation());
+    if (include_velocity) {
+      out.linear_velocity = zjolt::ToC(body.GetLinearVelocity());
+      out.angular_velocity = zjolt::ToC(body.GetAngularVelocity());
+    } else {
+      out.linear_velocity = ZJoltVec3{0, 0, 0};
+      out.angular_velocity = ZJoltVec3{0, 0, 0};
+    }
+    out.position_delta = ZJoltVec3{0, 0, 0};
+    out.rotation_delta = ZJoltVec3{0, 0, 0};
+    if (out.is_dynamic) {
+      const JPH::MotionProperties *mp = body.GetMotionProperties();
+      out.inverse_mass = mp->GetInverseMass();
+      // World space, computed once here rather than once per Jacobian
+      // operation on the Zig side — the reason this whole seam exists.
+      const JPH::Mat44 inv_i =
+          mp->GetInverseInertiaForRotation(JPH::Mat44::sRotation(body.GetRotation()));
+      for (int row = 0; row < 3; ++row)
+        for (int col = 0; col < 3; ++col)
+          out.inverse_inertia[row * 3 + col] = inv_i(row, col);
+    } else {
+      out.inverse_mass = 0.0f;
+      std::memset(out.inverse_inertia, 0, sizeof(out.inverse_inertia));
+    }
+  }
+
+  ZJoltSolverBodyPair Snapshot(bool include_velocity) const {
+    ZJoltSolverBodyPair pair{};
+    FillSolverBody(pair.body1, *mBody1, include_velocity);
+    FillSolverBody(pair.body2, *mBody2, include_velocity);
+    return pair;
+  }
+
+  void WriteBackVelocity(const ZJoltSolverBodyPair &pair) {
+    if (mBody1->IsDynamic()) {
+      mBody1->SetLinearVelocity(zjolt::ToJolt(pair.body1.linear_velocity));
+      mBody1->SetAngularVelocity(zjolt::ToJolt(pair.body1.angular_velocity));
+    }
+    if (mBody2->IsDynamic()) {
+      mBody2->SetLinearVelocity(zjolt::ToJolt(pair.body2.linear_velocity));
+      mBody2->SetAngularVelocity(zjolt::ToJolt(pair.body2.angular_velocity));
+    }
+  }
+
+  void ApplyPositionDeltas(const ZJoltSolverBodyPair &pair) {
+    if (mBody1->IsDynamic()) {
+      mBody1->AddPositionStep(zjolt::ToJolt(pair.body1.position_delta));
+      mBody1->AddRotationStep(zjolt::ToJolt(pair.body1.rotation_delta));
+    }
+    if (mBody2->IsDynamic()) {
+      mBody2->AddPositionStep(zjolt::ToJolt(pair.body2.position_delta));
+      mBody2->AddRotationStep(zjolt::ToJolt(pair.body2.rotation_delta));
+    }
+  }
+
+  ZJoltCustomConstraintCallbacks callbacks_;
+  void *user_;
+  JPH::Mat44 to_body1_;
+  JPH::Mat44 to_body2_;
+};
+
 }  // namespace
 
 //===----------------------------------------------------------------------===//
 // Narrowing, as macros
 //
-// Both have to return from the CALLER, which a function cannot do, and between
-// them they open nearly every entry point below. A per-kind check that can be
-// half-written is one that eventually will be.
+// Both have to return from the CALLER, which a function cannot do, and
+// between them open nearly every entry point below — a per-kind check that can be half-written is one that eventually will be.
 //===----------------------------------------------------------------------===//
 
 /// Refuses a NULL handle and a handle of the wrong kind in one step, and binds
@@ -624,13 +807,16 @@ ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
     if (zjolt_narrowed_ != ZJOLT_RESULT_OK) return zjolt_narrowed_;     \
   } while (false)
 
-/// The same, plus the axis argument every six-DOF accessor carries.
+/// The same, plus the axis argument every six-DOF accessor carries. That one
+/// is converted here, at the entry point that receives it from the host — see
+/// zjolt::RawEnum in zjolt_internal.h.
 #define ZJOLT_SIX_DOF(VAR, AXIS_VAR, TRANSLATIONS_ONLY)                 \
   ZJOLT_NARROW(SixDOFConstraint, SixDOF, VAR);                          \
   JPH::SixDOFConstraintSettings::EAxis AXIS_VAR;                        \
+  const int32_t zjolt_raw_axis_ = zjolt::RawEnum(axis);                 \
   do {                                                                  \
     const ZJoltResult zjolt_axis_ =                                     \
-        CheckSixDofAxis(axis, TRANSLATIONS_ONLY, &AXIS_VAR);            \
+        CheckSixDofAxis(zjolt_raw_axis_, TRANSLATIONS_ONLY, &AXIS_VAR); \
     if (zjolt_axis_ != ZJOLT_RESULT_OK) return zjolt_axis_;             \
   } while (false)
 
@@ -902,6 +1088,142 @@ void zjoltConstraintResetWarmStart(ZJoltConstraint *constraint) {
 }
 
 //===----------------------------------------------------------------------===//
+// Constraint settings
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltConstraintGetConstraintSettings(const ZJoltConstraint *constraint,
+                                                 ZJoltConstraintSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(constraint, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::Ref<JPH::ConstraintSettings> settings =
+      zjolt::ToJolt(constraint)->GetConstraintSettings();
+  if (settings == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
+                           "could not build settings for this constraint");
+  }
+
+  // `settings` hands back one reference; keep it alive past this Ref's own
+  // destructor by taking a second one, the same way every other *Create
+  // entry point in this file hands a caller-owned reference out.
+  JPH::ConstraintSettings *raw = settings.GetPtr();
+  raw->AddRef();
+  zjolt::HandleCreated();
+  *out = zjolt::ToC(raw);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltConstraintSettingsAddRef(const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return;
+  zjolt::ToJolt(settings)->AddRef();
+}
+
+void zjoltConstraintSettingsRelease(const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return;
+  zjolt::ToJolt(settings)->Release();
+  zjolt::HandleDestroyed();
+}
+
+uint32_t zjoltConstraintSettingsGetRefCount(const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return 0;
+  return static_cast<uint32_t>(zjolt::ToJolt(settings)->GetRefCount());
+}
+
+bool zjoltConstraintSettingsGetEnabled(const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return false;
+  return zjolt::ToJolt(settings)->mEnabled;
+}
+
+uint32_t zjoltConstraintSettingsGetConstraintPriority(
+    const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return 0;
+  return zjolt::ToJolt(settings)->mConstraintPriority;
+}
+
+uint32_t zjoltConstraintSettingsGetNumVelocityStepsOverride(
+    const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return 0;
+  return zjolt::ToJolt(settings)->mNumVelocityStepsOverride;
+}
+
+uint32_t zjoltConstraintSettingsGetNumPositionStepsOverride(
+    const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return 0;
+  return zjolt::ToJolt(settings)->mNumPositionStepsOverride;
+}
+
+float zjoltConstraintSettingsGetDrawConstraintSize(
+    const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return 0.0f;
+  return zjolt::ToJolt(settings)->mDrawConstraintSize;
+}
+
+uint64_t zjoltConstraintSettingsGetUserData(const ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return 0;
+  return zjolt::ToJolt(settings)->mUserData;
+}
+
+namespace {
+constexpr uint8_t kConstraintSettingsStreamMagic[4] = {'Z', 'C', 'S', 'T'};
+}  // namespace
+
+ZJoltResult zjoltConstraintSettingsSaveBinaryState(
+    const ZJoltConstraintSettings *settings, const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+
+  zjolt::HostStream host(*stream);
+  zjolt::WriteStreamHeader(host, kConstraintSettingsStreamMagic);
+  zjolt::ToJolt(settings)->SaveBinaryState(host);
+
+  if (host.IsFailed()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_IO_ERROR,
+        "the stream failed while writing the constraint settings");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltConstraintSettingsRestoreBinaryState(
+    const ZJoltStream *stream, ZJoltConstraintSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(
+      host, kConstraintSettingsStreamMagic,
+      "not constraint settings saved by zjoltConstraintSettingsSaveBinaryState");
+  if (header != ZJOLT_RESULT_OK) return header;
+
+  JPH::ConstraintSettings::ConstraintResult result =
+      JPH::ConstraintSettings::sRestoreFromBinaryState(host);
+
+  if (result.HasError()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT, result.GetError().c_str());
+  }
+  if (host.IsFailed()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_IO_ERROR,
+        "the stream failed while reading the constraint settings");
+  }
+
+  JPH::ConstraintSettings *raw = result.Get().GetPtr();
+  raw->AddRef();
+  zjolt::HandleCreated();
+  *out = zjolt::ToC(raw);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
 // Paths
 //===----------------------------------------------------------------------===//
 
@@ -1043,7 +1365,11 @@ ZJoltResult zjoltConstraintCreateFixed(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::FixedConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  // The descriptor is the host's, so its space is converted here, where it is
+  // read — see zjolt::RawEnum in zjolt_internal.h. Every Create below does the
+  // same with its own.
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   const ZJoltResult checks[] = {
@@ -1090,7 +1416,8 @@ ZJoltResult zjoltConstraintCreatePoint(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::PointConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   ZJoltResult check = CheckPoint(desc->point1, "point1 must be finite");
@@ -1120,7 +1447,8 @@ ZJoltResult zjoltConstraintCreateHinge(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::HingeConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   const ZJoltResult checks[] = {
@@ -1183,7 +1511,8 @@ ZJoltResult zjoltConstraintCreateSlider(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::SliderConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   const ZJoltResult checks[] = {
@@ -1245,7 +1574,8 @@ ZJoltResult zjoltConstraintCreateDistance(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::DistanceConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   ZJoltResult check = CheckPoint(desc->point1, "point1 must be finite");
@@ -1295,7 +1625,8 @@ ZJoltResult zjoltConstraintCreateCone(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::ConeConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   const ZJoltResult checks[] = {
@@ -1339,9 +1670,10 @@ ZJoltResult zjoltConstraintCreateSwingTwist(
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::SwingTwistConstraintSettings settings;
-  ZJoltResult sub = ToJoltSpace(desc->space, &settings.mSpace);
+  ZJoltResult sub = ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (sub != ZJOLT_RESULT_OK) return sub;
-  sub = ToJoltSwingType(desc->swing_type, &settings.mSwingType);
+  sub = ToJoltSwingType(zjolt::RawEnum(desc->swing_type),
+                        &settings.mSwingType);
   if (sub != ZJOLT_RESULT_OK) return sub;
 
   const ZJoltResult checks[] = {
@@ -1422,9 +1754,10 @@ ZJoltResult zjoltConstraintCreateSixDof(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::SixDOFConstraintSettings settings;
-  ZJoltResult sub = ToJoltSpace(desc->space, &settings.mSpace);
+  ZJoltResult sub = ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (sub != ZJOLT_RESULT_OK) return sub;
-  sub = ToJoltSwingType(desc->swing_type, &settings.mSwingType);
+  sub = ToJoltSwingType(zjolt::RawEnum(desc->swing_type),
+                        &settings.mSwingType);
   if (sub != ZJOLT_RESULT_OK) return sub;
 
   const ZJoltResult checks[] = {
@@ -1496,7 +1829,8 @@ ZJoltResult zjoltConstraintCreateGear(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::GearConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   ZJoltResult check =
@@ -1535,7 +1869,8 @@ ZJoltResult zjoltConstraintCreateRackAndPinion(
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::RackAndPinionConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   ZJoltResult check =
@@ -1572,7 +1907,8 @@ ZJoltResult zjoltConstraintCreatePulley(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::PulleyConstraintSettings settings;
-  const ZJoltResult space = ToJoltSpace(desc->space, &settings.mSpace);
+  const ZJoltResult space =
+      ToJoltSpace(zjolt::RawEnum(desc->space), &settings.mSpace);
   if (space != ZJOLT_RESULT_OK) return space;
 
   const ZJoltResult checks[] = {
@@ -1629,8 +1965,9 @@ ZJoltResult zjoltConstraintCreatePath(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(desc->path)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::PathConstraintSettings settings;
-  ZJoltResult sub = ToJoltPathRotation(desc->rotation_constraint_type,
-                                       &settings.mRotationConstraintType);
+  ZJoltResult sub =
+      ToJoltPathRotation(zjolt::RawEnum(desc->rotation_constraint_type),
+                         &settings.mRotationConstraintType);
   if (sub != ZJOLT_RESULT_OK) return sub;
   sub = ToJoltMotor(desc->motor, &settings.mPositionMotorSettings);
   if (sub != ZJOLT_RESULT_OK) return sub;
@@ -1699,8 +2036,10 @@ ZJoltResult zjoltPointConstraintSetPoint1(ZJoltConstraint *constraint,
   if (!zjolt::Present(point)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   ZJOLT_NARROW(PointConstraint, Point, joint);
 
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
   JPH::EConstraintSpace jolt_space;
-  const ZJoltResult converted = ToJoltSpace(space, &jolt_space);
+  const ZJoltResult converted = ToJoltSpace(zjolt::RawEnum(space), &jolt_space);
   if (converted != ZJOLT_RESULT_OK) return converted;
   const ZJoltResult checked = CheckPoint(*point, "point must be finite");
   if (checked != ZJOLT_RESULT_OK) return checked;
@@ -1717,7 +2056,7 @@ ZJoltResult zjoltPointConstraintSetPoint2(ZJoltConstraint *constraint,
   ZJOLT_NARROW(PointConstraint, Point, joint);
 
   JPH::EConstraintSpace jolt_space;
-  const ZJoltResult converted = ToJoltSpace(space, &jolt_space);
+  const ZJoltResult converted = ToJoltSpace(zjolt::RawEnum(space), &jolt_space);
   if (converted != ZJOLT_RESULT_OK) return converted;
   const ZJoltResult checked = CheckPoint(*point, "point must be finite");
   if (checked != ZJOLT_RESULT_OK) return checked;
@@ -1899,8 +2238,12 @@ ZJoltResult zjoltHingeConstraintSetMotorState(ZJoltConstraint *constraint,
   ZJOLT_ENTER();
   ZJOLT_NARROW(HingeConstraint, Hinge, hinge);
 
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h. Every SetMotorState below does the
+  // same.
   JPH::EMotorState jolt_state;
-  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  const ZJoltResult converted =
+      ToJoltMotorState(zjolt::RawEnum(state), &jolt_state);
   if (converted != ZJOLT_RESULT_OK) return converted;
 
   // The assertion this stands in for. Every route to these settings validates
@@ -2122,7 +2465,8 @@ ZJoltResult zjoltSliderConstraintSetMotorState(ZJoltConstraint *constraint,
   ZJOLT_NARROW(SliderConstraint, Slider, slider);
 
   JPH::EMotorState jolt_state;
-  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  const ZJoltResult converted =
+      ToJoltMotorState(zjolt::RawEnum(state), &jolt_state);
   if (converted != ZJOLT_RESULT_OK) return converted;
 
   if (jolt_state != JPH::EMotorState::Off &&
@@ -2447,13 +2791,11 @@ ZJoltResult zjoltSwingTwistConstraintSetTwistLimits(ZJoltConstraint *constraint,
                            "twist minimum exceeds twist maximum");
   }
 
-  // Jolt recomputes the constraint part inside each individual setter, and
-  // that recomputation asserts min <= max. So one of the two orders passes
-  // through an invalid intermediate state and the other does not.
-  //
-  // At least one is always safe. If the new minimum exceeded the OLD maximum
-  // and the new maximum were below the old minimum, then
-  // new_min > old_max >= old_min > new_max >= new_min, which cannot hold.
+  // Jolt recomputes the constraint part inside each setter, asserting
+  // min <= max — one order passes through an invalid intermediate state,
+  // the other does not. At least one is always safe: if new_min >
+  // old_max and new_max < old_min, then new_min > old_max >= old_min >
+  // new_max >= new_min, which cannot hold.
   if (min <= joint->GetTwistMaxAngle()) {
     joint->SetTwistMinAngle(min);
     joint->SetTwistMaxAngle(max);
@@ -2502,7 +2844,8 @@ ZJoltResult zjoltSwingTwistConstraintSetSwingMotorState(
   ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
 
   JPH::EMotorState jolt_state;
-  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  const ZJoltResult converted =
+      ToJoltMotorState(zjolt::RawEnum(state), &jolt_state);
   if (converted != ZJOLT_RESULT_OK) return converted;
 
   if (jolt_state != JPH::EMotorState::Off &&
@@ -2554,7 +2897,8 @@ ZJoltResult zjoltSwingTwistConstraintSetTwistMotorState(
   ZJOLT_NARROW(SwingTwistConstraint, SwingTwist, joint);
 
   JPH::EMotorState jolt_state;
-  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  const ZJoltResult converted =
+      ToJoltMotorState(zjolt::RawEnum(state), &jolt_state);
   if (converted != ZJOLT_RESULT_OK) return converted;
 
   if (jolt_state != JPH::EMotorState::Off &&
@@ -2825,7 +3169,8 @@ ZJoltResult zjoltSixDofConstraintSetMotorState(ZJoltConstraint *constraint,
   ZJOLT_SIX_DOF(joint, jolt_axis, false);
 
   JPH::EMotorState jolt_state;
-  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  const ZJoltResult converted =
+      ToJoltMotorState(zjolt::RawEnum(state), &jolt_state);
   if (converted != ZJOLT_RESULT_OK) return converted;
 
   if (jolt_state != JPH::EMotorState::Off &&
@@ -3197,7 +3542,8 @@ ZJoltResult zjoltPathConstraintSetMotorState(ZJoltConstraint *constraint,
   ZJOLT_NARROW(PathConstraint, Path, joint);
 
   JPH::EMotorState jolt_state;
-  const ZJoltResult converted = ToJoltMotorState(state, &jolt_state);
+  const ZJoltResult converted =
+      ToJoltMotorState(zjolt::RawEnum(state), &jolt_state);
   if (converted != ZJOLT_RESULT_OK) return converted;
 
   if (jolt_state != JPH::EMotorState::Off &&
@@ -3340,6 +3686,88 @@ ZJoltResult zjoltPathConstraintGetTotalLambdaMotor(
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   ZJOLT_NARROW(PathConstraint, Path, joint);
   *out = joint->GetTotalLambdaMotor();
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// Custom constraints
+//===----------------------------------------------------------------------===//
+
+void zjoltStateRecorderWriteBytes(ZJoltStateRecorder *recorder,
+                                  const void *data, size_t size) {
+  if (recorder == nullptr || data == nullptr || size == 0) return;
+  zjolt::ToJolt(recorder)->WriteBytes(data, size);
+}
+
+void zjoltStateRecorderReadBytes(ZJoltStateRecorder *recorder, void *data,
+                                 size_t size) {
+  if (recorder == nullptr || data == nullptr || size == 0) return;
+  zjolt::ToJolt(recorder)->ReadBytes(data, size);
+}
+
+ZJoltResult zjoltConstraintCreateCustom(ZJoltPhysicsSystem *system,
+                                        const ZJoltCustomConstraintDesc *desc,
+                                        ZJoltConstraint **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const ZJoltCustomConstraintCallbacks &cb = desc->callbacks;
+  if (cb.setup_velocity == nullptr || cb.warm_start_velocity == nullptr ||
+      cb.solve_velocity == nullptr || cb.solve_position == nullptr ||
+      cb.reset_warm_start == nullptr || cb.is_active == nullptr ||
+      cb.notify_shape_changed == nullptr || cb.save_state == nullptr ||
+      cb.restore_state == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a required custom constraint callback is NULL; only draw and "
+        "destroy may be");
+  }
+
+  if (desc->num_velocity_steps_override >= 256 ||
+      desc->num_position_steps_override >= 256) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "step override must be under 256; Jolt stores it in a byte");
+  }
+
+  for (int i = 0; i < 16; ++i) {
+    if (!IsFinite(desc->constraint_to_body1.m[i]) ||
+        !IsFinite(desc->constraint_to_body2.m[i])) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "constraint_to_body1 and constraint_to_body2 must be finite");
+    }
+  }
+
+  const JPH::Mat44 to_body1 = zjolt::ToJolt(desc->constraint_to_body1);
+  const JPH::Mat44 to_body2 = zjolt::ToJolt(desc->constraint_to_body2);
+
+  ZJoltCustomConstraintSettings settings;
+  settings.mEnabled = desc->enabled;
+  settings.mNumVelocityStepsOverride = desc->num_velocity_steps_override;
+  settings.mNumPositionStepsOverride = desc->num_position_steps_override;
+  settings.mDrawConstraintSize = desc->draw_constraint_size;
+
+  return BuildConstraint(
+      system, desc->body1, desc->body2, out,
+      [&](JPH::Body &jolt1, JPH::Body &jolt2) -> JPH::TwoBodyConstraint * {
+        return zjolt::New<ZJoltCustomConstraint>(jolt1, jolt2, settings, cb,
+                                                 desc->user, to_body1,
+                                                 to_body2);
+      });
+}
+
+ZJoltResult zjoltConstraintGetCustomUserData(const ZJoltConstraint *constraint,
+                                             void **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(constraint, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Constraint *base = zjolt::ToJolt(constraint);
+  if (base->GetSubType() != JPH::EConstraintSubType::User1) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "constraint is not a custom constraint");
+  }
+  *out = static_cast<const ZJoltCustomConstraint *>(base)->UserData();
   return ZJOLT_RESULT_OK;
 }
 

@@ -1,51 +1,20 @@
-# Skeleton — every name `tools/coverage.sh Skeleton` reports as unbound,
-# classified. One line per name: NAME  CATEGORY  reason.
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
 #
-# Categories
-#   INTERNAL         machinery that must not cross a C boundary: working state
-#                    a class builds once and consumes itself, and asset
-#                    serialisation this ABI routes differently.
-#   EXTENSION_POINT  a C++ subclassing hook zjolt already gives a caller
-#                    another way, naming the zjolt type that covers it.
-#   BOUND_ELSEWHERE  reachable today through a zjolt entry point with a
-#                    different name.
-#   REAL_GAP         a caller would reasonably want it and could not reach it.
-#
-# Four Jolt classes share this area, and they are not in the same position.
-# Skeleton and SkeletonPose were already bound. SkeletonMapper was bound by
-# this change: it maps a pose between a low-detail (ragdoll) skeleton and a
-# high-detail (render) skeleton, which is what a ragdoll is FOR, and it was
-# entirely unreachable. SkeletalAnimation is Jolt's own keyframe asset
-# container and is deliberately not bound — see its names below.
-#
-# Two mechanical notes. `tools/coverage.sh`'s `bound` regex excludes digits,
-# so an entry point whose RETURN TYPE is a fixed-width integer is invisible to
-# it; GetJointIndex below is such a false gap. And this ABI has no matrix
-# type, so every Mat44 in Jolt's signatures crosses as a ZJoltSkeletonPose
-# whose joint matrices are the array Jolt wanted.
-
-CalculateLocalSpaceJointMatrices  BOUND_ELSEWHERE  zjoltSkeletonMapperMap. SkeletonPose::CalculateLocalSpaceJointMatrices exists to build SkeletonMapper::Map's second argument and has no other caller in Jolt; it returns Mat44s, which this ABI has no type for. zjoltSkeletonMapperMap runs it internally over the target pose's joint states, which is the only form its output was ever consumed in.
-CalculateParentJointIndices  BOUND_ELSEWHERE  zjoltSkeletonAddJoint. It resolves parent NAMES into parent indices for a skeleton assembled with Skeleton::AddJoint(name, parentName). zjoltSkeletonAddJoint takes the parent index directly and refuses one that is not an already-added joint, so a skeleton built through this ABI never has an unresolved parent name for it to fill in.
-Chain  INTERNAL  SkeletonMapper::Chain is a run of joints between two directly mapped joints, discovered by Initialize and reoriented by Map. Working state: two index arrays, built once and read only by Map.
-FromMatrix  BOUND_ELSEWHERE  zjoltSkeletonPoseCalculateJointStates. JointState::FromMatrix turns one local-space matrix into the rotation/translation pair a pose stores; CalculateJointStates is the whole-pose form, and rotation/translation is already the only shape a joint takes across this ABI (zjoltSkeletonPoseGetJoints).
-GetAnimatedJoints  INTERNAL  SkeletalAnimation's keyframe table, per joint. See Sample: SkeletalAnimation is Jolt's own animation ASSET container, and this ABI takes an animated pose rather than the clip it was sampled from.
-GetChains  INTERNAL  Whole-array getter for SkeletonMapper::Chain — see Chain. Arrays of Mat44-bearing records do not cross this ABI.
-GetDuration  INTERNAL  SkeletalAnimation's clip length, read off its last keyframe. See Sample.
-GetJointIndex  BOUND_ELSEWHERE  zjoltSkeletonGetJointIndex, which has been bound all along and is a false gap: it returns int32_t, and coverage.sh's `bound` regex has no digits in its character class, so a fixed-width-integer return type hides the whole declaration from it. Same for zjoltSkeletonGetJointCount, zjoltSkeletonGetJointParentIndex and every *GetRefCount.
-GetJointMatrices  BOUND_ELSEWHERE  zjoltSkeletonPoseGetJoints, after zjoltSkeletonPoseCalculateJointStates. A pose's joint matrices are its internal flattened form; the ABI has no matrix type, so the pair of conversions (zjoltSkeletonPoseCalculateJointMatrices in, CalculateJointStates out) is how a caller reaches what they hold.
-GetJointMatrix  BOUND_ELSEWHERE  Same as GetJointMatrices: zjoltSkeletonPoseGetJoints reads every joint, and there is no matrix to hand back one of.
-GetLockedTranslations  BOUND_ELSEWHERE  zjoltSkeletonMapperIsJointTranslationLocked answers the one question a caller asks of that array. The array itself holds a neutral-pose translation per entry, which is the mapper's own working state.
-GetMappedJointIdx  REAL_GAP  bound as zjoltSkeletonMapperGetMappedJointIndex. Which joint of the render skeleton a ragdoll joint drives — how a caller checks its two skeletons actually line up, and how a hit on a ragdoll part finds the render joint to attach an effect to. Spelt Index rather than Idx to match zjoltSkeletonGetJointIndex in the same header, and returning int32_t, so coverage.sh will keep reporting it twice over.
-GetMappings  BOUND_ELSEWHERE  zjoltSkeletonMapperGetMappingCount and zjoltSkeletonMapperGetMappedJointIndex. Each Mapping is two joint indices plus a Mat44 and its inverse; the indices are what a caller can use and both directions of the lookup are bound.
-GetUnmapped  INTERNAL  SkeletonMapper::Unmapped records the joints of the render skeleton with no counterpart in the ragdoll skeleton, so Map can rebuild them from their own local transforms. Built by Initialize, read only by Map.
-IsJointTranslationLocked  REAL_GAP  bound as zjoltSkeletonMapperIsJointTranslationLocked. The read-back for zjoltSkeletonMapperLockTranslations, and the only way to tell which joints LockAllTranslations decided to lock — it locks everything below the first mapped joint and silently excludes the root, so guessing is wrong.
-LockAllTranslations  REAL_GAP  bound as zjoltSkeletonMapperLockAllTranslations. Constraints are never perfectly rigid, so a ragdoll under load stretches; this pins every mapped joint's translation to the neutral pose so the render skeleton does not stretch with it. Requires Initialize first, which Jolt only asserts.
-LockTranslations  REAL_GAP  bound as zjoltSkeletonMapperLockTranslations, taking the per-joint bool array Jolt takes. The binding also refuses to lock a joint with no parent: Jolt's LockAllTranslations deliberately excludes the root because it positions the whole ragdoll, and SkeletonMapper::Map indexes outPose2ModelSpace[l.mParentJointIdx] unconditionally, so a locked root would index -1.
-Mapping  INTERNAL  SkeletonMapper::Mapping is one directly mapped joint pair plus the neutral-pose transform between them and its inverse. Built by Initialize from the two neutral poses, read by Map and MapReverse.
-MapReverse  REAL_GAP  bound as zjoltSkeletonMapperMapReverse. The other direction: an animated render pose back onto the ragdoll skeleton, which is what drives a ragdoll from animation before it is let go. It applies the direct mappings only, so joints of the ragdoll skeleton that never mapped keep whatever the target pose already held — documented rather than papered over.
-Sample  BOUND_ELSEWHERE  zjoltSkeletonPoseSetJoints. SkeletalAnimation::Sample interpolates a clip's keyframes into a pose; the pose is what every ragdoll entry point here consumes, and setting it directly is the entry point for an animated pose however the host produced it. The clip itself is Jolt's own asset container, reachable only through its binary stream format, which zjolt does not adopt as an interchange format for the same reason it says so of a saved shape. Binding Sample without the container would be inert, and binding the container would mean a host uploading every joint's every keyframe across a C ABI so that Jolt could SLERP them back out — strictly more work than doing the SLERP and calling zjoltSkeletonPoseSetJoints. Sample also indexes ioPose.GetJoint(GetJointIndex(name)) with no check that the clip's joint names are in the skeleton.
-SaveBinaryState  INTERNAL  Skeleton::SaveBinaryState and SkeletalAnimation::SaveBinaryState. Asset serialisation in Jolt's own format: a skeleton is built here joint by joint from the host's asset data through zjoltSkeletonAddJoint, and there is nothing a saved copy of it restores that the host could not rebuild.
-ScaleJoints  INTERNAL  Scales every keyframe translation of a SkeletalAnimation. See Sample.
-SetIsLooping  INTERNAL  Whether a SkeletalAnimation clip wraps, which only Sample reads. See Sample.
-ToMatrix  BOUND_ELSEWHERE  zjoltSkeletonPoseCalculateJointMatrices. JointState::ToMatrix is the other half of FromMatrix and the whole body of SkeletonPose::CalculateJointMatrices; the matrix it makes has no C type to be handed back in.
-Unmapped  INTERNAL  See GetUnmapped: the record type of that array, two joint indices built by Initialize.
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+Skeleton	CalculateLocalSpaceJointMatrices	BOUND	zjoltSkeletonMapperMap
+Skeleton	CalculateParentJointIndices	BOUND	zjoltSkeletonAddJoint
+Skeleton	GetAnimatedJoints	BOUND	zjoltSkeletalAnimationGetAnimatedJointCount zjoltSkeletalAnimationGetAnimatedJointName zjoltSkeletalAnimationGetKeyframeCount zjoltSkeletalAnimationGetKeyframe
+Skeleton	GetChains	BOUND	zjoltSkeletonMapperGetChainCount zjoltSkeletonMapperGetChainJointCounts zjoltSkeletonMapperGetChainJointIndex1 zjoltSkeletonMapperGetChainJointIndex2
+Skeleton	GetJointMatrices	BOUND	zjoltSkeletonPoseGetJoints zjoltSkeletonPoseCalculateJointStates zjoltSkeletonPoseCalculateJointMatrices
+Skeleton	GetJointMatrix	BOUND	zjoltSkeletonPoseGetJoints
+Skeleton	GetLockedTranslations	BOUND	zjoltSkeletonMapperIsJointTranslationLocked
+Skeleton	GetMappedJointIdx	BOUND	zjoltSkeletonMapperGetMappedJointIndex
+Skeleton	GetMappings	BOUND	zjoltSkeletonMapperGetMappingCount zjoltSkeletonMapperGetMappedJointIndex

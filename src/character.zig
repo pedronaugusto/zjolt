@@ -19,19 +19,12 @@ const transformed_mod = @import("transformed.zig");
 pub const GroundState = c.GroundState;
 pub const BackFaceMode = c.BackFaceMode;
 
-/// The plane, in a character's LOCAL space, behind which a contact may support
-/// it. A contact in front of it only collides.
-///
-/// This is the second half of the ground test — the max slope angle rejects a
-/// contact by its normal, this one rejects it by where on the shape it landed
-/// — and it is what stops a wall the character is pressed against from being
-/// reported as the floor it is standing on.
-///
-/// `distance` is measured in units of `normal`'s length: the signed distance
-/// of a local point p is `dot(normal, p) + distance`, and a contact is behind
-/// the plane when that is at most zero. Nothing normalises `normal` on the way
-/// through, because scaling it without scaling `distance` would move the plane
-/// rather than tidy it.
+/// The plane, in a character's LOCAL space, behind which a contact may
+/// support it (in front, it only collides) — the second half of the
+/// ground test, rejecting a contact by WHERE it landed, not by its
+/// normal, so a pressed-against wall does not report as the floor.
+/// `distance` is in units of `normal`'s length: a local point p is
+/// behind the plane when `dot(normal, p) + distance <= 0`. `normal` is not normalised — scaling it without `distance` would move the plane, not tidy it.
 pub const SupportingVolume = struct {
     normal: math.Vec3,
     distance: f32,
@@ -156,13 +149,12 @@ pub const Character = struct {
         c.zjoltCharacterDestroy(self.handle);
     }
 
-    /// Moves the character by its current velocity for `delta_time`, resolving
-    /// collision. Set the velocity first with `setLinearVelocity`; this does
-    /// not apply gravity on its own, because whether a grounded character
-    /// should accumulate downward velocity is a game decision.
+    /// Moves the character by its current velocity for `delta_time`,
+    /// resolving collision. Set velocity first with `setLinearVelocity`;
+    /// this does not apply gravity — whether a grounded character
+    /// accumulates downward velocity is a game decision.
     ///
-    /// `settings` null gives a plain move with no stair or floor handling.
-    /// `filters` null collides with everything.
+    /// `settings` null: plain move, no stair/floor handling. `filters` null: collides with everything.
     pub fn update(
         self: Character,
         delta_time: f32,
@@ -258,6 +250,35 @@ pub const Character = struct {
         c.zjoltCharacterUpdateGroundVelocity(self.handle);
     }
 
+    /// The velocity `body_b` counts as having for ground-velocity purposes:
+    /// its own linear/angular velocity (zero if STATIC), adjusted by this
+    /// character's listener if one is installed — the building block
+    /// `updateGroundVelocity` itself uses. `error.BodyNotFound` for a stale
+    /// `body_b`.
+    pub fn getAdjustedBodyVelocity(self: Character, body_b: body_mod.BodyId) err.Error!struct { linear_velocity: math.Vec3, angular_velocity: math.Vec3 } {
+        var linear: math.Vec3 = math.vec3_zero;
+        var angular: math.Vec3 = math.vec3_zero;
+        try err.check(c.zjoltCharacterGetAdjustedBodyVelocity(self.handle, body_b, &linear, &angular));
+        return .{ .linear_velocity = linear, .angular_velocity = angular };
+    }
+
+    /// What this character's own velocity would be if it stood on an object
+    /// at `center_of_mass` moving with `linear_velocity`/`angular_velocity`
+    /// — the other building block `updateGroundVelocity` uses, exposed
+    /// standalone for a hypothetical ground body rather than the
+    /// character's actual one.
+    pub fn calculateGroundVelocity(
+        self: Character,
+        center_of_mass: math.RVec3,
+        linear_velocity: math.Vec3,
+        angular_velocity: math.Vec3,
+        delta_time: f32,
+    ) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltCharacterCalculateGroundVelocity(self.handle, &center_of_mass, &linear_velocity, &angular_velocity, delta_time, &out);
+        return out;
+    }
+
     //=========================================================================
     // Shape
     //=========================================================================
@@ -292,18 +313,12 @@ pub const Character = struct {
         return c.zjoltCharacterGetInnerBodyId(self.handle);
     }
 
-    /// Gives the inner rigid body a shape of its own, independent of the one
-    /// the character sweeps.
-    ///
-    /// `setShape` already keeps the inner body in step by handing it the new
-    /// swept shape, which is what a crouch wants. This is for the case that
-    /// undoes: a character created with an `inner_body_shape` DIFFERENT from
-    /// its `shape` — a cheap proxy for casts against a detailed sweep volume,
-    /// say — loses that distinction the first time the swept shape is
-    /// swapped, and this is what puts it back.
-    ///
-    /// Errors for a character created without an inner body, rather than
-    /// silently doing nothing.
+    /// Gives the inner rigid body a shape of its own, independent of the
+    /// one the character sweeps. `setShape` keeps the inner body in step
+    /// with the new swept shape (what a crouch wants) — this undoes that
+    /// for a character whose `inner_body_shape` was created DIFFERENT
+    /// from `shape` (a cheap cast proxy), restoring the distinction
+    /// `setShape` erases. Errors on a character with no inner body.
     pub fn setInnerBodyShape(self: Character, shape: shape_mod.Shape) err.Error!void {
         try err.check(c.zjoltCharacterSetInnerBodyShape(self.handle, shape.handle));
     }
@@ -311,6 +326,11 @@ pub const Character = struct {
     //=========================================================================
     // CharacterBase
     //=========================================================================
+
+    /// This character through the surface it shares with `RigidCharacter`.
+    pub fn asBase(self: Character) CharacterBase {
+        return .{ .virtual_character = self };
+    }
 
     /// Uniquely identifies this character, assigned when it was created.
     pub fn id(self: Character) CharacterId {
@@ -350,16 +370,11 @@ pub const Character = struct {
         return volume;
     }
 
-    /// Raising the plane makes the character pickier about what counts as
-    /// ground. Putting it at the shape's lowest point is the tempting mistake
-    /// and it breaks every slope: a capsule resting on a ramp touches it on
-    /// the SIDE of its bottom cap, above the lowest point, so a floor-level
-    /// plane discards that contact and the character reports itself
-    /// unsupported on ground it is plainly standing on.
-    ///
-    /// A zero-length `normal` is refused rather than installed: the plane it
-    /// describes has no side, and a character with one never reports ground
-    /// again.
+    /// Raising the plane makes the character pickier about what counts
+    /// as ground. Placing it at the shape's lowest point is the tempting
+    /// mistake and breaks every slope: a capsule on a ramp touches it on
+    /// the SIDE of its bottom cap, above the lowest point, so a
+    /// floor-level plane wrongly reports "unsupported". A zero-length `normal` is refused: a character with one never reports ground again.
     pub fn setSupportingVolume(self: Character, volume: SupportingVolume) err.Error!void {
         try err.check(c.zjoltCharacterSetSupportingVolume(
             self.handle,
@@ -480,10 +495,8 @@ pub const Character = struct {
     //=========================================================================
     // Stair walking and floor sticking, standalone
     //
-    // `update` already runs both of these through `UpdateSettings` when it is
-    // given one (Jolt's own ExtendedUpdate). These are the two pieces on their
-    // own, for a host that wants to run them at a different point in its frame
-    // than `update`, or with different parameters per call.
+    // `update` already runs both through `UpdateSettings` (Jolt's own
+    // ExtendedUpdate). These are the two pieces on their own, for a host that wants them at a different point in its frame, or with different parameters per call.
     //=========================================================================
 
     /// True if the character just moved into a slope steeper than it can
@@ -573,16 +586,12 @@ pub const Character = struct {
     // Asking about a placement the character is not at
     //=========================================================================
 
-    /// The character's current volume, placed where the character is, as a
-    /// standalone queryable shape. The caller owns it: `deinit` it.
+    /// The character's current volume, placed where the character is, as
+    /// a standalone queryable shape. The caller owns it: `deinit` it.
     ///
-    /// This is the only way to hit a virtual character with a cast. Jolt never
-    /// puts a `Character` in the broad phase, so no query on the system will
-    /// ever find one unless it was given an inner body; running the cast
-    /// against this instead is what closes that.
-    ///
-    /// It is a SNAPSHOT — the placement is copied out, and it does not follow
-    /// the character afterwards.
+    /// The only way to hit a virtual character with a cast: Jolt never
+    /// puts a `Character` in the broad phase, so no system query finds
+    /// one without an inner body. A SNAPSHOT — copied out, does not follow the character afterwards.
     pub fn getTransformedShape(self: Character) err.Error!transformed_mod.TransformedShape {
         var handle: *c.TransformedShape = undefined;
         try err.check(c.zjoltCharacterGetTransformedShape(self.handle, &handle));
@@ -590,20 +599,11 @@ pub const Character = struct {
     }
 
     /// Everything the character's shape would overlap if it stood at
-    /// `position`, written into `buffer` and returned as the prefix that was
-    /// filled. Nothing about the character changes, its contacts included.
+    /// `position`, written into `buffer`. Nothing about the character
+    /// changes, contacts included. `error.BufferTooSmall` if there were
+    /// more overlaps than `buffer` holds — ask `countCollisions` first if that matters.
     ///
-    /// Errors with `error.BufferTooSmall` when there were more overlaps than
-    /// `buffer` holds — ask `countCollisions` first when that matters, or
-    /// hand over a buffer sized for the answer you can act on.
-    ///
-    /// This is not a plain shape overlap with the character's shape. It
-    /// applies the character's own back-face mode, active-edge handling,
-    /// enhanced internal edge removal and padding, skips the character's own
-    /// inner body, and also tests whatever
-    /// `setCharacterVsCharacterCollision` was given — which no query on the
-    /// system can reach, because those characters are not in the broad phase
-    /// to be found.
+    /// NOT a plain shape overlap: applies the character's own back-face/active-edge/padding settings, skips its inner body, and tests whatever `setCharacterVsCharacterCollision` was given — unreachable by any system query, since those characters are not in the broad phase.
     pub fn checkCollision(
         self: Character,
         position: math.RVec3,
@@ -665,23 +665,23 @@ pub const Character = struct {
         return c.zjoltCharacterGetListener(self.handle);
     }
 
-    /// Attaches a character-vs-character collision checker. `null` detaches:
-    /// the character then collides with no other character.
-    pub fn setCharacterVsCharacterCollision(self: Character, collision: ?CharacterVsCharacterCollision) void {
-        c.zjoltCharacterSetCharacterVsCharacterCollision(
-            self.handle,
-            if (collision) |col| col.handle else null,
-        );
+    /// Attaches a character-vs-character collision checker built by
+    /// `CharacterVsCharacterCollision.init` or `CharacterVsCharacterCollider(T).attach`
+    /// — pass its `.handle`, the way `setListener` takes `ContactListener(T)`'s.
+    /// `null` detaches: the character then collides with no other character.
+    pub fn setCharacterVsCharacterCollision(
+        self: Character,
+        collision: ?*c.CharacterVsCharacterCollision,
+    ) void {
+        c.zjoltCharacterSetCharacterVsCharacterCollision(self.handle, collision);
     }
 };
 
 //=============================================================================
 // CharacterContactListener
 //
-// Fires as a virtual character finds, keeps and loses contacts. A callback
-// names the character it fired for by CharacterId, not by handle: Jolt hands
-// this code a raw pointer to its own internal CharacterVirtual, which is not
-// the Character this API handed out and cannot be turned back into one.
+// Fires as a virtual character finds, keeps and loses contacts. A
+// callback names the character by CharacterId, not handle: Jolt hands this code a raw pointer to its own internal CharacterVirtual, not the Character this API handed out.
 //=============================================================================
 
 pub const CharacterId = c.CharacterId;
@@ -712,31 +712,12 @@ fn returnsError(comptime Fn: type) bool {
     return @typeInfo(ret) == .error_union;
 }
 
-/// A host's answer to a virtual character's contacts, built from whichever of
-/// these `T` declares — any it omits simply does not fire, matching Jolt's own
-/// do-nothing defaults. Each may instead return the same type wrapped in `!`;
-/// a signalled error is stashed rather than unwound across the callback (Jolt
-/// is built with exceptions off, and a Zig panic crossing one skips lock
-/// destructors and can wedge the next physics step) and comes back out of
-/// `check`. A failed validate rejects the contact — visibly wrong rather than
-/// silently accepted.
-///
-/// ```zig
-/// pub fn onAdjustBodyVelocity(self: *T, character: CharacterId, body2: BodyId, linear: *Vec3, angular: *Vec3) void
-/// pub fn onContactValidate(self: *T, character: CharacterId, contact: *const CharacterContact) bool
-/// pub fn onContactAdded(self: *T, character: CharacterId, contact: *const CharacterContact, settings: *CharacterContactSettings) void
-/// pub fn onContactPersisted(self: *T, character: CharacterId, contact: *const CharacterContact, settings: *CharacterContactSettings) void
-/// pub fn onContactRemoved(self: *T, character: CharacterId, body2: BodyId, sub_shape_id2: SubShapeId) void
-/// pub fn onCharacterContactValidate(self: *T, character: CharacterId, contact: *const CharacterContact) bool
-/// pub fn onCharacterContactAdded(self: *T, character: CharacterId, contact: *const CharacterContact, settings: *CharacterContactSettings) void
-/// pub fn onCharacterContactPersisted(self: *T, character: CharacterId, contact: *const CharacterContact, settings: *CharacterContactSettings) void
-/// pub fn onCharacterContactRemoved(self: *T, character: CharacterId, other_character_id: CharacterId, sub_shape_id2: SubShapeId) void
-/// pub fn onContactSolve(self: *T, character: CharacterId, body2: BodyId, sub_shape_id2: SubShapeId, position: *const RVec3, normal: *const Vec3, velocity: *const Vec3, material: ?*const PhysicsMaterial, character_velocity: *const Vec3, new_velocity: *Vec3) void
-/// pub fn onCharacterContactSolve(self: *T, character: CharacterId, other_character: CharacterId, sub_shape_id2: SubShapeId, position: *const RVec3, normal: *const Vec3, velocity: *const Vec3, material: ?*const PhysicsMaterial, character_velocity: *const Vec3, new_velocity: *Vec3) void
-/// ```
-///
-/// `context` must outlive the listener, and the value returned here must not
-/// move once `attach`ed — the C side holds a pointer to it.
+/// A host's answer to a virtual character's contacts, built from
+/// whichever of `onAdjustBodyVelocity`, `onContactValidate/Added/
+/// Persisted/Removed`, `onCharacterContact*`, and `on*ContactSolve` `T`
+/// declares (any omitted one does not fire). Each may return `!...`
+/// instead: the error is stashed, not unwound, and surfaces from
+/// `check`. `context` must outlive the listener; the value must not move once `attach`ed.
 pub fn ContactListener(comptime T: type) type {
     system_mod.requireAnyDecl(T, &.{
         "onAdjustBodyVelocity",
@@ -1029,10 +1010,8 @@ pub fn ContactListener(comptime T: type) type {
 //=============================================================================
 // Character-vs-character collision
 //
-// CharacterVirtual is not in the broad phase, so nothing sees it unless it is
-// told to look. This is Jolt's CharacterVsCharacterCollisionSimple: a plain
-// list of characters, checked by brute force. It is not thread-safe — only one
-// CharacterVirtual may be checking collision against it at a time.
+// CharacterVirtual is not in the broad phase; nothing sees it unless
+// told to look. Jolt's CharacterVsCharacterCollisionSimple: a plain list, brute-force checked. NOT thread-safe — only one CharacterVirtual may check against it at a time.
 //=============================================================================
 
 pub const CharacterVsCharacterCollision = struct {
@@ -1058,17 +1037,121 @@ pub const CharacterVsCharacterCollision = struct {
 };
 
 //=============================================================================
+// A custom character-vs-character broad phase
+//
+// `CharacterVsCharacterCollision` above is Jolt's brute-force list. This
+// is the general interface it implements — CollideCharacter/CastCharacter, the two questions `update` asks about OTHER characters — for a host wanting a spatial structure, team filtering, or a sometimes-colliding pairing instead.
+//=============================================================================
+
+/// Handed to `onCollideCharacter`/`onCastCharacter` in place of Jolt's
+/// own collector. Call `.visit` once per OTHER character `character`
+/// should be tested against — this only decides WHO is tested; the real
+/// narrow-phase test is the same one the brute-force list runs. Returns
+/// whether to keep visiting. Valid only for the call's duration; do not store it.
+pub const CandidateVisitor = struct {
+    visit_fn: c.CharacterVsCharacterVisitFn,
+    visit_user: ?*anyopaque,
+
+    pub fn visit(self: CandidateVisitor, candidate: Character) bool {
+        return self.visit_fn(self.visit_user, candidate.handle);
+    }
+};
+
+/// A host's answer to "who does this character collide/cast against",
+/// built from whichever of `onCollideCharacter`/`onCastCharacter` `T`
+/// declares — an omitted one means `character` collides with nothing
+/// through that path. Each may return `!void` instead: the error is
+/// stashed (@see `ContactListener`) and surfaces from `check`; a failed
+/// call stops visiting candidates there. `context` must outlive the collision object; the value must not move once `attach`ed.
+pub fn CharacterVsCharacterCollider(comptime T: type) type {
+    system_mod.requireAnyDecl(T, &.{ "onCollideCharacter", "onCastCharacter" });
+
+    return struct {
+        const Self = @This();
+
+        context: *T,
+        failure: Failure = .{},
+        handle: ?*c.CharacterVsCharacterCollision = null,
+
+        pub fn init(context: *T) Self {
+            return .{ .context = context };
+        }
+
+        const Thunks = struct {
+            fn selfOf(user: ?*anyopaque) *Self {
+                return @ptrCast(@alignCast(user.?));
+            }
+
+            fn collideCharacter(
+                user: ?*anyopaque,
+                character: CharacterId,
+                center_of_mass_transform: *const math.RMat44,
+                visit: c.CharacterVsCharacterVisitFn,
+                visit_user: ?*anyopaque,
+            ) callconv(.c) void {
+                const self = selfOf(user);
+                const candidates: CandidateVisitor = .{ .visit_fn = visit, .visit_user = visit_user };
+                if (comptime returnsError(@TypeOf(T.onCollideCharacter))) {
+                    T.onCollideCharacter(self.context, character, center_of_mass_transform, candidates) catch |e|
+                        self.failure.record(e);
+                } else {
+                    T.onCollideCharacter(self.context, character, center_of_mass_transform, candidates);
+                }
+            }
+
+            fn castCharacter(
+                user: ?*anyopaque,
+                character: CharacterId,
+                center_of_mass_transform: *const math.RMat44,
+                direction: *const math.Vec3,
+                visit: c.CharacterVsCharacterVisitFn,
+                visit_user: ?*anyopaque,
+            ) callconv(.c) void {
+                const self = selfOf(user);
+                const candidates: CandidateVisitor = .{ .visit_fn = visit, .visit_user = visit_user };
+                if (comptime returnsError(@TypeOf(T.onCastCharacter))) {
+                    T.onCastCharacter(self.context, character, center_of_mass_transform, direction, candidates) catch |e|
+                        self.failure.record(e);
+                } else {
+                    T.onCastCharacter(self.context, character, center_of_mass_transform, direction, candidates);
+                }
+            }
+        };
+
+        /// Builds the collision object. `context` must outlive it. Install
+        /// it exactly like `CharacterVsCharacterCollision.init`'s result,
+        /// through `Character.setCharacterVsCharacterCollision`.
+        pub fn attach(self: *Self) err.Error!void {
+            const callbacks: c.CharacterVsCharacterCollisionCallbacks = .{
+                .collide_character = if (@hasDecl(T, "onCollideCharacter")) Thunks.collideCharacter else null,
+                .cast_character = if (@hasDecl(T, "onCastCharacter")) Thunks.castCharacter else null,
+                .user = @ptrCast(self),
+            };
+            var handle: *c.CharacterVsCharacterCollision = undefined;
+            try err.check(c.zjoltCharacterVsCharacterCollisionCreateCustom(&callbacks, &handle));
+            self.handle = handle;
+        }
+
+        /// Detach from every character with `setCharacterVsCharacterCollision(null)`
+        /// first — one that outlives this call is left pointing at freed memory.
+        pub fn deinit(self: *Self) void {
+            if (self.handle) |h| c.zjoltCharacterVsCharacterCollisionDestroy(h);
+            self.handle = null;
+        }
+
+        /// Re-raises the first error a callback signalled since the last
+        /// call, and clears it.
+        pub fn check(self: *Self) anyerror!void {
+            if (self.failure.take()) |e| return e;
+        }
+    };
+}
+
+//=============================================================================
 // RigidCharacter
 //
-// Jolt's own name for this is "Character" — spent above on the swept virtual
-// one, which this binding settled on first. This is the other character base
-// class: a real dynamic rigid body that the host drives by setting its
-// velocity every frame, same as Character above, but collision response,
-// sleeping and being pushed by other dynamics fall out of the ordinary
-// rigid-body solver instead of a hand-rolled sweep. Prefer this one when the
-// world needs to see the character as an ordinary body — felt by a trigger
-// volume, knocked back by an explosion — and can live with the solver's
-// collision response instead of a per-frame sweep.
+// The other character base: a real dynamic rigid body the host drives by setting its velocity every frame, same as Character above, but collision response, sleeping, and pushes from other dynamics fall out of the solver.
+// Prefer this when the world needs to see the character as an ordinary body (felt by a trigger, knocked back by an explosion).
 //=============================================================================
 
 pub const RigidCharacter = struct {
@@ -1101,14 +1184,12 @@ pub const RigidCharacter = struct {
         },
     };
 
-    /// Builds the character's rigid body but does not add it to the system —
-    /// call `addToPhysicsSystem` to make it move and collide.
-    ///
-    /// Fails with `error.OutOfMemory` if `system` is already holding
+    /// Builds the character's rigid body but does not add it to the
+    /// system — call `addToPhysicsSystem` to make it move and collide.
+    /// Fails with `error.OutOfMemory` if `system` already holds
     /// max_bodies bodies; nothing is left half-created.
     ///
-    /// The character borrows `system` for its lifetime and must be `deinit`ed
-    /// before it.
+    /// Borrows `system` for its lifetime; must be `deinit`ed before it.
     pub fn init(system: system_mod.PhysicsSystem, opts: Options) err.Error!RigidCharacter {
         var desc: c.RigidCharacterDesc = undefined;
         // Start from Jolt's defaults so a field this wrapper does not model
@@ -1183,6 +1264,15 @@ pub const RigidCharacter = struct {
         return c.zjoltRigidCharacterGetBodyId(self.handle);
     }
 
+    /// Uniquely identifies this character, assigned when it was created.
+    ///
+    /// Distinct from `bodyId`: a rigid character owns a body, and the two
+    /// identifier spaces are separate. `CharacterId` is what a contact from
+    /// `Character` names when it hits this one.
+    pub fn id(self: RigidCharacter) CharacterId {
+        return c.zjoltRigidCharacterGetId(self.handle);
+    }
+
     pub const PositionAndRotation = struct { position: math.RVec3, rotation: math.Quat };
 
     pub fn getPositionAndRotation(self: RigidCharacter) PositionAndRotation {
@@ -1246,6 +1336,11 @@ pub const RigidCharacter = struct {
     //=========================================================================
     // CharacterBase
     //=========================================================================
+
+    /// This character through the surface it shares with `Character`.
+    pub fn asBase(self: RigidCharacter) CharacterBase {
+        return .{ .rigid_character = self };
+    }
 
     pub fn up(self: RigidCharacter) math.Vec3 {
         var out: math.Vec3 = math.vec3_zero;
@@ -1351,11 +1446,9 @@ pub const RigidCharacter = struct {
     /// Everything the character's shape would overlap if it stood at
     /// `position`. @see `Character.checkCollision` for the protocol.
     ///
-    /// There are no filters to pass: Jolt builds them from the character's own
-    /// object layer, and always skips the character's own body and every
-    /// sensor. `character_id` on every hit is `invalid_character_id` — a rigid
-    /// character collides through the broad phase like anything else, so there
-    /// is no character-vs-character list in play.
+    /// No filters to pass: Jolt builds them from the character's own
+    /// object layer, always skipping its own body and every sensor.
+    /// `character_id` on every hit is `invalid_character_id` — a rigid character collides through the broad phase, so no character-vs-character list is in play.
     pub fn checkCollision(
         self: RigidCharacter,
         position: math.RVec3,
@@ -1397,5 +1490,130 @@ pub const RigidCharacter = struct {
             &count,
         ));
         return count;
+    }
+};
+
+//=============================================================================
+// CharacterBase
+//
+// The ground state, ground normal/velocity/body/material/sub-shape, shape,
+// up vector and supporting-volume plane `Character` and `RigidCharacter`
+// both carry. `asBase` on either builds one; every method here forwards to
+// the same-named method the concrete type already has, so a call through it
+// costs one tag check over calling the concrete type directly, and there is
+// no method here either concrete type lacks.
+//=============================================================================
+
+pub const CharacterBase = union(enum) {
+    virtual_character: Character,
+    rigid_character: RigidCharacter,
+
+    pub fn groundState(self: CharacterBase) GroundState {
+        return switch (self) {
+            inline else => |char| char.groundState(),
+        };
+    }
+
+    /// True for `.on_ground` and `.on_steep_ground`.
+    pub fn isSupported(self: CharacterBase) bool {
+        return switch (self) {
+            inline else => |char| char.isSupported(),
+        };
+    }
+
+    pub fn groundNormal(self: CharacterBase) math.Vec3 {
+        return switch (self) {
+            inline else => |char| char.groundNormal(),
+        };
+    }
+
+    pub fn groundVelocity(self: CharacterBase) math.Vec3 {
+        return switch (self) {
+            inline else => |char| char.groundVelocity(),
+        };
+    }
+
+    pub fn groundPosition(self: CharacterBase) math.RVec3 {
+        return switch (self) {
+            inline else => |char| char.groundPosition(),
+        };
+    }
+
+    /// The body being stood on, or `invalid_body_id` when in the air.
+    pub fn groundBodyId(self: CharacterBase) body_mod.BodyId {
+        return switch (self) {
+            inline else => |char| char.groundBodyId(),
+        };
+    }
+
+    pub fn groundUserData(self: CharacterBase) u64 {
+        return switch (self) {
+            inline else => |char| char.groundUserData(),
+        };
+    }
+
+    /// Null when the character has never touched anything.
+    pub fn groundMaterial(self: CharacterBase) ?*const c.PhysicsMaterial {
+        return switch (self) {
+            inline else => |char| char.groundMaterial(),
+        };
+    }
+
+    pub fn groundSubShapeId(self: CharacterBase) query_mod.SubShapeId {
+        return switch (self) {
+            inline else => |char| char.groundSubShapeId(),
+        };
+    }
+
+    pub fn getShape(self: CharacterBase) ?shape_mod.Shape {
+        return switch (self) {
+            inline else => |char| char.getShape(),
+        };
+    }
+
+    pub fn up(self: CharacterBase) math.Vec3 {
+        return switch (self) {
+            inline else => |char| char.up(),
+        };
+    }
+
+    pub fn setUp(self: CharacterBase, new_up: math.Vec3) void {
+        switch (self) {
+            inline else => |char| char.setUp(new_up),
+        }
+    }
+
+    /// Radians. Ground steeper than this reports `.on_steep_ground`.
+    pub fn setMaxSlopeAngle(self: CharacterBase, radians: f32) void {
+        switch (self) {
+            inline else => |char| char.setMaxSlopeAngle(radians),
+        }
+    }
+
+    /// Jolt stores the angle as its cosine; this returns that, not radians.
+    pub fn cosMaxSlopeAngle(self: CharacterBase) f32 {
+        return switch (self) {
+            inline else => |char| char.cosMaxSlopeAngle(),
+        };
+    }
+
+    pub fn isSlopeTooSteep(self: CharacterBase, normal: math.Vec3) bool {
+        return switch (self) {
+            inline else => |char| char.isSlopeTooSteep(normal),
+        };
+    }
+
+    /// @see `Character.setSupportingVolume` for what raising the plane does
+    /// and the mistake to avoid.
+    pub fn supportingVolume(self: CharacterBase) SupportingVolume {
+        return switch (self) {
+            inline else => |char| char.supportingVolume(),
+        };
+    }
+
+    pub fn setSupportingVolume(self: CharacterBase, volume: SupportingVolume) err.Error!void {
+        switch (self) {
+            inline else => |char| try char.setSupportingVolume(volume),
+        }
     }
 };

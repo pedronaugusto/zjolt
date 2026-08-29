@@ -18,6 +18,7 @@ const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const system_mod = @import("system.zig");
 const constraint_mod = @import("constraint.zig");
+const debug_mod = @import("debug.zig");
 
 pub const ControllerKind = c.VehicleControllerKind;
 pub const CollisionTesterKind = c.VehicleCollisionTesterKind;
@@ -40,7 +41,12 @@ pub const CollisionTesterDesc = c.VehicleCollisionTesterDesc;
 pub const MotorcycleDesc = c.VehicleMotorcycleDesc;
 
 pub const TrackSide = c.VehicleTrackSide;
+pub const TrackDesc = c.VehicleTrackDesc;
 pub const MotorcycleLeanSpring = c.VehicleMotorcycleLeanSpring;
+
+pub const GroundTestInput = c.VehicleGroundTestInput;
+pub const GroundContact = c.VehicleGroundContact;
+pub const CollisionTesterCallback = c.VehicleCollisionTesterCallback;
 
 /// The three filter tables a wheel's ground cast honours. Same shape as the
 /// ones `zjolt.query` takes, because it is the same cast underneath — see
@@ -263,9 +269,8 @@ pub const VehicleConstraint = struct {
     //=========================================================================
     // Wheels — runtime state
     //
-    // Wheel settings (radius, suspension range, ...) are creation-time only,
-    // via WheelDesc; there is no live getter for them. Every accessor below
-    // returns a zero/false default for a wheel_index at or past wheelCount().
+    // Wheel settings (radius, suspension range, ...) are creation-time
+    // only, via WheelDesc — no live getter. Every accessor below returns a zero/false default for a wheel_index at or past wheelCount().
     //=========================================================================
 
     pub fn wheelCount(self: VehicleConstraint) u32 {
@@ -342,10 +347,8 @@ pub const VehicleConstraint = struct {
     //=========================================================================
     // Driver input and drivetrain readback — every controller kind
     //
-    // forward/brake, engine RPM, current gear, clutch friction and gear
-    // ratio mean the same thing whichever controller this constraint has,
-    // so each of these is one method rather than a wheeled/tracked pair a
-    // caller could pick the wrong one of for the kind it actually has.
+    // forward/brake, engine RPM, gear, clutch friction and gear ratio
+    // mean the same thing whichever controller this constraint has, so each is one method rather than a wheeled/tracked pair to pick wrong.
     //=========================================================================
 
     pub fn forwardInput(self: VehicleConstraint) f32 {
@@ -385,6 +388,130 @@ pub const VehicleConstraint = struct {
     /// @param clutch_friction [0, 1]: 0 = fully disengaged, 1 = fully engaged.
     pub fn setGear(self: VehicleConstraint, gear: i32, clutch_friction: f32) err.Error!void {
         try err.check(c.zjoltVehicleConstraintSetGear(self.handle, gear, clutch_friction));
+    }
+
+    //=========================================================================
+    // Engine and transmission — runtime operations
+    //=========================================================================
+
+    /// Applies `torque` (N m) to the engine's own rotation speed over `delta_time`.
+    pub fn engineApplyTorque(self: VehicleConstraint, torque: f32, delta_time: f32) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintEngineApplyTorque(self.handle, torque, delta_time));
+    }
+
+    /// Applies the engine's angular damping over `delta_time`.
+    pub fn engineApplyDamping(self: VehicleConstraint, delta_time: f32) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintEngineApplyDamping(self.handle, delta_time));
+    }
+
+    /// Clamps the engine's current RPM between its min and max. Every other
+    /// engine method that changes RPM already does this; for a host that
+    /// pokes `getEngineDesc`'s min_rpm/max_rpm at runtime and wants the
+    /// current RPM to respect the change immediately.
+    pub fn engineClampRPM(self: VehicleConstraint) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintEngineClampRPM(self.handle));
+    }
+
+    /// True when the engine is idle enough to allow the vehicle to sleep.
+    pub fn engineAllowSleep(self: VehicleConstraint) bool {
+        return c.zjoltVehicleConstraintEngineAllowSleep(self.handle);
+    }
+
+    /// True when the transmission is idle enough to allow the vehicle to
+    /// sleep (not mid-shift and not in the post-shift clutch/latency window).
+    pub fn transmissionAllowSleep(self: VehicleConstraint) bool {
+        return c.zjoltVehicleConstraintTransmissionAllowSleep(self.handle);
+    }
+
+    /// `rpm` converted to the angle an RPM-meter needle would point at, for
+    /// custom debug drawing. Radians, 0 at idle. `error.Unsupported` without
+    /// `-Ddebug_renderer=true`.
+    pub fn engineConvertRPMToAngle(self: VehicleConstraint, rpm: f32) err.Error!f32 {
+        var out: f32 = 0;
+        try err.check(c.zjoltVehicleConstraintEngineConvertRPMToAngle(self.handle, rpm, &out));
+        return out;
+    }
+
+    /// Draws an RPM meter at `position`. `error.Unsupported` without `-Ddebug_renderer=true`.
+    pub fn engineDrawRPM(
+        self: VehicleConstraint,
+        renderer: debug_mod.Renderer,
+        position: math.RVec3,
+        forward: math.Vec3,
+        up: math.Vec3,
+        size: f32,
+        shift_down_rpm: f32,
+        shift_up_rpm: f32,
+    ) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintEngineDrawRPM(self.handle, renderer.handle, &position, &forward, &up, size, shift_down_rpm, shift_up_rpm));
+    }
+
+    /// Everything about the engine except the current RPM (already `engineRpm`).
+    pub fn getEngineDesc(self: VehicleConstraint) err.Error!EngineDesc {
+        var out: EngineDesc = undefined;
+        try err.check(c.zjoltVehicleConstraintGetEngineDesc(self.handle, &out));
+        return out;
+    }
+
+    /// Everything about the transmission except its gear ratio arrays — see
+    /// `gearRatios`. `forward_gear_ratios`/`reverse_gear_ratios` are always
+    /// NULL with a 0 count: borrowed-pointer fields this has no buffer to
+    /// point them at.
+    pub fn getTransmissionDesc(self: VehicleConstraint) err.Error!TransmissionDesc {
+        var out: TransmissionDesc = undefined;
+        try err.check(c.zjoltVehicleConstraintGetTransmissionDesc(self.handle, &out));
+        return out;
+    }
+
+    pub const GearRatios = struct { forward: u32, reverse: u32 };
+
+    /// The transmission's forward and reverse gear ratio counts, filling
+    /// `out_forward`/`out_reverse` up to their length and reporting the true
+    /// counts (which may exceed what was written) in the result.
+    /// `error.BufferTooSmall` if either buffer is too short.
+    pub fn gearRatios(self: VehicleConstraint, out_forward: []f32, out_reverse: []f32) err.Error!GearRatios {
+        var forward_count: u32 = 0;
+        var reverse_count: u32 = 0;
+        try err.check(c.zjoltVehicleConstraintGetGearRatios(
+            self.handle,
+            out_forward.ptr,
+            @intCast(out_forward.len),
+            &forward_count,
+            out_reverse.ptr,
+            @intCast(out_reverse.len),
+            &reverse_count,
+        ));
+        return .{ .forward = forward_count, .reverse = reverse_count };
+    }
+
+    /// Splits torque between the two wheels of differential
+    /// `differential_index` given their current angular velocities (rad/s).
+    /// Wheeled and motorcycle only.
+    pub fn calculateDifferentialTorqueRatio(
+        self: VehicleConstraint,
+        differential_index: u32,
+        left_angular_velocity: f32,
+        right_angular_velocity: f32,
+    ) err.Error!struct { left_torque_fraction: f32, right_torque_fraction: f32 } {
+        var left: f32 = 0;
+        var right: f32 = 0;
+        try err.check(c.zjoltVehicleConstraintCalculateDifferentialTorqueRatio(
+            self.handle,
+            differential_index,
+            left_angular_velocity,
+            right_angular_velocity,
+            &left,
+            &right,
+        ));
+        return .{ .left_torque_fraction = left, .right_torque_fraction = right };
+    }
+
+    /// Recomputes `wheel_index`'s angular velocity from its track's angular
+    /// velocity and the two wheel radii. Every simulated step already does
+    /// this; call after `setTrackAngularVelocity` to see the wheel value
+    /// update before the next step. Tracked only.
+    pub fn calculateTrackedWheelAngularVelocity(self: VehicleConstraint, wheel_index: u32) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintCalculateTrackedWheelAngularVelocity(self.handle, wheel_index));
     }
 
     //=========================================================================
@@ -523,9 +650,7 @@ pub const VehicleConstraint = struct {
     //=========================================================================
     // Wheel-ground collision test frequency
     //
-    // Skipping steps between wheel-ground collision tests is a cheap way to
-    // spend less time on vehicles far from the camera or barely moving; the
-    // wheels keep their last contact between tests.
+    // Skipping steps between tests is cheap for vehicles far from the camera or barely moving; wheels keep their last contact between tests.
     //=========================================================================
 
     pub fn numStepsBetweenCollisionTestActive(self: VehicleConstraint) u32 {
@@ -571,6 +696,15 @@ pub const VehicleConstraint = struct {
 
     pub fn wheelLateralLambda(self: VehicleConstraint, wheel_index: u32) f32 {
         return c.zjoltVehicleConstraintGetWheelLateralLambda(self.handle, wheel_index);
+    }
+
+    /// The impulse (N s) this wheel's brakes are set up to push into the
+    /// floor this step — computed from brake/hand-brake input before the
+    /// velocity solve, not accumulated by it like the lambdas above.
+    /// Non-zero only once brake torque is enough to fully lock the
+    /// wheel; the solver may still cap it lower by tire grip. Wheeled/motorcycle only; 0 against a tracked constraint (its tracks brake instead).
+    pub fn wheelBrakeImpulse(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelBrakeImpulse(self.handle, wheel_index);
     }
 
     pub const WheelBasis = struct {
@@ -641,6 +775,70 @@ pub const VehicleConstraint = struct {
     }
 
     //=========================================================================
+    // Tracked wheels — WheelTV-only state
+    //
+    // A tracked vehicle's wheels carry state WheelWV does not. All four
+    // return the same default (0, or -1 for the track index) for a non-tracked/NULL constraint or an out-of-range wheel index.
+    //=========================================================================
+
+    /// This wheel's own brake impulse (WheelTV::mBrakeImpulse), spread from
+    /// its track's brake rather than computed per wheel the way a wheeled
+    /// controller's WheelWV is — distinct from `wheelBrakeImpulse`, which
+    /// reads WheelWV and is 0 here.
+    pub fn trackedWheelBrakeImpulse(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(self.handle, wheel_index);
+    }
+
+    /// Tire friction combined with whatever this wheel is standing on this
+    /// step — see `setCombineFrictionCallback`, which is what can change it
+    /// from the wheel's own `tracked_longitudinal_friction`/
+    /// `tracked_lateral_friction` (`WheelDesc`). Both are 0 without contact.
+    pub fn wheelCombinedLongitudinalFriction(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(self.handle, wheel_index);
+    }
+
+    pub fn wheelCombinedLateralFriction(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelCombinedLateralFriction(self.handle, wheel_index);
+    }
+
+    /// Which track this wheel was built into (WheelTV::mTrackIndex), not
+    /// actually written until TrackedVehicleController's first PreCollide —
+    /// so -1 before the vehicle has ever been stepped, in addition to a
+    /// non-tracked/NULL constraint or an out-of-range wheel index.
+    pub fn wheelTrackIndex(self: VehicleConstraint, wheel_index: u32) i32 {
+        return c.zjoltVehicleConstraintGetWheelTrackIndex(self.handle, wheel_index);
+    }
+
+    //=========================================================================
+    // Wheel and engine curves — read-back
+    //
+    // `WheelDesc`/`EngineDesc` take these curves at creation; nothing
+    // else reads one back, not even Jolt's built-in default for a 0-count curve. Each hands back the whole curve, not only its domain — see `ffi/zjolt_vehicle.h`.
+    //=========================================================================
+
+    /// Null against a tracked constraint (WheelSettingsTV has no curve at
+    /// all — see `WheelDesc.tracked_longitudinal_friction`) or an
+    /// out-of-range wheel index.
+    pub fn wheelLongitudinalFrictionCurve(self: VehicleConstraint, wheel_index: u32) ?CurveDesc {
+        var out: CurveDesc = undefined;
+        if (!c.zjoltVehicleConstraintGetWheelLongitudinalFrictionCurve(self.handle, wheel_index, &out)) return null;
+        return out;
+    }
+
+    pub fn wheelLateralFrictionCurve(self: VehicleConstraint, wheel_index: u32) ?CurveDesc {
+        var out: CurveDesc = undefined;
+        if (!c.zjoltVehicleConstraintGetWheelLateralFrictionCurve(self.handle, wheel_index, &out)) return null;
+        return out;
+    }
+
+    /// Null for a constraint with no engine.
+    pub fn engineNormalizedTorqueCurve(self: VehicleConstraint) ?CurveDesc {
+        var out: CurveDesc = undefined;
+        if (!c.zjoltVehicleConstraintGetEngineNormalizedTorqueCurve(self.handle, &out)) return null;
+        return out;
+    }
+
+    //=========================================================================
     // Anti-roll bars — runtime
     //
     // Which wheels a bar couples is fixed at `init`; how hard it couples them
@@ -690,19 +888,12 @@ pub const VehicleConstraint = struct {
         return out;
     }
 
-    /// Replaces the differential whole, so read it with `differential` first
-    /// and change the field you mean. Takes effect on the next step, and the
-    /// same ranges `init` enforces are enforced here — nothing is applied if
-    /// any of them fails.
-    ///
-    /// The one rule that cannot be checked here: `engine_torque_ratio` must
-    /// sum to 1 ACROSS every differential the vehicle has. That is a property
-    /// of the set, not of one member, so moving torque from one axle to
-    /// another takes two calls and is momentarily out of balance in
-    /// between — fine, as long as the vehicle is not stepped until both have
-    /// landed. Jolt asserts the sum at the top of the next step in an
-    /// asserts-on build, and quietly scales the engine's output oddly in one
-    /// without.
+    /// Replaces the differential whole — read it with `differential`
+    /// first and change the field you mean. Takes effect next step; the
+    /// same ranges `init` enforces apply, or nothing is applied. NOT
+    /// checked: `engine_torque_ratio` must sum to 1 ACROSS every
+    /// differential — momentarily out of balance across two calls is
+    /// fine if not stepped in between; Jolt asserts the sum (or silently scales engine output oddly without asserts).
     pub fn setDifferential(
         self: VehicleConstraint,
         index: u32,
@@ -755,6 +946,29 @@ pub const VehicleConstraint = struct {
         ));
     }
 
+    /// A track's tunable properties: everything about it besides which
+    /// wheels belong to it and which one is driven, which are fixed at
+    /// `init` and have no live counterpart. Null against a non-tracked
+    /// constraint.
+    pub fn track(self: VehicleConstraint, side: TrackSide) ?TrackDesc {
+        var out: TrackDesc = undefined;
+        if (!c.zjoltVehicleConstraintGetTrack(self.handle, side, &out)) return null;
+        return out;
+    }
+
+    /// Replaces the track's tunable properties whole, so read it with
+    /// `track` first and change the field you mean. Takes effect on the
+    /// next step. The same ranges `init`'s track_inertia/track_angular_damping/
+    /// track_max_brake_torque/track_differential_ratio enforce are enforced
+    /// here — nothing is applied if any of them fails.
+    pub fn setTrack(
+        self: VehicleConstraint,
+        side: TrackSide,
+        desc: TrackDesc,
+    ) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintSetTrack(self.handle, side, &desc));
+    }
+
     //=========================================================================
     // Engine and clutch — runtime
     //=========================================================================
@@ -796,9 +1010,7 @@ pub const VehicleConstraint = struct {
     //=========================================================================
     // Motorcycle lean spring — runtime tuning
     //
-    // `MotorcycleDesc.max_lean_angle` has no counterpart here: Jolt gives
-    // MotorcycleController no setter for it, and a field that silently did
-    // nothing would read worse than its absence.
+    // `MotorcycleDesc.max_lean_angle` has no counterpart here: Jolt gives MotorcycleController no setter for it, so a silently-no-op field is worse than its absence.
     //=========================================================================
 
     /// Null against a non-motorcycle constraint.
@@ -820,22 +1032,12 @@ pub const VehicleConstraint = struct {
     // Wheel-ground collision filtering
     //=========================================================================
 
-    /// Narrows what the wheel casts are allowed to hit. Null clears every
-    /// filter; a member whose `should_collide` is null is not installed, so
-    /// the tester's own `object_layer` still applies at that level.
-    ///
-    /// One place this deliberately does not match Jolt: there, installing a
-    /// body filter REPLACES the built-in "ignore the vehicle's own body"
-    /// one, so a filter that accepts everything drives the wheels into the
-    /// chassis they hang off. Here the vehicle's own body is rejected before
-    /// `body.should_collide` is consulted — a filter can only narrow.
-    ///
-    /// The struct is copied; the `user` pointers inside it are not. They must
-    /// outlive the vehicle, or be cleared with a null before they die.
-    ///
-    /// Filters are called from inside `PhysicsSystem.step`, on a job
-    /// thread, with every body and constraint lock held — see
-    /// `setPreStepCallback` for what that rules out.
+    /// Narrows what the wheel casts are allowed to hit. Null clears
+    /// every filter; a null `should_collide` member leaves the tester's
+    /// own `object_layer` in charge at that level. UNLIKE Jolt: the
+    /// vehicle's own body is always rejected first, so a filter can
+    /// only narrow, never replace that built-in exclusion. Struct is
+    /// copied, `user` pointers are not (outlive the vehicle, or clear first) — called on a job thread inside `step`, every lock held (see `setPreStepCallback`).
     pub fn setWheelFilters(self: VehicleConstraint, filters: ?WheelFilters) err.Error!void {
         if (filters) |f| {
             try err.check(c.zjoltVehicleConstraintSetWheelFilters(self.handle, &f));
@@ -863,28 +1065,33 @@ pub const VehicleConstraint = struct {
         try err.check(c.zjoltVehicleConstraintSetCollisionTester(self.handle, &desc));
     }
 
+    /// A wheel-ground collision tester written against your own data (a
+    /// heightfield, a spline, a world snapshot) instead of the three
+    /// built-in shapes. Both callback fields run once per wheel inside
+    /// `step`, on a job thread, every lock held (see
+    /// `setPreStepCallback`); neither is handed a system — report a
+    /// body id and this side resolves it. Installing clears the built-in tester and vice versa; both fields of `callback` are required.
+    pub fn setCollisionTesterCallback(
+        self: VehicleConstraint,
+        callback: CollisionTesterCallback,
+    ) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintSetCollisionTesterCallback(self.handle, &callback));
+    }
+
+    /// Exactly what was last set through either this or `setCollisionTester`
+    /// (all-null in that case) — never both, since installing one clears the
+    /// other.
+    pub fn collisionTesterCallback(self: VehicleConstraint) CollisionTesterCallback {
+        var out: CollisionTesterCallback = .{};
+        c.zjoltVehicleConstraintGetCollisionTesterCallback(self.handle, &out);
+        return out;
+    }
+
     //=========================================================================
     // Step callbacks
     //
-    // The only places a host can act on wheel contacts in the same step that
-    // found them; read from between two `step` calls they are always one
-    // step stale.
-    //
-    // All three run inside `PhysicsSystem.step`, on whichever job thread is
-    // stepping this vehicle, with every body and constraint mutex held. So:
-    // read and write bodies, but do not add or remove any, do not `deinit`
-    // this vehicle from inside its own callback, and do not assume two
-    // vehicles sharing a `user` pointer are serialised — they are not.
-    //
-    // Nothing may unwind out of one. Jolt is built without exceptions and
-    // these are called with locks held, so a Zig panic escaping here skips
-    // the broad-phase lock's destructor and deadlocks the next update
-    // permanently. Carry a failure out in your `user` context and raise it
-    // after `step` returns.
-    //
-    // `context.delta_time` is the sub-step's: `step` with N collision steps
-    // calls each of these N times, `is_first_step`/`is_last_step` marking the
-    // ends.
+    // All three run inside `step`, on a job thread, every lock held:
+    // read/write bodies, but never add/remove them, `deinit` this vehicle, or unwind (a Zig panic here deadlocks the next update permanently — carry a failure out via `user` instead).
     //=========================================================================
 
     /// Before the wheels are collision-tested, and the last moment the
@@ -969,13 +1176,11 @@ pub const VehicleConstraint = struct {
         return out;
     }
 
-    /// Caps how much grip each tire may use this step. Jolt's default —
-    /// restored by null — is `friction * suspension_impulse` in each
-    /// direction, an uncoupled friction circle that lets a tire brake and
-    /// corner at full strength at once; replacing it is how a proper
-    /// elliptical friction circle, an ABS or traction control gets written.
-    /// What comes back is a ceiling, not a demand: the applied impulse may be
-    /// lower. Wheeled and motorcycle only.
+    /// Caps how much grip each tire may use this step. Jolt's default
+    /// (restored by null) is `friction * suspension_impulse` per
+    /// direction — an uncoupled friction circle letting a tire brake
+    /// and corner at full strength at once; replace it for a proper
+    /// elliptical circle, ABS, or traction control. A ceiling, not a demand: the applied impulse may be lower. Wheeled/motorcycle only.
     pub fn setTireMaxImpulseCallback(
         self: VehicleConstraint,
         callback: ?TireMaxImpulseCallback,

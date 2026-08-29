@@ -1,21 +1,17 @@
 //! Broad-phase queries: which bodies are roughly there.
 //!
-//! These return body ids and nothing else. The broad phase tests only each
-//! body's bounding box, so it answers "which bodies could possibly be
-//! involved" and never "where did they touch" — there is no contact point, no
-//! normal and no penetration depth to be had here. `Queries` in `query.zig` is
-//! what runs the narrow phase and produces those.
+//! Return body ids only. The broad phase tests only each body's bounding
+//! box, so it answers "which bodies could possibly be involved," never
+//! "where did they touch" — no contact point, normal, or penetration
+//! depth. `Queries` in `query.zig` runs the narrow phase and produces those.
 //!
-//! Reach for these when the next thing you do is your own test anyway: a blast
-//! radius that computes its own falloff, an editor selection box, a streamer
-//! asking what is in a region. A hit means the AXIS-ALIGNED bounding box
-//! overlaps, which for a long thin body at forty-five degrees is a box several
-//! times its own volume.
+//! Reach for these when the next thing you do is your own test anyway: a
+//! blast radius, an editor selection box, a streamer asking what is in a
+//! region. A hit means the AXIS-ALIGNED bounding box overlaps, which for a
+//! long thin body at forty-five degrees is a box several times its volume.
 //!
-//! Positions here are `RVec3` for consistency with the rest of the package and
-//! are narrowed to float on the way in, because Jolt's broad phase is single
-//! precision in every build and Jolt's own narrow-phase entry points narrow
-//! the same way before consulting it.
+//! Positions are `RVec3` for consistency, narrowed to float on the way in
+//! since Jolt's broad phase is single precision, matching its own narrow-phase entry points.
 
 const std = @import("std");
 const c = @import("c/broadphase.zig");
@@ -43,10 +39,7 @@ pub const BroadPhase = struct {
     //=========================================================================
     // Casts
     //
-    // Both use the two-call protocol the rest of the package uses: ask for the
-    // count, then fill a buffer. Results are unsorted — Jolt's broad-phase
-    // collectors append in tree-traversal order, and sorting a candidate list
-    // the caller is about to filter anyway would be work done twice.
+    // Both use the two-call protocol the rest of the package uses: ask for the count, then fill a buffer. Results are unsorted — Jolt's broad-phase collectors append in tree-traversal order, and sorting a list the caller is about to filter anyway would be work done twice.
     //=========================================================================
 
     pub fn countRayHits(

@@ -1,0 +1,56 @@
+# AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE — one line per name tools/coverage.sh
+# reports unbound, keyed by the area it was found in.
+#
+#   BOUND      crosses the ABI; evidence names the zjolt entry points.
+#   EXTENSION  a C++ virtual delivered as a C callback; evidence names it.
+#   LANGUAGE   Zig provides it; evidence names the facility.
+#   ZIG        zjolt provides it in Zig without crossing the ABI; evidence is
+#              src/FILE.zig:decl.
+#   INTERNAL   upstream marks it internal, or it has no public declaration.
+#              tools/classify.sh computes this; nothing else may claim it.
+#   GAP        work. ci/check-coverage.sh fails while any remain.
+ObjectStream	AddSerializableAttributeEnum	BOUND	zjoltReflectGetAttribute
+ObjectStream	AddSerializableAttributeTyped	BOUND	zjoltReflectGetAttribute
+ObjectStream	ClassDescription	BOUND	zjoltReflectObjectRestoreStream
+ObjectStream	GetMemberPointer	BOUND	zjoltReflectGetAttribute
+ObjectStream	GetMemberPrimitiveType	BOUND	zjoltReflectGetAttribute
+ObjectStream	GetPrimitiveTypeOfType	BOUND	zjoltReflectGetAttribute
+ObjectStream	GetRTTIOfType	BOUND	zjoltReflectGetAttribute
+ObjectStream	HintIndentDown	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream ZJOLT_OBJECT_STREAM_FORMAT_TEXT
+ObjectStream	HintIndentUp	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream ZJOLT_OBJECT_STREAM_FORMAT_TEXT
+ObjectStream	HintNextItem	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream ZJOLT_OBJECT_STREAM_FORMAT_TEXT
+ObjectStream	IsType	BOUND	zjoltReflectObjectRestoreStream
+ObjectStream	OSIsType	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	OSReadData	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	OSWriteData	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	OSWriteDataType	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	ObjectInfo	BOUND	zjoltReflectObjectSaveStream zjoltReflectObjectRestoreStream
+ObjectStream	ObjectStreamBinaryIn	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ObjectStreamBinaryOut	BOUND	ZJOLT_OBJECT_STREAM_FORMAT_BINARY zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	ObjectStreamTextIn	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ObjectStreamTextOut	BOUND	ZJOLT_OBJECT_STREAM_FORMAT_TEXT zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream zjoltSceneSave
+ObjectStream	QueueRTTI	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	ReadClassData	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadCount	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadData	BOUND	zjoltReflectObjectRestoreStream
+ObjectStream	ReadDataType	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadIdentifier	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadName	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadObject	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadPointerData	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadPrimitiveData	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	ReadRTTI	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	SerializableAttribute	BOUND	zjoltReflectGetAttribute
+ObjectStream	SerializableObject	BOUND	zjoltReflectCreateObject zjoltReflectObjectGetRtti zjoltReflectCastTo
+ObjectStream	SetName	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
+ObjectStream	SkipAttributeData	BOUND	zjoltSceneRestoreObjectStream zjoltRagdollSettingsRestoreObjectStream
+ObjectStream	WriteClassData	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WriteCount	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WriteData	BOUND	zjoltReflectObjectSaveStream
+ObjectStream	WriteDataType	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WriteIdentifier	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WriteName	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WriteObject	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WritePointerData	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WritePrimitiveData	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream
+ObjectStream	WriteRTTI	BOUND	zjoltSceneSaveObjectStream zjoltRagdollSettingsSaveObjectStream

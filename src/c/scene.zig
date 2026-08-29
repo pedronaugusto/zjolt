@@ -69,4 +69,12 @@ pub extern fn zjoltSceneFixInvalidScales(scene: *Scene) Result;
 
 pub extern fn zjoltSceneSave(scene: *const Scene, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 
+pub extern fn zjoltSceneSaveStream(scene: *const Scene, stream: *const core.Stream) Result;
+
 pub extern fn zjoltSceneRestore(data: [*]const u8, size: usize, out: **Scene) Result;
+
+pub extern fn zjoltSceneRestoreStream(stream: *const core.Stream, out: **Scene) Result;
+
+pub extern fn zjoltSceneSaveObjectStream(scene: *const Scene, format: core.ObjectStreamFormat, stream: *const core.Stream) Result;
+
+pub extern fn zjoltSceneRestoreObjectStream(stream: *const core.Stream, out: **Scene) Result;

@@ -77,6 +77,24 @@ pub const HairStrand = extern struct {
     start_vertex: u32,
     end_vertex: u32,
     material_index: u32,
+
+    /// The strand's length in its rest pose: consecutive vertex distances
+    /// summed the way `JPH::HairSettings::RStrand::MeasureLength` does — what
+    /// hair creation uses internally to size long-range attachments.
+    /// `vertices` is indexed by `start_vertex .. end_vertex`.
+    pub fn measureLength(strand: HairStrand, vertices: []const HairVertex) f32 {
+        var length: f32 = 0;
+        var v = strand.start_vertex;
+        while (v + 1 < strand.end_vertex) : (v += 1) {
+            const a = vertices[v].position;
+            const b = vertices[v + 1].position;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dz = b.z - a.z;
+            length += @sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        return length;
+    }
 };
 
 pub const HairGradient = extern struct {
@@ -84,6 +102,25 @@ pub const HairGradient = extern struct {
     max: f32,
     min_fraction: f32,
     max_fraction: f32,
+
+    /// The gradient reparameterized from Jolt's fixed authoring rate
+    /// (`cDefaultIterationsPerSecond`) to one substep of `time_ratio` default
+    /// substeps: `min`/`max` become `1 - (1 - value)^time_ratio`, the identity
+    /// a hair update applies every substep, so a slower or faster solver
+    /// converges at the same rate. `min_fraction`/`max_fraction` pass through.
+    pub fn makeStepDependent(gradient: HairGradient, time_ratio: f32) HairGradient {
+        const stepDependent = struct {
+            fn f(value: f32, ratio: f32) f32 {
+                return 1.0 - std.math.pow(f32, 1.0 - value, ratio);
+            }
+        }.f;
+        return .{
+            .min = stepDependent(gradient.min, time_ratio),
+            .max = stepDependent(gradient.max, time_ratio),
+            .min_fraction = gradient.min_fraction,
+            .max_fraction = gradient.max_fraction,
+        };
+    }
 };
 
 pub const HairSkinWeight = extern struct {
@@ -112,6 +149,15 @@ pub const HairMaterial = extern struct {
     skin_global_pose: HairGradient,
     simulation_strands_fraction: f32,
     gravity_preload_factor: f32,
+
+    /// Whether the material needs the velocity/density grid built and
+    /// stepped: `JPH::HairSettings::Material::NeedsGrid`'s condition, a
+    /// nonzero `grid_velocity_factor` or `grid_density_force_factor`.
+    pub fn needsGrid(material: HairMaterial) bool {
+        return material.grid_velocity_factor.min != 0 or
+            material.grid_velocity_factor.max != 0 or
+            material.grid_density_force_factor != 0;
+    }
 };
 
 pub const HairVertexState = extern struct {
@@ -136,6 +182,17 @@ pub const HairInfo = extern struct {
     grid_size_y: u32,
     grid_size_z: u32,
     max_root_distance_to_scalp: f32,
+};
+
+pub const HairGridCell = extern struct {
+    velocity: Vec3,
+    density: f32,
+};
+
+pub const HairReadBackView = extern struct {
+    scalp_vertices: ?[*]const Vec3,
+    grid_velocity_and_density: ?[*]const HairGridCell,
+    render_positions: ?[*]const Vec3,
 };
 
 pub const HairDesc = extern struct {
@@ -204,6 +261,16 @@ pub extern fn zjoltHairReadBackVertexState(hair: *Hair, out_state: ?[*]HairVerte
 pub extern fn zjoltHairGetSimulatedStrands(hair: *const Hair, out_strands: ?[*]HairStrand, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltHairGetInfo(hair: *const Hair, out: *HairInfo) Result;
+
+pub extern fn zjoltHairLockReadBackBuffers(hair: *Hair, out: *HairReadBackView) Result;
+
+pub extern fn zjoltHairUnlockReadBackBuffers(hair: *Hair) Result;
+
+pub extern fn zjoltHairGetNeutralDensity(hair: *const Hair, x: u32, y: u32, z: u32, out_density: *f32) Result;
+
+pub extern fn zjoltHairPositionToGridIndex(hair: *const Hair, position: *const Vec3, out_index_x: *u32, out_index_y: *u32, out_index_z: *u32, out_fraction: *Vec3) Result;
+
+pub extern fn zjoltHairSkinScalpVertices(hair: *const Hair, joint_to_hair: [*]const f32, joint_matrices: [*]const f32, joint_count: u32, out_vertices: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltHairSaveGroom(hair: *const Hair, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 

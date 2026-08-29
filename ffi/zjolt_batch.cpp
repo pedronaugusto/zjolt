@@ -1,22 +1,16 @@
 //===----------------------------------------------------------------------===//
 // zjolt — many bodies at once.
 //
-// Two things make this more than a loop over the single-body calls.
+// Jolt's batch insert sorts the whole set by broad-phase layer and builds
+// the subtree in one pass — the reason to use it at all.
 //
-// The first is the broad phase: Jolt's batch insert sorts the whole set by
-// broad-phase layer and builds the subtree in one pass, which is the reason to
-// use it at all.
-//
-// The second is that Jolt's batch calls trust their arguments in a way the
-// single-body ones do not. BodyInterface::AddBody takes a body lock and does
-// nothing when it fails, so a stale id is harmless. BodyManager::ActivateBodies
-// skips only the ALL-ONES invalid id and then dereferences `mBodies[index]`
-// directly (`BodyManager.cpp:500`) — a stale id whose slot has been recycled
-// reaches an assert, and a stale id whose slot is free reaches a pointer that
-// is a freelist link with a tag bit set. DestroyBodies is the same shape
-// (`BodyManager.cpp:349`). So every entry point here validates its ids under a
-// body lock first, and either refuses the batch or drops the id, per the
-// contract in the header.
+// Jolt's batch calls also trust arguments more than single-body ones do:
+// BodyInterface::AddBody takes a body lock and no-ops on failure, but
+// BodyManager::ActivateBodies/DestroyBodies skip only the ALL-ONES invalid
+// id, then dereference `mBodies[index]` directly — a stale id whose slot
+// was recycled hits an assert, a freed slot hits a freelist-tagged
+// pointer. Every entry point here validates ids under a lock first, and
+// either refuses the batch or drops the id, per the header's contract.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -27,13 +21,7 @@
 //===----------------------------------------------------------------------===//
 // The staged batch
 //
-// Global namespace, because the C header names it as an opaque handle and the
-// tag has to match.
-//
-// It owns the id array, and that ownership is the point. Jolt's AddState holds
-// POINTERS INTO the array it was given (`BroadPhaseQuadTree.cpp:185`), so the
-// array has to stay put between prepare and finalize. Owning a copy here is
-// what lets the caller's array be a temporary.
+// Global namespace, since the C header names it as an opaque handle and the tag has to match. Owns the id array on purpose: Jolt's AddState holds POINTERS INTO the array it was given, so the array must stay put between prepare and finalize — owning a copy here lets the caller's array be a temporary.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltBodyAddBatch {
@@ -68,14 +56,12 @@ bool Satisfies(const JPH::Body *body, Require require) {
   return true;
 }
 
-/// Copies `bodies` into `out` and checks every one under a single multi-body
-/// read lock.
+/// Copies `bodies` into `out` and checks every one under a single
+/// multi-body read lock.
 ///
-/// `strict` decides what a failing id means: refuse the whole batch, or leave
-/// it out. Refusing is right where a partial result is worse than none — half
-/// a level inserted into the broad phase — and dropping is right where the
-/// caller's list is simply older than the world, which is what a set of ids
-/// collected last frame is.
+/// `strict` decides what a failing id means: refuse the whole batch, or
+/// leave it out. Refuse where a partial result is worse than none (half a
+/// level inserted into the broad phase); drop where the caller's list is simply older than the world, e.g. ids collected last frame.
 ZJoltResult GatherBodies(ZJoltPhysicsSystem *system, const ZJoltBodyId *bodies,
                          uint32_t count, Require require, bool strict,
                          JPH::Array<JPH::BodyID> &out) {
@@ -115,11 +101,9 @@ ZJoltResult GatherBodies(ZJoltPhysicsSystem *system, const ZJoltBodyId *bodies,
 /// Refuses a batch that names the same body twice.
 ///
 /// Jolt would not catch it: AddBodiesPrepare checks every id against the
-/// broad phase BEFORE inserting any of them, so both copies pass, and
-/// AddBodiesFinalize then inserts the body into the tree twice. Sorting first
-/// makes duplicates adjacent, and Jolt sorts the array by broad-phase layer
-/// immediately afterwards anyway, so the order this leaves behind costs
-/// nothing.
+/// broad phase BEFORE inserting any, so both copies pass, and
+/// AddBodiesFinalize inserts the body into the tree twice. Sorting first
+/// makes duplicates adjacent — costing nothing, since Jolt sorts the array by broad-phase layer immediately afterwards anyway.
 ZJoltResult RefuseDuplicates(JPH::Array<JPH::BodyID> &ids) {
   if (ids.size() < 2) return ZJOLT_RESULT_OK;
   JPH::QuickSort(ids.begin(), ids.end());
@@ -132,7 +116,9 @@ ZJoltResult RefuseDuplicates(JPH::Array<JPH::BodyID> &ids) {
   return ZJOLT_RESULT_OK;
 }
 
-JPH::EActivation ToJoltActivation(ZJoltActivation activation) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h.
+JPH::EActivation ToJoltActivation(int32_t activation) {
   return activation == ZJOLT_ACTIVATION_DONT_ACTIVATE
              ? JPH::EActivation::DontActivate
              : JPH::EActivation::Activate;
@@ -153,6 +139,32 @@ bool OwnsBatch(const ZJoltPhysicsSystem *system,
   for (const ZJoltBodyAddBatch *pending : system->pending_batches)
     if (pending == batch) return true;
   return false;
+}
+
+/// The shared body of zjoltBodyAddBatchFinalize, reached from there and from
+/// zjoltBodyAddBatch. Takes the raw integer rather than ZJoltActivation:
+/// zjoltBodyAddBatch has already converted its own copy with zjolt::RawEnum,
+/// and passing the enum itself onward here — even from one entry point to
+/// another — would be exactly the load zjolt::RawEnum exists to avoid.
+ZJoltResult FinalizeBatch(ZJoltPhysicsSystem *system, ZJoltBodyAddBatch *batch,
+                          int32_t raw_activation) {
+  if (!zjolt::Present(system, batch)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!OwnsBatch(system, batch)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "that batch was not prepared on this physics system, or has already "
+        "been finalized or aborted");
+  }
+
+  if (!batch->ids.empty()) {
+    system->system.GetBodyInterface().AddBodiesFinalize(
+        batch->ids.data(), static_cast<int>(batch->ids.size()), batch->state,
+        ToJoltActivation(raw_activation));
+  }
+
+  ForgetBatch(system, batch);
+  zjolt::Delete(batch);
+  return ZJOLT_RESULT_OK;
 }
 
 }  // namespace
@@ -212,23 +224,9 @@ ZJoltResult zjoltBodyAddBatchFinalize(ZJoltPhysicsSystem *system,
                                       ZJoltBodyAddBatch *batch,
                                       ZJoltActivation activation) {
   ZJOLT_ENTER();
-  if (!zjolt::Present(system, batch)) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  if (!OwnsBatch(system, batch)) {
-    return zjolt::SetError(
-        ZJOLT_RESULT_INVALID_ARGUMENT,
-        "that batch was not prepared on this physics system, or has already "
-        "been finalized or aborted");
-  }
-
-  if (!batch->ids.empty()) {
-    system->system.GetBodyInterface().AddBodiesFinalize(
-        batch->ids.data(), static_cast<int>(batch->ids.size()), batch->state,
-        ToJoltActivation(activation));
-  }
-
-  ForgetBatch(system, batch);
-  zjolt::Delete(batch);
-  return ZJOLT_RESULT_OK;
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  return FinalizeBatch(system, batch, zjolt::RawEnum(activation));
 }
 
 ZJoltResult zjoltBodyAddBatchAbort(ZJoltPhysicsSystem *system,
@@ -255,11 +253,16 @@ ZJoltResult zjoltBodyAddBatchAbort(ZJoltPhysicsSystem *system,
 ZJoltResult zjoltBodyAddBatch(ZJoltPhysicsSystem *system,
                               const ZJoltBodyId *bodies, uint32_t count,
                               ZJoltActivation activation) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h. Forwarding the enum itself to
+  // FinalizeBatch, even from one entry point to another, would be exactly the
+  // load this exists to avoid.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   ZJoltBodyAddBatch *batch = nullptr;
   const ZJoltResult prepared =
       zjoltBodyAddBatchPrepare(system, bodies, count, &batch);
   if (prepared != ZJOLT_RESULT_OK) return prepared;
-  return zjoltBodyAddBatchFinalize(system, batch, activation);
+  return FinalizeBatch(system, batch, raw_activation);
 }
 
 //===----------------------------------------------------------------------===//
@@ -324,6 +327,56 @@ ZJoltResult zjoltBodyDestroyBatch(ZJoltPhysicsSystem *system,
 
   system->system.GetBodyInterface().DestroyBodies(
       live.data(), static_cast<int>(live.size()));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltBodyUnassignIds(ZJoltPhysicsSystem *system,
+                                 const ZJoltBodyId *bodies, uint32_t count,
+                                 ZJoltUnassignedBody **out_bodies) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (count != 0 && !zjolt::Present(bodies, out_bodies))
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  for (uint32_t i = 0; i < count; ++i) out_bodies[i] = nullptr;
+  if (count == 0) return ZJOLT_RESULT_OK;
+
+  JPH::Array<JPH::BodyID> ids;
+  ids.reserve(count);
+  for (uint32_t i = 0; i < count; ++i) ids.push_back(zjolt::ToJolt(bodies[i]));
+
+  // Liveness is checked under one multi-body read lock -- bounds- and
+  // generation-checked -- before any id reaches BodyManager::RemoveBodies,
+  // which (via UnassignBodyID) indexes its table directly, the same hazard
+  // this file already documents for the other plural body calls.
+  JPH::Array<bool> live(count, false);
+  {
+    JPH::BodyLockMultiRead lock(system->system.GetBodyLockInterface(),
+                                ids.data(), static_cast<int>(count));
+    for (uint32_t i = 0; i < count; ++i)
+      live[i] = lock.GetBody(static_cast<int>(i)) != nullptr;
+  }
+
+  JPH::BodyInterface &iface = system->system.GetBodyInterface();
+  for (uint32_t i = 0; i < count; ++i) {
+    if (!live[i]) continue;
+
+    ZJoltUnassignedBody *handle = zjolt::New<ZJoltUnassignedBody>();
+    if (handle == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
+    if (iface.IsAdded(ids[i])) iface.RemoveBody(ids[i]);
+    JPH::Body *unassigned = iface.UnassignBodyID(ids[i]);
+    if (unassigned == nullptr) {
+      // Lost a race with a concurrent destroy since the check above; leave
+      // this slot NULL rather than fail bodies already handed back.
+      zjolt::Delete(handle);
+      continue;
+    }
+
+    handle->body = unassigned;
+    handle->owner = system;
+    zjolt::HandleCreated();
+    out_bodies[i] = handle;
+  }
   return ZJOLT_RESULT_OK;
 }
 

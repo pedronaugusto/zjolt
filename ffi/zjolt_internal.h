@@ -27,6 +27,7 @@
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 #include <Jolt/Physics/Collision/Shape/SubShapeID.h>
 #include <Jolt/Physics/Collision/ShapeFilter.h>
+#include <Jolt/Physics/Collision/SimShapeFilter.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
@@ -38,25 +39,19 @@
 #include <new>
 #include <utility>
 
+#ifdef JPH_OBJECT_STREAM
+#include <istream>
+#include <ostream>
+#include <streambuf>
+#endif  // JPH_OBJECT_STREAM
+
 #include "zjolt.h"
 
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// Two of the handles in zjolt.h name objects Jolt owns and constructs itself
-// (Shape is reference counted and comes back out of a deserialise; Body lives
-// in the body manager), so they cannot be wrapped in a struct of ours without
-// an extra allocation and a second identity. They are instead incomplete tags
-// that a pointer to the Jolt type is converted through.
-//
-// That conversion is sound rather than merely conventional: converting an
-// object pointer to a pointer to an unrelated type and back again yields the
-// original value, and these tags are NEVER completed and NEVER dereferenced —
-// every dereference happens after converting back to the Jolt type. This is
-// the same guarantee any opaque `typedef struct Foo Foo;` C API relies on.
-//
-// The handles zjolt allocates itself (physics system, job system, character,
-// group filter) are real structs, defined at the bottom of this header.
+// Shape and Body are Jolt-owned, wrapped as incomplete tags a pointer
+// converts through instead of a dedicated struct. zjolt's own handles are structs.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -82,15 +77,19 @@ inline JPH::Body *ToJolt(ZJoltBody *body) {
 inline ZJoltBody *ToC(JPH::Body *body) {
   return reinterpret_cast<ZJoltBody *>(body);
 }
+/// The const-body overload zjoltPhysicsSystemTryGetBodyNoLock needs:
+/// BodyLockInterfaceNoLock::TryGetBody hands back a `const Body *`, since the
+/// whole point of the no-lock path is that nothing here may assume exclusive
+/// access to mutate it.
+inline const ZJoltBody *ToC(const JPH::Body *body) {
+  return reinterpret_cast<const ZJoltBody *>(body);
+}
 
 //===----------------------------------------------------------------------===//
 // Allocation
 //
-// Everything zjolt allocates goes through Jolt's allocator, so a host that
-// installed one sees zjolt's own bookkeeping in its budget too, not just
-// Jolt's. Types with SIMD members need more than the default alignment, which
-// Jolt's plain Allocate does not promise, so the aligned path is chosen at
-// compile time per type.
+// Everything zjolt allocates goes through Jolt's allocator. Types needing
+// more than default alignment take the aligned path, chosen at compile time.
 //===----------------------------------------------------------------------===//
 
 template <typename T>
@@ -127,20 +126,12 @@ void Delete(T *object) {
   FreeFor<T>(object);
 }
 
-/// Hands a freshly constructed reference-counted object to the caller.
+/// Hands a freshly constructed reference-counted object to the caller. A
+/// fresh `JPH::RefTarget` starts at refcount ZERO, not one: under-count
+/// and the next Release wraps to 0xFFFFFFFF; over-count and it never dies.
 ///
-/// This exists because the arithmetic is not what anyone expects. A fresh
-/// `JPH::RefTarget` starts at refcount **zero** (`Core/Reference.h:20,86`), not
-/// one, so the object a constructor just built is owned by nobody and the
-/// caller's reference is the first. Under-count and the next `Release` wraps
-/// the counter to `0xFFFFFFFF` and the object outlives its own frees;
-/// over-count and it never dies at all.
-///
-/// It is also not the same arithmetic as `Finish` in `zjolt_shape.cpp`, which
-/// also calls `AddRef` exactly once — there the count is already 1 and the
-/// call compensates for a `JPH::Ref` dropping at scope exit. Same call, two
-/// different reasons, and mixing them up is silent. Use this and the question
-/// does not come up.
+/// Not the same arithmetic as `Finish` in zjolt_shape.cpp, which also
+/// calls AddRef once but to compensate for a JPH::Ref dropping at scope exit.
 template <typename T>
 [[nodiscard]] inline T *Own(T *fresh) {
   static_assert(std::is_base_of_v<JPH::RefTargetVirtual, T> ||
@@ -151,16 +142,12 @@ template <typename T>
   return fresh;
 }
 
-/// `Release` on a Jolt object routes `delete` through `JPH::Free` via
-/// `JPH_OVERRIDE_NEW_DELETE`, and which overload runs depends on
-/// `alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__`. `AllocateFor<T>` above
-/// branches on `alignof(T) > JPH_DEFAULT_ALLOCATE_ALIGNMENT` instead.
+/// `Release` on a Jolt object routes `delete` through `JPH::Free`, picking
+/// the overload by `alignof(T) > __STDCPP_DEFAULT_NEW_ALIGNMENT__`.
+/// `AllocateFor<T>` above branches on `JPH_DEFAULT_ALLOCATE_ALIGNMENT` instead.
 ///
-/// They are the same number today, and Jolt explicitly invites overriding its
-/// half. If the two ever disagree, a block from the aligned path reaches the
-/// unaligned free — which reads a header that is not there, on a heap that is
-/// still live. Nothing about that failure points back here, so it is pinned
-/// where the reason is written rather than left to be rediscovered.
+/// Same number today. If they ever disagree, an aligned block reaches the
+/// unaligned free and reads a header that is not there, on a live heap.
 static_assert(JPH_DEFAULT_ALLOCATE_ALIGNMENT == __STDCPP_DEFAULT_NEW_ALIGNMENT__,
               "Jolt's default allocation alignment no longer matches the one "
               "operator new/delete uses, so AllocateFor<T> and Jolt's own "
@@ -183,13 +170,11 @@ bool IsInitialized();
 
 /// Refuses a penetration tolerance Jolt would assert on rather than honour.
 ///
-/// EPA asserts its tolerance is at least FLT_EPSILON
-/// (EPAPenetrationDepth.h:154), and the collide-shape and shape-cast settings
-/// structs are the only place in this ABI where a caller can set it at all.
-/// Shared rather than per-file because every entry point taking either struct
-/// owes the same refusal, and a second copy is a copy that can drift.
+/// EPA asserts its tolerance is at least FLT_EPSILON; the collide-shape
+/// and shape-cast settings structs are the only place a caller sets it.
+/// Shared here so every entry point taking either struct owes the same check.
 inline ZJoltResult CheckPenetrationTolerance(float tolerance) {
-  // Written as an accept rather than a reject so that a NaN is refused too.
+  // Written as an accept rather than a reject, which also rejects a NaN.
   if (tolerance >= FLT_EPSILON) return ZJOLT_RESULT_OK;
   return SetError(
       ZJOLT_RESULT_INVALID_ARGUMENT,
@@ -200,14 +185,8 @@ inline ZJoltResult CheckPenetrationTolerance(float tolerance) {
 //===----------------------------------------------------------------------===//
 // Live-handle accounting
 //
-// zjoltDeinit restores Jolt's own allocator. A handle destroyed after that
-// point is freed through an allocator it was not allocated from, which is heap
-// corruption with no symptom at the site of the mistake. Counting the handles
-// zjolt owns is what lets deinit refuse instead.
-//
-// Shapes are not counted: they are reference counted by Jolt and their count
-// changes inside calls zjolt does not mediate, so a number kept here would be
-// wrong rather than merely absent.
+// zjoltDeinit restores Jolt's allocator; a handle freed after that uses
+// the wrong one. Counting handles zjolt owns (shapes excepted) lets deinit refuse instead.
 //===----------------------------------------------------------------------===//
 
 void HandleCreated();
@@ -216,21 +195,8 @@ void HandleDestroyed();
 //===----------------------------------------------------------------------===//
 // Entry-point guards
 //
-// Every entry point that can fail opens the same way, and the order is not
-// arbitrary:
-//
-//   1. clear this thread's error detail, so a stale message never accompanies
-//      a fresh failure;
-//   2. clear the out-parameters, BEFORE anything can fail, so a caller that
-//      ignores the result never reads uninitialised storage;
-//   3. refuse the call if the library is not up.
-//
-// Which arguments are REQUIRED is the one part that is not uniform, so that
-// check stays at the entry point, written as a list — `Present(a, b, out)`.
-//
-// This is one thing rather than a habit repeated per translation unit because
-// the surface is growing to several hundred entry points, and a preamble that
-// can be half-written is a preamble that eventually will be.
+// Every failable entry point clears the thread's error, then out-parameters,
+// then refuses if the library is not up. Required args: `Present(a, b, out)`.
 //===----------------------------------------------------------------------===//
 
 /// Zeroes one out-parameter, ignoring a NULL. A pointer becomes NULL, a struct
@@ -240,13 +206,12 @@ inline void ClearOut(T *out) {
   if (out != nullptr) *out = T{};
 }
 
-/// An out-parameter paired with the value that means "nothing was written",
-/// for the cases where that value is not zero.
+/// An out-parameter paired with the value that means "nothing was
+/// written", for the cases where that value is not zero.
 ///
-/// There is exactly one such case today and it is a trap worth naming: a body
-/// id's empty value is ZJOLT_BODY_ID_INVALID, and 0 is a perfectly good body.
-/// Zeroing one on failure would hand back a reference to whichever body was
-/// created first.
+/// One such case today: a body id's empty value is ZJOLT_BODY_ID_INVALID,
+/// and 0 is a valid body — zeroing on failure would name whichever body
+/// was created first.
 template <typename T>
 struct EmptyOut {
   T *out;
@@ -280,11 +245,28 @@ template <typename... Ptrs>
 }
 
 //===----------------------------------------------------------------------===//
+// An enum parameter's bytes, rather than its value.
+//
+// Reading an enum object holding a value no enumerator names is undefined
+// behaviour (UBSan aborts). Taken by reference and copied as raw bytes to avoid that load.
+//===----------------------------------------------------------------------===//
+
+template <typename E>
+int32_t RawEnum(const E &value) {
+  static_assert(sizeof(E) == sizeof(int32_t),
+                "an enum crossing this ABI must be int-sized: no enumerator is "
+                "negative, so every compiler this ABI targets gives it int as "
+                "its underlying type, and the byte copy below depends on it.");
+  int32_t raw;
+  std::memcpy(&raw, &value, sizeof raw);
+  return raw;
+}
+
+//===----------------------------------------------------------------------===//
 // Scalar and vector conversion
 //
-// Jolt's Vec3 is a 16-byte SIMD register with a padding lane; the ABI's is
-// three floats. Every crossing goes through these, in one place, so no
-// translation unit invents its own.
+// Jolt's Vec3 is a 16-byte SIMD register with a padding lane; the ABI's
+// is three floats. Every crossing goes through these, in one place.
 //===----------------------------------------------------------------------===//
 
 inline JPH::Vec3 ToJolt(const ZJoltVec3 &v) { return JPH::Vec3(v.x, v.y, v.z); }
@@ -316,18 +298,12 @@ inline ZJoltQuat ToC(JPH::QuatArg q) {
   return ZJoltQuat{q.GetX(), q.GetY(), q.GetZ(), q.GetW()};
 }
 
-/// A caller's rotation, made into one Jolt will accept.
+/// A caller's rotation, made into one Jolt will accept. `Mat44::sRotation`
+/// asserts its quaternion is unit length; a merely drifted rotation is
+/// renormalised here instead of aborting.
 ///
-/// `Mat44::sRotation` asserts that its quaternion is unit length, and a body's
-/// rotation reaches it on every step and every query placement. So a rotation
-/// that has merely drifted — the usual result of integrating one over a few
-/// thousand frames — would abort the process in a build with asserts on. An
-/// ABI should not do that to a caller over their arithmetic, so it is
-/// renormalised here instead.
-///
-/// A rotation that cannot be normalised at all — all zeroes, or carrying a NaN
-/// — becomes the identity. There is no other answer, and a visible failure to
-/// rotate is easier to find than a silent rotation by NaN.
+/// One that cannot be normalised at all (zero, or carrying a NaN) becomes
+/// the identity — a visible failure to rotate, not a silent NaN rotation.
 inline JPH::Quat ToJoltRotation(const ZJoltQuat &q) {
   const JPH::Quat rotation = ToJolt(q);
   if (rotation.IsNormalized()) return rotation;
@@ -390,15 +366,12 @@ inline ZJoltMat44 ToC(JPH::Mat44Arg m) {
   return out;
 }
 
-/// Named apart from ToC(Mat44Arg) for the same reason ToCR(RVec3Arg) is named
-/// apart from ToC(Vec3Arg): in a float build JPH::RMat44 and JPH::Mat44 are
-/// the SAME type, so the two would collide on return type alone.
+/// Named apart from ToC(Mat44Arg): in a float build JPH::RMat44 and
+/// JPH::Mat44 are the SAME type, colliding on return type alone.
 ///
-/// The translation column is read through GetTranslation rather than
-/// GetColumn4(3), because JPH::DMat44 keeps it as a DVec3 and asserts on
-/// GetColumn4(3) (DMat44.h:115). Its fourth element is therefore written as 1
-/// rather than read back — which is what a rigid transform carries, and every
-/// RMat44 that crosses this boundary is one.
+/// The translation column reads through GetTranslation, not GetColumn4(3)
+/// (JPH::DMat44 asserts on that); its fourth element is written as 1
+/// (every RMat44 crossing this boundary is a rigid transform).
 inline ZJoltRMat44 ToCR(JPH::RMat44Arg m) {
   ZJoltRMat44 out{};
   for (JPH::uint col = 0; col < 3; ++col) {
@@ -433,14 +406,12 @@ inline JPH::Mat44 ToJolt(const ZJoltMat44 &m) {
   return JPH::Mat44::sLoadFloat4x4(reinterpret_cast<const JPH::Float4 *>(m.m));
 }
 
-/// The other direction of ToCR(RMat44Arg). Built column by column rather than
-/// through sLoadFloat4x4: that loader reads plain `float`s, and ZJoltRMat44's
-/// elements are `ZJoltReal` — `double` under -Ddouble_precision, when they do
-/// not fit a Float4 at all. The upper 3x3 is exact float precision either
-/// way (see zjolt_core.h's note on ZJoltRMat44), so only the cast is doing
-/// anything in a float build; the translation column goes through
-/// ToJoltR(ZJoltRVec3) rather than a bare cast so it keeps this file's usual
-/// one conversion per scalar type.
+/// The other direction of ToCR(RMat44Arg). Built column by column rather
+/// than through sLoadFloat4x4, which reads plain `float`s while
+/// ZJoltRMat44's elements are `ZJoltReal` (`double` under -Ddouble_precision).
+///
+/// The translation column goes through ToJoltR(ZJoltRVec3) rather than a
+/// bare cast, keeping one conversion per scalar type.
 inline JPH::RMat44 ToJoltR(const ZJoltRMat44 &m) {
   const JPH::Vec4 col0(static_cast<float>(m.m[0]), static_cast<float>(m.m[1]),
                        static_cast<float>(m.m[2]), static_cast<float>(m.m[3]));
@@ -456,10 +427,8 @@ inline JPH::RMat44 ToJoltR(const ZJoltRMat44 &m) {
 //===----------------------------------------------------------------------===//
 // Query filter adapters
 //
-// Jolt takes its query filters as abstract classes. The ABI passes plain
-// function-pointer tables, so these forward. A NULL function pointer means
-// "accept everything", which lets a host fill in only the filter it cares
-// about — and lets zjoltCastRay* take a NULL ZJoltQueryFilters entirely.
+// Jolt takes its query filters as abstract classes; the ABI passes plain
+// function-pointer tables, forwarded here. NULL means "accept everything".
 //===----------------------------------------------------------------------===//
 
 class BroadPhaseLayerFilterAdapter final : public JPH::BroadPhaseLayerFilter {
@@ -501,21 +470,22 @@ class BodyFilterAdapter final : public JPH::BodyFilter {
     return filter_.should_collide(filter_.user, ToC(inBodyID));
   }
 
+  bool ShouldCollideLocked(const JPH::Body &inBody) const override {
+    if (filter_.should_collide_locked == nullptr) return true;
+    return filter_.should_collide_locked(
+        filter_.user, reinterpret_cast<const ZJoltBody *>(&inBody));
+  }
+
  private:
   ZJoltBodyFilter filter_;
 };
 
-/// The narrowest of the four, and the only one Jolt asks twice.
+/// The narrowest of the four, and the only one Jolt asks twice: one
+/// overload for queries with no shape of their own (a ray, a point), the
+/// other for shape-versus-shape — both answered by the same C callback,
+/// the empty sub-shape id standing in for the missing source shape.
 ///
-/// One overload is for queries with no shape of their own (a ray, a point) and
-/// the other for shape-versus-shape. Both are answered by the same C callback,
-/// with the empty sub-shape id standing in for the source shape the first
-/// overload does not have — one question is easier to answer correctly than
-/// two, and no caller has yet wanted to distinguish them.
-///
-/// `mBodyID2` is Jolt's, not ours: the base class carries it and the narrow
-/// phase sets it before every call, which is the only reason this filter can
-/// say WHICH body it is being asked about.
+/// `mBodyID2` is Jolt's: the base class carries it, set before every call.
 class ShapeFilterAdapter final : public JPH::ShapeFilter {
  public:
   explicit ShapeFilterAdapter(const ZJoltShapeFilter &f) : filter_(f) {}
@@ -578,10 +548,8 @@ struct BroadPhaseFilters {
 //===----------------------------------------------------------------------===//
 // Byte-buffer streams, for shape serialisation
 //
-// Jolt ships StreamInWrapper/StreamOutWrapper over std::istream/std::ostream,
-// which would drag <iostream> in and force a copy through a stringstream. A
-// shape is saved to and restored from a flat buffer here, so these are the
-// two implementations that need to exist.
+// Jolt's own StreamInWrapper/StreamOutWrapper wrap std::istream/ostream,
+// dragging in <iostream>. A shape saves to and restores from a flat buffer here instead.
 //===----------------------------------------------------------------------===//
 
 /// Counts bytes when `buffer` is null, writes them when it is not. That is
@@ -614,14 +582,12 @@ class CountingStreamOut final : public JPH::StreamOut {
   bool overflowed_ = false;
 };
 
-/// Reads from a borrowed buffer, reporting end-of-file rather than handing
-/// back uninitialised bytes.
+/// Reads from a borrowed buffer, reporting end-of-file rather than
+/// handing back uninitialised bytes.
 ///
-/// Jolt does check its own reads — Shape::sRestoreFromBinaryState tests
-/// IsEOF() and IsFailed() after every stage — so this stream's job is only to
-/// report truncation faithfully. Zero-filling past the end keeps any count
-/// Jolt has already read from being interpreted as garbage in the window
-/// before the check.
+/// Jolt checks IsEOF()/IsFailed() after every read stage, so this only
+/// needs to report truncation faithfully; zero-filling past the end keeps
+/// an already-read count from looking like garbage before that check.
 class ConstStreamIn final : public JPH::StreamIn {
  public:
   ConstStreamIn(const void *data, size_t size)
@@ -656,24 +622,8 @@ class ConstStreamIn final : public JPH::StreamIn {
 //===----------------------------------------------------------------------===//
 // The save/load container
 //
-// Every save/load pair in this library wraps Jolt's payload in the same
-// framing — a magic tag, a container version, this library's config id, the
-// Jolt version, the payload length and a CRC-32, all validated before Jolt
-// reads a byte. Shapes, scenes, whole-system state and per-body state each
-// used to carry their own copy of it, which meant four places to fix a
-// framing bug and nothing that made them agree. They share this one instead.
-//
-// What still differs per site is deliberate and is what `ContainerFormat`
-// carries: the magic tag is a DIFFERENT four bytes for each pair, so a shape
-// blob handed to a scene restore is refused on the tag rather than parsed
-// into something plausible and wrong; and a site may append fixed-size fields
-// of its own after the common ones (the state pair records which parts were
-// saved and which bodies they came from, the per-body pair the body's motion
-// type).
-//
-// What this does NOT claim: it is not a defence against a deliberately
-// crafted payload carrying a matching checksum. Treat a saved blob as
-// something your own cook wrote, not as untrusted input.
+// Shared framing (magic tag per pair, version, config id, Jolt version,
+// length, CRC-32), validated before Jolt reads a byte. Not adversarial-safe.
 //===----------------------------------------------------------------------===//
 
 /// Little-endian on every host, because the bytes are a file format rather
@@ -785,13 +735,12 @@ struct ContainerContents {
   const uint8_t *extra;
 };
 
-/// Validates the framing and reports what is inside, without letting Jolt see
-/// a byte of a blob that failed. Anything wrong is ZJOLT_RESULT_BAD_FORMAT
-/// with the detail already recorded for zjoltLastError.
+/// Validates the framing and reports what is inside, without letting Jolt
+/// see a byte of a blob that failed. Anything wrong is
+/// ZJOLT_RESULT_BAD_FORMAT with the detail recorded for zjoltLastError.
 ///
-/// A pair's own fields are handed back rather than judged here: only the pair
-/// knows what its motion type or state mask has to agree with, and it checks
-/// them after this returns — still before Jolt reads anything.
+/// A pair's own fields are handed back rather than judged here: only the
+/// pair knows what to check them against, and does so after this returns.
 inline ZJoltResult ReadContainer(const ContainerFormat &format,
                                  const void *data, size_t size,
                                  ContainerContents *out) {
@@ -834,10 +783,263 @@ inline ZJoltResult ReadContainer(const ContainerFormat &format,
   return ZJOLT_RESULT_OK;
 }
 
+//===----------------------------------------------------------------------===//
+// The host-stream seam
+//
+// One adapter forwards Jolt's StreamIn/StreamOut/StateRecorder virtuals to a
+// ZJoltStream, shared by *Stream entry points and the buffer form of SaveState/RestoreState.
+//===----------------------------------------------------------------------===//
+
+/// StreamIn, StreamOut and StateRecorder each declare IsFailed with the same
+/// signature and are otherwise unrelated, so one override here answers all
+/// three regardless of which base a particular call needs — exactly how
+/// zjolt_state.cpp's own recorder classes did before this replaced them.
+class HostStream final : public JPH::StateRecorder {
+ public:
+  explicit HostStream(const ZJoltStream &stream) : stream_(stream) {}
+
+  void WriteBytes(const void *inData, size_t inNumBytes) override {
+    if (stream_.write != nullptr) {
+      stream_.write(stream_.user, inData, inNumBytes);
+    } else {
+      misused_ = true;
+    }
+  }
+
+  void ReadBytes(void *outData, size_t inNumBytes) override {
+    if (stream_.read != nullptr) {
+      stream_.read(stream_.user, outData, inNumBytes);
+    } else {
+      std::memset(outData, 0, inNumBytes);
+      misused_ = true;
+    }
+  }
+
+  bool IsEOF() const override {
+    return stream_.is_eof != nullptr && stream_.is_eof(stream_.user);
+  }
+
+  bool IsFailed() const override {
+    return misused_ ||
+           (stream_.is_failed != nullptr && stream_.is_failed(stream_.user));
+  }
+
+ private:
+  ZJoltStream stream_;
+  bool misused_ = false;
+};
+
+/// Whether `stream` is complete enough to write through: `write` is what
+/// carries every byte, and `is_failed` is the only way a short write is ever
+/// reported back, so neither has a sensible "accept everything" default the
+/// way an optional filter callback does. Checked at every *Stream save entry
+/// point instead of leaving a missing one to read as "never fails."
+inline bool StreamCanWrite(const ZJoltStream *stream) {
+  return stream->write != nullptr && stream->is_failed != nullptr;
+}
+
+/// Whether `stream` is complete enough to read through: `read` carries every
+/// byte, `is_eof` is the only way running out of input is ever reported, and
+/// `is_failed` the only way a read error is. Checked at every *Stream restore
+/// entry point for the same reason as StreamCanWrite.
+inline bool StreamCanRead(const ZJoltStream *stream) {
+  return stream->read != nullptr && stream->is_eof != nullptr &&
+         stream->is_failed != nullptr;
+}
+
+/// The bookkeeping a caller's plain buffer needs to stand in as a
+/// ZJoltStream: a write cursor with overflow detection, a read cursor with
+/// end-of-file detection, and the byte count a two-call size query reports.
+/// Free functions rather than methods, because that is the shape
+/// `ZJoltStream::read`/`write`/`is_eof`/`is_failed` themselves declare.
+struct MemoryCursor {
+  uint8_t *out = nullptr;
+  size_t capacity = 0;
+  size_t written = 0;
+  bool overflowed = false;
+
+  const uint8_t *in = nullptr;
+  size_t size = 0;
+  size_t consumed = 0;
+  bool eof = false;
+};
+
+inline void MemoryCursorWrite(void *user, const void *data, size_t n) {
+  MemoryCursor *cursor = static_cast<MemoryCursor *>(user);
+  if (cursor->out != nullptr) {
+    if (cursor->written + n > cursor->capacity) {
+      cursor->overflowed = true;
+    } else {
+      std::memcpy(cursor->out + cursor->written, data, n);
+    }
+  }
+  cursor->written += n;
+}
+
+inline void MemoryCursorRead(void *user, void *data, size_t n) {
+  MemoryCursor *cursor = static_cast<MemoryCursor *>(user);
+  const size_t available =
+      cursor->consumed < cursor->size ? cursor->size - cursor->consumed : 0;
+  const size_t taken = n < available ? n : available;
+  if (taken != 0) {
+    std::memcpy(data, cursor->in + cursor->consumed, taken);
+  }
+  if (taken < n) {
+    std::memset(static_cast<uint8_t *>(data) + taken, 0, n - taken);
+    cursor->eof = true;
+  }
+  cursor->consumed += n;
+}
+
+inline bool MemoryCursorIsEof(void *user) {
+  return static_cast<const MemoryCursor *>(user)->eof;
+}
+
+inline bool MemoryCursorIsFailed(void *user) {
+  return static_cast<const MemoryCursor *>(user)->overflowed;
+}
+
+/// True once a read cursor has consumed exactly the bytes it was given — a
+/// restore that stopped short read something other than what was written.
+inline bool MemoryCursorConsumedAll(const MemoryCursor &cursor) {
+  return !cursor.eof && cursor.consumed == cursor.size;
+}
+
+/// A ZJoltStream view over `cursor`, for a buffer-based entry point to hand
+/// `HostStream` in place of a real host stream.
+inline ZJoltStream StreamOverMemory(MemoryCursor *cursor) {
+  return ZJoltStream{MemoryCursorRead, MemoryCursorWrite, MemoryCursorIsEof,
+                     MemoryCursorIsFailed, cursor};
+}
+
+/// The small fixed prefix a *Stream save writes ahead of Jolt's own
+/// payload: magic tag (4), ZJOLT_CONFIG_ID (4), Jolt version stamp (4) —
+/// guards against a mismatched build misreading the payload, not against
+/// a crafted one. No length or CRC-32: a single-pass stream cannot
+/// compute either without buffering the whole payload first.
+constexpr size_t kStreamHeaderSize = 12;
+
+inline void WriteStreamHeader(JPH::StreamOut &out, const uint8_t magic[4]) {
+  uint8_t bytes[kStreamHeaderSize];
+  std::memcpy(bytes, magic, 4);
+  WriteLE32(bytes + 4, static_cast<uint32_t>(ZJOLT_CONFIG_ID));
+  WriteLE32(bytes + 8, JoltVersionStamp());
+  out.WriteBytes(bytes, sizeof(bytes));
+}
+
+/// Reads and checks WriteStreamHeader's twelve bytes. `wrong_magic` is the
+/// message for a stream that is not this pair's kind at all.
+inline ZJoltResult ReadStreamHeader(JPH::StreamIn &in, const uint8_t magic[4],
+                                    const char *wrong_magic) {
+  uint8_t bytes[kStreamHeaderSize];
+  in.ReadBytes(bytes, sizeof(bytes));
+  if (in.IsFailed()) {
+    return SetError(ZJOLT_RESULT_IO_ERROR,
+                    "the stream failed while reading its header");
+  }
+  if (in.IsEOF()) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT,
+                    "the stream ended before its header did");
+  }
+  if (std::memcmp(bytes, magic, 4) != 0) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT, wrong_magic);
+  }
+  if (ReadLE32(bytes + 4) != static_cast<uint32_t>(ZJOLT_CONFIG_ID)) {
+    return SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "saved by a zjolt built with different layout-affecting settings");
+  }
+  if (ReadLE32(bytes + 8) != JoltVersionStamp()) {
+    return SetError(ZJOLT_RESULT_BAD_FORMAT,
+                    "saved against a different Jolt version");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+#ifdef JPH_OBJECT_STREAM
+
+//===----------------------------------------------------------------------===//
+// Bridging a ZJoltStream to std::istream/std::ostream
+//
+// ObjectStreamIn/Out template over istream&/ostream&, predating Jolt's own
+// StreamIn/StreamOut. Single-byte reads only: a buffered underflow could not tell truncation from a late arrival.
+//===----------------------------------------------------------------------===//
+
+class ZJoltStreamBuf : public std::streambuf {
+ public:
+  explicit ZJoltStreamBuf(const ZJoltStream &stream) : stream_(stream) {}
+
+  bool Failed() const { return failed_; }
+
+ protected:
+  int_type underflow() override {
+    if (stream_.read == nullptr) {
+      failed_ = true;
+      return traits_type::eof();
+    }
+    stream_.read(stream_.user, &get_byte_, 1);
+    const bool failed =
+        stream_.is_failed != nullptr && stream_.is_failed(stream_.user);
+    const bool eof = stream_.is_eof != nullptr && stream_.is_eof(stream_.user);
+    if (failed) failed_ = true;
+    if (failed || eof) return traits_type::eof();
+    setg(&get_byte_, &get_byte_, &get_byte_ + 1);
+    return traits_type::to_int_type(get_byte_);
+  }
+
+  std::streamsize xsputn(const char *s, std::streamsize n) override {
+    if (stream_.write == nullptr) {
+      failed_ = true;
+      return 0;
+    }
+    stream_.write(stream_.user, s, static_cast<size_t>(n));
+    if (stream_.is_failed != nullptr && stream_.is_failed(stream_.user)) {
+      failed_ = true;
+      return 0;
+    }
+    return n;
+  }
+
+  int_type overflow(int_type ch) override {
+    if (traits_type::eq_int_type(ch, traits_type::eof()))
+      return traits_type::not_eof(ch);
+    const char c = traits_type::to_char_type(ch);
+    return xsputn(&c, 1) == 1 ? ch : traits_type::eof();
+  }
+
+ private:
+  ZJoltStream stream_;
+  char get_byte_ = 0;
+  bool failed_ = false;
+};
+
+/// istream over a ZJoltStream. Private inheritance of the buffer, ahead of
+/// the public stream base, is what makes the buffer exist before the stream
+/// constructor runs and needs it — the usual idiom for pairing a standard
+/// stream with a custom streambuf, the same one std::stringstream itself
+/// uses internally.
+class ObjectStreamIStream final : private ZJoltStreamBuf, public std::istream {
+ public:
+  explicit ObjectStreamIStream(const ZJoltStream &stream)
+      : ZJoltStreamBuf(stream), std::istream(this) {}
+
+  bool StreamFailed() const { return Failed(); }
+};
+
+class ObjectStreamOStream final : private ZJoltStreamBuf, public std::ostream {
+ public:
+  explicit ObjectStreamOStream(const ZJoltStream &stream)
+      : ZJoltStreamBuf(stream), std::ostream(this) {}
+
+  bool StreamFailed() const { return Failed(); }
+};
+
+#endif  // JPH_OBJECT_STREAM
+
 }  // namespace zjolt
 
 /// Opens a result-returning entry point. Returns FROM THE CALLER when the
-/// library is not up — which is the reason it is a macro and not just a call.
+/// library is not up, so it must be a macro rather than a plain call.
 ///
 /// Its arguments are the entry point's out-parameters, cleared before the
 /// check that can fail. Wrap one in zjolt::OutIsEmptyAs when its empty value
@@ -852,30 +1054,11 @@ inline ZJoltResult ReadContainer(const ContainerFormat &format,
 // Handle types zjolt owns (global namespace — they must match the C tag names)
 //===----------------------------------------------------------------------===//
 
-/// A collision group filter.
-///
-/// A thin subclass of JPH::GroupFilter that HOLDS a GroupFilterTable rather
-/// than being one, for a reason worth writing down: JPH::GroupFilterTable is
-/// `final`, and it keeps its sub-group count private with no accessor. Every
-/// one of its mutators indexes a bit table through GetBit, which asserts
-/// `sub_group1 != sub_group2` and `sub_group2 < mNumSubGroups`
-/// (GroupFilterTable.h:46,52) and, in a build without asserts, indexes out of
-/// bounds instead. Turning those into returned errors means knowing the count,
-/// and the only way to know it is to keep it.
-///
-/// Forwarding CanCollide to the contained table is exact rather than
-/// approximate. The table's rules compare the two bodies' filter POINTERS, and
-/// both bodies point at this wrapper, so the comparison means what it meant.
-///
-/// Declared here rather than in zjolt_group.cpp because a body desc carries a
-/// ZJoltCollisionGroup, so the translation units that build a body out of one
-/// need the complete type to hand Jolt.
-///
-/// Reference counted by Jolt: GroupFilter derives from RefTarget<GroupFilter>,
-/// so AddRef and Release are its own, and Release is what destroys it —
-/// through the operator delete GroupFilter inherits from
-/// JPH_DECLARE_RTTI_HELPER, which routes to Jolt's allocator and therefore to
-/// the host's.
+/// A collision group filter. HOLDS a GroupFilterTable rather than being
+/// one: JPH::GroupFilterTable is `final` and keeps its sub-group count
+/// private, so returning errors instead of Jolt's out-of-bounds indexing
+/// requires tracking that count here. CanCollide forwards exactly: the
+/// table compares filter POINTERS, and both bodies point at this wrapper.
 struct ZJoltGroupFilter final : public JPH::GroupFilter {
   explicit ZJoltGroupFilter(JPH::uint sub_groups)
       : table(sub_groups), num_sub_groups(sub_groups) {}
@@ -908,14 +1091,27 @@ inline JPH::CollisionGroup ToJolt(const ZJoltCollisionGroup *group) {
 
 }  // namespace zjolt
 
+/// Which concrete JPH::JobSystem a ZJoltJobSystem wraps.
+///
+/// Only exists so that zjoltJobSystemSetNumThreads can refuse a job system
+/// that has no thread count of its own to resize, rather than reinterpreting
+/// a JobSystemSingleThreaded or a host adapter as a JobSystemThreadPool and
+/// corrupting whatever actually sits at that address.
+enum class ZJoltJobSystemKind : uint8_t {
+  ThreadPool,
+  SingleThreaded,
+  Host,
+};
+
 /// Wraps whichever JPH::JobSystem implementation the host asked for.
 ///
-/// The indirection is the seam: a host scheduler becomes a third subclass
-/// reached through a new constructor function, and neither this struct nor any
-/// call that takes a ZJoltJobSystem* changes shape.
+/// The indirection is the seam: a host scheduler is the third subclass,
+/// reached through zjoltJobSystemCreateHost, and neither this struct nor any
+/// call that takes a ZJoltJobSystem* changed shape to add it.
 struct ZJoltJobSystem {
   JPH::JobSystem *impl;
   void (*destroy)(JPH::JobSystem *impl);
+  ZJoltJobSystemKind kind;
 };
 
 /// Forwards Jolt's three broad-phase questions to the host's C callbacks.
@@ -944,6 +1140,9 @@ class ZJoltBroadPhaseLayerInterfaceAdapter final
   }
 #endif
 
+  /// What zjoltPhysicsSystemGetBroadPhaseLayerInterface hands back.
+  const ZJoltBroadPhaseLayerInterface &Raw() const { return iface_; }
+
  private:
   ZJoltBroadPhaseLayerInterface iface_;
 };
@@ -963,6 +1162,9 @@ class ZJoltObjectVsBroadPhaseLayerFilterAdapter final
         static_cast<ZJoltBroadPhaseLayer>(inLayer2.GetValue()));
   }
 
+  /// What zjoltPhysicsSystemGetObjectVsBroadPhaseLayerFilter hands back.
+  const ZJoltObjectVsBroadPhaseLayerFilter &Raw() const { return filter_; }
+
  private:
   ZJoltObjectVsBroadPhaseLayerFilter filter_;
 };
@@ -981,6 +1183,9 @@ class ZJoltObjectLayerPairFilterAdapter final
                                   static_cast<ZJoltObjectLayer>(inLayer1),
                                   static_cast<ZJoltObjectLayer>(inLayer2));
   }
+
+  /// What zjoltPhysicsSystemGetObjectLayerPairFilter hands back.
+  const ZJoltObjectLayerPairFilter &Raw() const { return filter_; }
 
  private:
   ZJoltObjectLayerPairFilter filter_;
@@ -1007,6 +1212,9 @@ class ZJoltContactListenerAdapter final : public JPH::ContactListener {
 
   void OnContactRemoved(const JPH::SubShapeIDPair &inSubShapePair) override;
 
+  /// What zjoltPhysicsSystemGetContactListener hands back.
+  const ZJoltContactListener &Raw() const { return listener_; }
+
  private:
   ZJoltContactListener listener_;
 };
@@ -1032,17 +1240,18 @@ class ZJoltBodyActivationListenerAdapter final
                                     inBodyUserData);
   }
 
+  /// What zjoltPhysicsSystemGetBodyActivationListener hands back.
+  const ZJoltBodyActivationListener &Raw() const { return listener_; }
+
  private:
   ZJoltBodyActivationListener listener_;
 };
 
 /// Projects Jolt's soft-body contact callbacks into plain data.
 ///
-/// Separate from ZJoltContactListenerAdapter rather than folded into it
-/// because Jolt keeps the two listeners in separate slots on the system and
-/// never calls one for the other's collisions — a soft body's contacts reach
-/// SoftBodyContactListener and nothing else. Methods are in
-/// zjolt_softbody.cpp, alongside the manifold projection they share.
+/// Separate from ZJoltContactListenerAdapter: Jolt keeps the two listeners
+/// in separate slots and never calls one for the other's collisions.
+/// Methods are in zjolt_softbody.cpp, with the manifold projection they share.
 class ZJoltSoftBodyContactListenerAdapter final
     : public JPH::SoftBodyContactListener {
  public:
@@ -1057,8 +1266,51 @@ class ZJoltSoftBodyContactListenerAdapter final
   void OnSoftBodyContactAdded(const JPH::Body &inSoftBody,
                               const JPH::SoftBodyManifold &inManifold) override;
 
+  /// What zjoltPhysicsSystemGetSoftBodyContactListener hands back.
+  const ZJoltSoftBodyContactListener &Raw() const { return listener_; }
+
  private:
   ZJoltSoftBodyContactListener listener_;
+};
+
+/// Forwards Jolt's per-shape-pair simulation filter to the host's callback.
+///
+/// Declared here rather than built inline in zjolt_system.cpp for the same
+/// reason as ZJoltContactListenerAdapter: PhysicsSystem::SetSimShapeFilter
+/// stores a raw pointer, not a copy, and it must outlive every call
+/// PhysicsSystem::Update makes into it during the step.
+class ZJoltSimShapeFilterAdapter final : public JPH::SimShapeFilter {
+ public:
+  explicit ZJoltSimShapeFilterAdapter(const ZJoltSimShapeFilter &filter)
+      : filter_(filter) {}
+
+  bool ShouldCollide(const JPH::Body &inBody1, const JPH::Shape *inShape1,
+                     const JPH::SubShapeID &inSubShapeIDOfShape1,
+                     const JPH::Body &inBody2, const JPH::Shape *inShape2,
+                     const JPH::SubShapeID &inSubShapeIDOfShape2) const override {
+    if (filter_.should_collide == nullptr) return true;
+    return filter_.should_collide(
+        filter_.user, zjolt::ToC(inBody1.GetID()), zjolt::ToC(inShape1),
+        zjolt::ToC(inSubShapeIDOfShape1), zjolt::ToC(inBody2.GetID()),
+        zjolt::ToC(inShape2), zjolt::ToC(inSubShapeIDOfShape2));
+  }
+
+  /// What zjoltPhysicsSystemGetSimShapeFilter hands back.
+  const ZJoltSimShapeFilter &Raw() const { return filter_; }
+
+ private:
+  ZJoltSimShapeFilter filter_;
+};
+
+/// A body detached from its id by zjoltBodyUnassignId(s) -- see the note
+/// in zjolt_body.h. Defined here since zjolt_batch.cpp constructs one too.
+///
+/// `body` is a fully independent Jolt object here: freeing it does not
+/// touch `owner`'s body table. `owner` is kept only to check a handle is
+/// handed back to the system it came from.
+struct ZJoltUnassignedBody {
+  JPH::Body *body = nullptr;
+  ZJoltPhysicsSystem *owner = nullptr;
 };
 
 /// One world.
@@ -1069,7 +1321,15 @@ class ZJoltSoftBodyContactListenerAdapter final
 /// keep them alive" promise true.
 struct ZJoltPhysicsSystem {
   JPH::PhysicsSystem system;
-  JPH::TempAllocatorImplWithMallocFallback *temp_allocator = nullptr;
+
+  /// The step's scratch allocator. Always the base class: which concrete type
+  /// actually sits here depends on ZJoltPhysicsSystemDesc::temp_allocator_kind,
+  /// so destroying it correctly, or reading its stats back, goes through
+  /// `destroy_temp_allocator` / `temp_allocator_kind` rather than a fixed
+  /// static_cast. Defined in zjolt_system.cpp.
+  JPH::TempAllocator *temp_allocator = nullptr;
+  void (*destroy_temp_allocator)(JPH::TempAllocator *) = nullptr;
+  ZJoltTempAllocatorKind temp_allocator_kind = ZJOLT_TEMP_ALLOCATOR_KIND_MALLOC_FALLBACK;
 
   ZJoltBroadPhaseLayerInterfaceAdapter broad_phase_layers;
   ZJoltObjectVsBroadPhaseLayerFilterAdapter object_vs_broad_phase_filter;
@@ -1079,6 +1339,11 @@ struct ZJoltPhysicsSystem {
   ZJoltContactListenerAdapter *contact_listener = nullptr;
   ZJoltBodyActivationListenerAdapter *activation_listener = nullptr;
   ZJoltSoftBodyContactListenerAdapter *soft_body_contact_listener = nullptr;
+
+  /// Null until zjoltPhysicsSystemSetSimShapeFilter installs one; owned when
+  /// not, for the same reason contact_listener is: PhysicsSystem keeps only a
+  /// raw pointer, so the pointee has to outlive it.
+  ZJoltSimShapeFilterAdapter *sim_shape_filter = nullptr;
 
   /// Step listeners still attached, owned. Jolt keeps its own list and asserts
   /// on a double add or a stranger's remove, so this is the list that answers
@@ -1093,11 +1358,9 @@ struct ZJoltPhysicsSystem {
 
   /// Whether Update has ever run on this system.
   ///
-  /// `WereBodiesInContact` reads the contact cache's back buffer, and
-  /// `ManifoldCache::Find` asserts that buffer has been finalised
-  /// (`ContactConstraintManager.cpp:380`) — which it is not until the first
-  /// step ends. Asking before then is an ordinary thing for a host to do, and
-  /// the honest answer is "no", not an abort.
+  /// `WereBodiesInContact` reads the contact cache's back buffer, which
+  /// `ManifoldCache::Find` asserts is finalised — not true until the first
+  /// step ends. Asking before then answers "no", not an abort.
   bool has_stepped = false;
 
   /// Index into the combine-callback slot table in zjolt_system.cpp, or -1
@@ -1108,11 +1371,10 @@ struct ZJoltPhysicsSystem {
 
   /// Jolt's own combine functions, captured at creation.
   ///
-  /// Clearing a combine callback has to put something back, and
+  /// Clearing a combine callback must put something back:
   /// `SetCombineFriction(nullptr)` is not it — the solver calls the pointer
-  /// unconditionally. Spelled out rather than named through
-  /// `ContactConstraintManager::CombineFunction` so this header does not have
-  /// to include the constraint manager for one typedef.
+  /// unconditionally. Spelled out rather than named via
+  /// `ContactConstraintManager::CombineFunction`, avoiding that include.
   using CombineFunction = float (*)(const JPH::Body &, const JPH::SubShapeID &,
                                     const JPH::Body &, const JPH::SubShapeID &);
   CombineFunction default_combine_friction = nullptr;
@@ -1139,14 +1401,10 @@ void AbortPendingBatches(ZJoltPhysicsSystem *system);
 namespace zjolt {
 
 /// The plane below which a contact may count as ground, for a character of
-/// the given shape.
-///
-/// One inner radius above the shape's lowest point: for a capsule or a sphere
-/// that is the centre of its bottom cap, which is the height Jolt's own
-/// samples use (spelled there as the standing radius). Both character kinds
-/// share it, because both answer the same question with it and a host that
-/// swaps one for the other should not find "on the ground" means something
-/// different afterwards.
+/// the given shape: one inner radius above the shape's lowest point (for
+/// a capsule or sphere, the centre of its bottom cap). Shared by both
+/// character kinds, so swapping one for the other keeps "on the ground"
+/// meaning the same thing.
 inline JPH::Plane SupportingVolumeFor(const JPH::Shape *shape,
                                       JPH::Vec3Arg up_hint) {
   const JPH::Vec3 up = up_hint.NormalizedOr(JPH::Vec3::sAxisY());

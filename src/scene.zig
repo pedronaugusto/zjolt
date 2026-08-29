@@ -1,23 +1,15 @@
 //! A whole world, described rather than simulated.
 //!
-//! Everywhere else here a world is built call by call: make a shape, make a
-//! body, make a constraint, add each one. A scene is that same world held as
-//! DATA — bodies, soft bodies, and the joints between them — with nothing
-//! stepping and no `PhysicsSystem` involved. Two things follow, and they are
-//! the whole reason it exists:
+//! Elsewhere a world is built call by call: make a shape, make a body,
+//! make a constraint, add each one. A scene is that same world held as
+//! DATA, with nothing stepping and no `PhysicsSystem` involved. Two
+//! things follow: it SERIALISES (`save` writes one buffer carrying
+//! shapes and placements, loaded without re-running the code that built
+//! it), and it INSTANTIATES repeatedly (`createBodies` stamps the same
+//! scene into as many systems as wanted, sharing shapes by reference).
 //!
-//! * it serialises. `save` writes one buffer carrying the shapes as well as
-//!   the placements, so a level can be cooked once and loaded without
-//!   re-running the code that built it.
-//! * it instantiates repeatedly. `createBodies` stamps the same scene into as
-//!   many systems as you like, and the second one costs no shape
-//!   construction: the bodies share the scene's shapes by reference.
-//!
-//! A scene names its bodies by INDEX, because nothing in it has a `BodyId`
-//! yet — ids come into existence when `createBodies` runs. Constraints
-//! therefore connect index to index, and `world_body_index` is the end that
-//! means "bolted to the world".
-//!
+//! A scene names its bodies by INDEX — ids exist only once
+//! `createBodies` runs; `world_body_index` means "bolted to the world".
 //! Reference counted like a `Shape`: `release` it, not `deinit`.
 
 const std = @import("std");
@@ -28,6 +20,7 @@ const group_mod = @import("group.zig");
 const softbody_mod = @import("softbody.zig");
 const constraint_mod = @import("constraint.zig");
 const system_mod = @import("system.zig");
+const stream_mod = @import("stream.zig");
 
 /// The body index that means "the world" — the same implicit, infinitely
 /// heavy static body at the origin that `zjolt.world_body` names for a
@@ -140,10 +133,8 @@ pub const Scene = struct {
     //=========================================================================
     // Filling one in
     //
-    // The descriptors are the ones `BodyInterface.create` and
-    // `createSoftBody` take, and they are copied. What the scene keeps is a
-    // reference on the shape (or the shared settings), so the caller may
-    // release theirs as soon as the call returns.
+    // Descriptors are the ones `BodyInterface.create`/`createSoftBody`
+    // take, and are copied; the scene keeps only a reference on the shape (or shared settings), so the caller may release theirs right after the call.
     //=========================================================================
 
     /// Appends a rigid body and returns its index — what a constraint added
@@ -165,24 +156,12 @@ pub const Scene = struct {
         return index;
     }
 
-    /// Appends the joint `joint` describes, between the bodies at `body1`
-    /// and `body2` — indices into this scene, or `world_body_index`.
-    ///
-    /// The constraint is read, not kept: what the scene stores is the
-    /// settings Jolt builds from it, so the caller may release `constraint`
-    /// and destroy the bodies it was created against straight afterwards, and
-    /// changing the live constraint later does not change the scene's copy.
-    ///
-    /// A live constraint is how a joint gets into a scene because this
-    /// library has no settings object of its own to hand over. Create the
-    /// joint against real bodies with any `Constraint.init*`, add it here,
-    /// release it; there is no need to have added it to a system first.
-    ///
-    /// `error.Unsupported` for a joint that is not between two bodies (a
-    /// vehicle constraint is the one this library builds that is not).
-    /// `error.InvalidArgument` when the two ends are the same, or when either
-    /// names a body this scene does not have yet — add the bodies first, a
-    /// constraint cannot forward-reference one.
+    /// Appends the joint `joint` describes, between bodies `body1`/
+    /// `body2` — indices into this scene, or `world_body_index`. Read,
+    /// not kept: release `constraint` and its bodies right after; the
+    /// live constraint changing later does not change the scene's copy.
+    /// `error.Unsupported` for a joint not between two bodies (a
+    /// vehicle constraint). `error.InvalidArgument` for equal ends or a body index this scene lacks (add bodies first — no forward references).
     pub fn addConstraint(
         self: Scene,
         joint: constraint_mod.Constraint,
@@ -198,15 +177,11 @@ pub const Scene = struct {
     }
 
     /// Appends everything in `system` — every body, and every two-body
-    /// constraint between them — to what this scene already holds. The other
-    /// direction: a world built call by call, captured so it can be saved.
+    /// constraint between them — to what this scene already holds: the
+    /// other direction, a world built call by call, captured to be
+    /// saved. Jolt marks this a debugging aid; reads without stepping.
     ///
-    /// Jolt marks this as a debugging aid, and it reads the system without
-    /// stepping it, so call it between steps.
-    ///
-    /// `error.BodyNotFound` when a constraint in `system` is attached to a
-    /// body the system no longer holds; the whole system is checked before
-    /// anything is appended, so a refusal leaves this scene as it was.
+    /// `error.BodyNotFound` for a constraint attached to a body the system no longer holds; checked whole before appending, so a refusal leaves the scene as it was.
     pub fn captureFrom(self: Scene, system: system_mod.PhysicsSystem) err.Error!void {
         try err.check(c.zjoltSceneFromPhysicsSystem(self.handle, system.handle));
     }
@@ -231,18 +206,10 @@ pub const Scene = struct {
     }
 
     /// The body at `index`. `error.InvalidArgument` past `bodyCount`.
-    ///
-    /// The `shape` in the result is BORROWED from the scene: no reference is
-    /// taken on the way out, and it dies with the scene entry unless you
-    /// `addRef` it yourself.
-    ///
-    /// One field of this view is lossy. Jolt has a third mass mode — an
-    /// inertia tensor supplied outright — that `OverrideMassProperties`
-    /// cannot spell, and a scene loaded from a file may carry it. Such a body
-    /// reports `.calculate_inertia` with the mass it was given, the closest
-    /// this descriptor comes; the scene still instantiates the real tensor,
-    /// so what `createBodies` builds is unaffected. Round-tripping a body
-    /// through this call and `addBody` is what loses it.
+    /// `shape` is BORROWED from the scene — no reference taken; `addRef`
+    /// it yourself to outlive the scene entry. LOSSY for a scene loaded
+    /// from a file carrying Jolt's third mass mode (an outright inertia
+    /// tensor, `OverrideMassProperties` cannot spell): reports `.calculate_inertia` with the given mass — round-tripping through this call and `addBody` loses the real tensor.
     pub fn body(self: Scene, index: u32) err.Error!body_mod.BodyDesc {
         var raw: c.BodyDesc = undefined;
         try err.check(c.zjoltSceneGetBody(self.handle, index, &raw));
@@ -269,39 +236,22 @@ pub const Scene = struct {
     // Turning one into a world
     //=========================================================================
 
-    /// Creates every body and soft body in this scene in `system`, adds them
-    /// all activated, then creates and adds every constraint.
-    ///
-    /// The scene is unchanged and can be instantiated again, into this system
-    /// or another. The bodies share its shapes rather than copying them.
-    ///
-    /// `error.OutOfMemory` when `system` runs out of body slots part way
-    /// through, and that failure is not clean: the bodies created before it
-    /// stay in the system, and no constraint is created at all — Jolt stops
-    /// before them, because indices into a half-created body list would join
-    /// the wrong things. Give a system that is to hold a scene a `max_bodies`
-    /// well past `bodyCount` plus `softBodyCount`.
-    ///
-    /// `error.InvalidArgument`, before anything is created, when the scene
-    /// itself cannot be instantiated: a body with no shape, a soft body with
-    /// no topology, a constraint with no settings or naming a body index that
-    /// does not exist. None of those is reachable through the `add*` calls;
-    /// all of them are reachable through a hand-made buffer.
+    /// Creates every body and soft body in this scene in `system`, adds
+    /// them activated, then creates and adds every constraint. The
+    /// scene is unchanged and reusable; bodies share its shapes.
+    /// `error.OutOfMemory` mid-way is NOT clean: bodies created before
+    /// it stay in the system and no constraint is created at all — give
+    /// `system` a `max_bodies` well past `bodyCount` + `softBodyCount`.
     pub fn createBodies(self: Scene, system: system_mod.PhysicsSystem) err.Error!void {
         try err.check(c.zjoltSceneCreateBodies(self.handle, system.handle));
     }
 
-    /// Rescales any shape in the scene that cannot legally be used at unit
-    /// scale, replacing it in place — so this CHANGES the scene, and a shape
-    /// borrowed from an earlier `body` call may no longer be the scene's.
-    ///
-    /// The case it exists for is a scaled shape baked into an asset: a scaled
-    /// convex hull, or any shape scaled by a factor its kind forbids. Jolt
-    /// refuses to build a body from one, and a level loaded from a file is
-    /// exactly where one turns up.
-    ///
-    /// `error.ShapeInvalid` when some shape could not be fixed; the ones that
-    /// could be still were.
+    /// Rescales any shape in the scene that cannot legally be used at
+    /// unit scale, replacing it in place — CHANGES the scene, so a
+    /// shape borrowed from an earlier `body` call may no longer be the
+    /// scene's. For a scaled shape baked into an asset (a scaled convex
+    /// hull, say) that Jolt refuses to build a body from — common in a
+    /// level loaded from a file. `error.ShapeInvalid` if some could not be fixed; the rest still were.
     pub fn fixInvalidScales(self: Scene) err.Error!void {
         try err.check(c.zjoltSceneFixInvalidScales(self.handle));
     }
@@ -309,25 +259,8 @@ pub const Scene = struct {
     //=========================================================================
     // Serialisation
     //
-    // The same container `Shape.save` and `State.save` write — a magic tag of
-    // its own, a container version, this build's config id, the Jolt version,
-    // the payload length and a CRC-32, all checked before Jolt reads a byte —
-    // and the same caveat: it rejects the wrong file, a truncated file and a
-    // damaged file, and it is not a defence against a crafted payload that
-    // carries a matching checksum.
-    //
-    // Two fields Jolt does not write, worth knowing before a level leans on
-    // them: a rigid body's `user_data` and a constraint's `user_data`. Neither
-    // is in Jolt's own binary state, so both come back as 0 — while a SOFT
-    // body's user data IS written, which is what makes the asymmetry easy to
-    // miss. Keep what a host needs after a load in the level's own data, keyed
-    // by index, not in a body's user data.
-    //
-    // Collision group FILTERS are not written either. This library's filter is
-    // not one of Jolt's serialisable types, and a payload naming it could not
-    // be restored; a restored body keeps its group and sub-group ids and comes
-    // back with no filter. Re-attach one with `BodyInterface.setCollisionGroup`
-    // after instantiating.
+    // Same container as `Shape.save`/`State.save` (checksummed, versioned) — same caveat: rejects a bad file, not a defence against a crafted payload with a matching checksum.
+    // NOT written: rigid-body/constraint `user_data` (comes back 0, unlike a SOFT body's); collision group FILTERS (re-attach via `BodyInterface.setCollisionGroup` after instantiating).
     //=========================================================================
 
     /// Bytes `save` would write. Ask each time rather than caching it.
@@ -355,17 +288,64 @@ pub const Scene = struct {
 
     /// Rebuilds a scene from `save` output; `release` it when done.
     ///
-    /// `error.BadFormat` for anything the container refuses — not a zjolt
-    /// scene buffer, a different build, a different Jolt, truncated, trailing
-    /// bytes, a failed checksum — and for a payload Jolt itself rejects, with
-    /// its message in `lastError`.
-    ///
-    /// The shapes come back newly built and owned by the new scene, NOT
-    /// shared with whatever was saved: two scenes restored from one buffer
-    /// hold two sets of shapes.
+    /// `error.BadFormat` for anything the container refuses (wrong
+    /// buffer, different build/Jolt, truncated, bad checksum) or a
+    /// payload Jolt itself rejects (message in `lastError`). Shapes come
+    /// back newly built, NOT shared with what was saved — two scenes from one buffer hold two sets of shapes.
     pub fn restore(data: []const u8) err.Error!Scene {
         var handle: *c.Scene = undefined;
         try err.check(c.zjoltSceneRestore(data.ptr, data.len, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// `save`, through `stream` instead of a resident buffer — for
+    /// streaming a cooked level to a pack file, socket or compressor
+    /// rather than sizing and holding it whole. @see `zjolt.hostStream`.
+    /// No length or checksum ahead of the payload (only a magic tag and
+    /// build identity) — the same reduced margin against a corrupted
+    /// stream as `Shape.saveStream`. `error.IoError` if `stream` fails.
+    pub fn saveStream(self: Scene, stream: stream_mod.Stream) err.Error!void {
+        try err.check(c.zjoltSceneSaveStream(self.handle, &stream));
+    }
+
+    /// Rebuilds a scene written by `saveStream`. @see `restore` for what
+    /// `error.BadFormat` covers; a stream form has no length or checksum to
+    /// check first.
+    pub fn restoreStream(stream: stream_mod.Stream) err.Error!Scene {
+        var handle: *c.Scene = undefined;
+        try err.check(c.zjoltSceneRestoreStream(&stream, &handle));
+        return .{ .handle = handle };
+    }
+
+    //=========================================================================
+    // Jolt's own object stream
+    //
+    // Older, human-readable format for a C++ host of vanilla Jolt (`error.Unsupported` without `-Dobject_stream=true`).
+    // A RIGID body's shape does NOT survive (a SOFT body's does) — `body()` on such a scene refuses `error.BadFormat`; use `save`/`saveStream` when a shape must survive.
+    //=========================================================================
+
+    /// Writes this scene through `stream` in Jolt's own object-stream
+    /// format — unlike `saveStream`, exactly what a C++ host of vanilla
+    /// Jolt would write: no zjolt header, no build check on the way
+    /// back in, since the point is interchange with a plain-Jolt editor.
+    ///
+    /// `error.IoError` if `stream` reports failure while this runs.
+    pub fn saveObjectStream(
+        self: Scene,
+        format: stream_mod.ObjectStreamFormat,
+        stream: stream_mod.Stream,
+    ) err.Error!void {
+        try err.check(c.zjoltSceneSaveObjectStream(self.handle, format, &stream));
+    }
+
+    /// Reads a scene written by `saveObjectStream`, or by a C++ host of
+    /// vanilla Jolt — either form, sniffed the way Jolt's own reader does.
+    ///
+    /// `error.BadFormat` when Jolt's own reader refuses the stream;
+    /// unlike `restore`, `lastError` carries no detail — the object stream reports only success or failure, not why.
+    pub fn restoreObjectStream(stream: stream_mod.Stream) err.Error!Scene {
+        var handle: *c.Scene = undefined;
+        try err.check(c.zjoltSceneRestoreObjectStream(&stream, &handle));
         return .{ .handle = handle };
     }
 };
@@ -534,4 +514,75 @@ test "a scene survives a round trip through a buffer and back into a world" {
     try captured.captureFrom(system);
     try std.testing.expectEqual(@as(u32, 2), captured.bodyCount());
     try std.testing.expectEqual(@as(u32, 1), captured.constraintCount());
+}
+
+test "a scene's text object stream is diffable text, and its scalar fields round-trip through a host stream" {
+    if (!zjolt.options.object_stream) return error.SkipZigTest;
+
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.25, 0.25, 0.25), .{});
+    defer shape.release();
+
+    const scene = try Scene.init();
+    defer scene.release();
+    _ = try scene.addBody(.{
+        .shape = shape,
+        .object_layer = TestLayers.moving,
+        .position = zjolt.rvec3(1, 2, 3),
+    });
+
+    var stream_buffer: [1 << 16]u8 = undefined;
+    var writer: stream_mod.BufferWriter = .{ .buffer = &stream_buffer };
+    try scene.saveObjectStream(.text, stream_mod.hostStream(stream_mod.BufferWriter, &writer));
+    const text = writer.slice();
+
+    // The point of the text form: every field is written by name rather than
+    // packed, which is what makes it something a person can open and diff —
+    // `Scene.save`'s checksummed binary payload has no equivalent at any
+    // setting. "mPosition" is the exact attribute name
+    // `JPH_ADD_ATTRIBUTE(BodyCreationSettings, mPosition)` registers.
+    try std.testing.expect(std.mem.indexOf(u8, text, "mPosition") != null);
+
+    var reader: stream_mod.BufferReader = .{ .buffer = text };
+    const loaded = try Scene.restoreObjectStream(stream_mod.hostStream(stream_mod.BufferReader, &reader));
+    defer loaded.release();
+    try std.testing.expectEqual(@as(u32, 1), loaded.bodyCount());
+
+    // A rigid body's SHAPE does not survive this round trip — Jolt's own
+    // registration, not a gap here: the object stream serialises only
+    // `BodyCreationSettings::mShape` (unbuilt ShapeSettings), and this ABI
+    // always builds from `mShapePtr`, documented upstream as "cannot be
+    // serialized". `body()` itself refuses a shapeless entry, so this reads
+    // the raw descriptor to show what actually comes back.
+    var raw: c.BodyDesc = undefined;
+    try err.check(c.zjoltSceneGetBody(loaded.handle, 0, &raw));
+    try std.testing.expect(raw.shape == null);
+    try std.testing.expectApproxEqAbs(@as(f64, 1), @as(f64, @floatCast(raw.position.x)), 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f64, 2), @as(f64, @floatCast(raw.position.y)), 1e-3);
+    try std.testing.expectApproxEqAbs(@as(f64, 3), @as(f64, @floatCast(raw.position.z)), 1e-3);
+}
+
+test "the object stream reports Unsupported without -Dobject_stream=true, not silently doing nothing" {
+    if (zjolt.options.object_stream) return error.SkipZigTest;
+
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const scene = try Scene.init();
+    defer scene.release();
+
+    var stream_buffer: [64]u8 = undefined;
+    var writer: stream_mod.BufferWriter = .{ .buffer = &stream_buffer };
+    try std.testing.expectError(
+        err.Error.Unsupported,
+        scene.saveObjectStream(.text, stream_mod.hostStream(stream_mod.BufferWriter, &writer)),
+    );
+
+    var reader: stream_mod.BufferReader = .{ .buffer = &stream_buffer };
+    try std.testing.expectError(
+        err.Error.Unsupported,
+        Scene.restoreObjectStream(stream_mod.hostStream(stream_mod.BufferReader, &reader)),
+    );
 }

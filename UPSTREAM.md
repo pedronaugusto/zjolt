@@ -34,19 +34,18 @@ Which translation units actually compile is decided explicitly in `build.zig`
 
 ## What compiles, and what merely sits there
 
-`build.zig` compiles 130 of Jolt's translation units, taken from upstream's own
-`Jolt/Jolt.cmake` unconditional source list. Three groups are vendored but not
-compiled:
+`build.zig` compiles 130 of Jolt's translation units unconditionally, taken
+from upstream's own `Jolt/Jolt.cmake` unconditional source list. Three further
+groups are vendored and compiled only under a build option, or not at all:
 
-| Not compiled | Reason |
+| Outside the unconditional set | Reason |
 |---|---|
-| `Jolt/Compute/{DX12,VK,MTL,CPU}` | Jolt 5.6's GPU compute backends. They need the Direct3D 12, Vulkan or Metal SDKs, which have no place in a physics package. Their backend-agnostic headers *are* compiled, because `Jolt/Physics/Hair` includes them unconditionally. |
-| `Jolt/Shaders/*.cpp` | CPU-compute shader wrappers, live only under `JPH_USE_CPU_COMPUTE`. |
-| `Jolt/ObjectStream/*.cpp` | Optional upstream (`ENABLE_OBJECT_STREAM`), and unused here. Shape serialisation goes through `StreamIn`/`StreamOut`, not the object stream, so `JPH_OBJECT_STREAM` stays undefined. |
+| `Jolt/Compute/{DX12,VK,MTL}` | Jolt 5.6's GPU compute backends. They need the Direct3D 12, Vulkan or Metal SDKs, which have no place in a physics package. Their backend-agnostic headers *are* compiled, because `Jolt/Physics/Hair` includes them unconditionally. `Jolt/Compute/CPU` needs no SDK and *is* compiled under `-Dcpu_compute`, on by default. |
+| `Jolt/Shaders/*.cpp` | CPU-compute shader wrappers, live only under `JPH_USE_CPU_COMPUTE` (`-Dcpu_compute`, on by default). |
+| `Jolt/ObjectStream/*.cpp` (eight of nine — `SerializableObject.cpp` is unconditional) | Jolt's reflective, human-readable object-stream format (upstream's `ENABLE_OBJECT_STREAM`), live under `JPH_OBJECT_STREAM` (`-Dobject_stream`, on by default). `zjoltSceneSaveObjectStream`/`RestoreObjectStream` (`zjolt_scene.h`) and their `RagdollSettings` counterparts (`zjolt_ragdoll.h`) read and write it; every other save and restore in this ABI still goes through `StreamIn`/`StreamOut` and this ABI's own packed, checksummed containers. |
 
-Vehicles, ragdolls and soft bodies **are** compiled. They are part of the
-library and `RegisterTypes.cpp` refers to them; they are out of scope for the C
-ABI, not for the build.
+Vehicles, ragdolls and soft bodies are compiled and bound: `zjolt_vehicle.h`,
+`zjolt_ragdoll.h` and `zjolt_softbody.h` carry 123, 95 and 57 entry points.
 
 ## Toolchain floor
 
@@ -64,6 +63,12 @@ worth spelling out.
 Jolt folds its build configuration into a version id (`Jolt/Core/Core.h`):
 `JPH_DOUBLE_PRECISION`, `JPH_OBJECT_LAYER_BITS`, `JPH_ENABLE_ASSERTS`,
 `JPH_PROFILE_ENABLED`, `JPH_OBJECT_STREAM` and six more each occupy a bit.
+
+`Jolt/Core/Profiler.h` has three mutually exclusive states, and `build.zig`
+enforces that: `-Dprofile` and `-Dtrack_broadphase_stats` each ask for
+`JPH_PROFILE_ENABLED`, `-Dexternal_profile` asks for `JPH_EXTERNAL_PROFILE`,
+and no combination of the three ever defines both. `reflect.profiler_enabled`
+is the single Zig-side answer to "is Jolt's own profiler compiled in".
 `RegisterTypesInternal` compares the caller's id against the library's, traces
 which define disagrees, and then calls **`std::abort()`**. It is not a warning
 and not an error code.
@@ -225,6 +230,26 @@ constraints as bare vertex indices, and every consumer of them — the solver,
 the end of the array in a release one. `ffi/zjolt_softbody.cpp` validates each
 batch against the vertex count before appending any of it, which is the last
 point at which the index is still known to have come from outside.
+
+**`JPH_TRACK_BROADPHASE_STATS` does not compile on its own.**
+`QuadTree.h` declares `mCastRayStats` and friends as
+`UnorderedMap<String, Stat>` under that macro, but nothing in the include
+chain reached from a translation unit that merely defines the macro ever
+pulls in `Jolt/Core/UnorderedMap.h` — only its forward declaration
+(`UnorderedMapFwd.h`), by way of `BodyManager.h`. Every file that includes
+`QuadTree.h` fails to instantiate the type. Separately,
+`QuadTree::ReportStats` (`QuadTree.cpp:1722`) reads `mName`, a field
+`QuadTree.h` only declares under the unrelated `JPH_EXTERNAL_PROFILE` /
+`JPH_PROFILE_ENABLED` — so the macro this option is named for does not, on
+its own, provide everything its own code uses.
+
+Worked around in `build.zig`: `Jolt/Jolt.h` and `Jolt/Core/UnorderedMap.h` are
+force-included ahead of every Jolt translation unit when
+`-Dtrack_broadphase_stats` is on (not patched into the vendored, byte-identical
+copy), and `JPH_PROFILE_ENABLED` is defined alongside `JPH_TRACK_BROADPHASE_STATS`,
+module-wide, so Jolt's own caller/library config check never disagrees with
+itself. No Jolt profiler type crosses the C ABI, so this has no consumer-visible
+effect beyond what enabling the option already implies.
 
 ## Re-vendoring procedure
 

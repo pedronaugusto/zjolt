@@ -27,6 +27,9 @@ pub const Error = error{
     /// The call names a feature this library was not built with. Every
     /// function exists in every build; whether it does anything does not.
     Unsupported,
+    /// A host-supplied stream reported failure — a write it could not
+    /// complete, or a read from a stream already in an error state.
+    IoError,
 };
 
 /// Turns a C result into a Zig error, or void on success.
@@ -48,6 +51,7 @@ pub fn check(result: c.Result) Error!void {
         .bad_format => Error.BadFormat,
         .body_not_found => Error.BodyNotFound,
         .unsupported => Error.Unsupported,
+        .io_error => Error.IoError,
     };
 }
 

@@ -1,35 +1,16 @@
 //===----------------------------------------------------------------------===//
-// zjolt — a C ABI over Jolt Physics.
+// zjolt — a C ABI over Jolt Physics. Opaque handles, POD structs, function
+// pointers, a flat error enum. No exceptions cross this boundary.
 //
-// These headers are the ONLY contract between the C++ implementation and any
-// consumer (the Zig wrapper in ../src, or a plain C host). They are deliberately
-// free of C++: opaque handles, POD structs with fixed layout, plain function
-// pointers, and a flat error enum. No exceptions cross this boundary.
+// Ownership: *Create yields an owned handle; *Destroy accepts NULL, safe to
+// call once. Other handles are ref-counted (*AddRef/*Release) or owning
+// (*Destroy), per type. Query results borrow nothing; callback pointers are
+// valid only for the call. Aggregates pass by pointer; scalars by value.
 //
-// Ownership rules, uniformly:
-//   *Create        allocate through the installed allocator and yield a handle
-//                  the caller owns.
-//   *Destroy       accept NULL and are safe to call once.
-//   Handles        are either reference counted, released with *AddRef and
-//                  *Release, or plain owning ones freed with *Destroy. Which
-//                  kind a type is is written on the type; there is no single
-//                  rule that covers all of them. Shapes, materials, group
-//                  filters, constraints, path constraint paths, soft-body
-//                  shared settings, skeletons, ragdoll settings and ragdolls
-//                  are the reference-counted ones today.
-//   Query results  borrow nothing; every out-parameter is caller-owned storage.
-//   Callbacks      receive pointers valid only for the duration of the call.
-//
-// Aggregates are always passed and returned through pointers, never by value.
-// That is deliberate: struct-return conventions differ between the SysV and
-// Microsoft ABIs, and a binding that gets it wrong is silently corrupt rather
-// than broken at the link step. Scalars are passed by value.
-//
-// Thread safety: a ZJoltPhysicsSystem may be stepped from one thread at a
-// time. Contact and activation callbacks are invoked from Jolt's job threads,
-// concurrently, DURING zjoltPhysicsSystemStep — see the note above
-// ZJoltContactListener. Body reads outside a step should go through a body
-// lock.
+// Thread safety: a ZJoltPhysicsSystem steps from one thread at a time.
+// Contact/activation callbacks run on Jolt's job threads, concurrently,
+// during zjoltPhysicsSystemStep (see ZJoltContactListener). Body reads
+// outside a step need a body lock.
 //===----------------------------------------------------------------------===//
 
 #ifndef ZJOLT_CORE_H_
@@ -54,15 +35,10 @@ extern "C" {
 #endif
 
 //===----------------------------------------------------------------------===//
-// Version and build configuration
-//
-// Two build options change the LAYOUT of types in this header, so a consumer
-// that compiles against different settings than the library was built with
-// would misread every position it is handed. Rather than trust that not to
-// happen, the settings are folded into ZJOLT_CONFIG_ID, which zjoltInit
-// compares against the library's own — a skew is a clean error at start-up
-// instead of silent corruption. This mirrors the trick Jolt plays on its own
-// clients with JPH_VERSION_ID, for the same reason.
+// Version and build configuration: two options change type LAYOUT, so
+// they're folded into ZJOLT_CONFIG_ID, which zjoltInit compares against the
+// library's own — a skew is a clean error at start-up, not silent
+// corruption (mirrors Jolt's own JPH_VERSION_ID trick).
 //===----------------------------------------------------------------------===//
 
 // Unreleased. These stay 0.0.0 until the surface is complete and a version is
@@ -112,17 +88,10 @@ ZJOLT_API uint32_t zjoltJoltVersion(void);
 ZJOLT_API uint32_t zjoltConfigId(void);
 
 //===----------------------------------------------------------------------===//
-// Results
-//
-// The declared surface does NOT depend on the build options. A feature that
-// was compiled out still has every function it would otherwise have, and they
-// return ZJOLT_RESULT_UNSUPPORTED. Omitting the declarations instead would
-// make the header describe a different API per configuration: it would break
-// the reflective ABI check (the header would declare what the library lacks),
-// break a consumer compiled against a different configuration than the
-// library, and turn a legible runtime error into a link failure. What is
-// enabled is answered by zjoltConfigId and zjoltAbiLayout, not by whether a
-// declaration exists.
+// Results. The declared surface does not depend on build options: a
+// compiled-out feature keeps its function, returning
+// ZJOLT_RESULT_UNSUPPORTED instead of failing to link. What is enabled is
+// reported by zjoltConfigId/zjoltAbiLayout, not by which functions exist.
 //===----------------------------------------------------------------------===//
 
 typedef enum ZJoltResult {
@@ -140,7 +109,7 @@ typedef enum ZJoltResult {
   /// A caller-provided output buffer was too small; the required count is
   /// still written to the out-count parameter.
   ZJOLT_RESULT_BUFFER_TOO_SMALL = 6,
-  /// Jolt refused to build the shape. zjoltLastError has its message.
+  /// Jolt could not build the shape. zjoltLastError has its message.
   ZJOLT_RESULT_SHAPE_INVALID = 7,
   /// A serialised shape could not be restored: truncated, or not a shape.
   ZJOLT_RESULT_BAD_FORMAT = 8,
@@ -150,6 +119,11 @@ typedef enum ZJoltResult {
   /// The call names a feature this library was not built with. The function
   /// exists in every build; whether it does anything is a build question.
   ZJOLT_RESULT_UNSUPPORTED = 10,
+  /// A ZJoltStream reported failure — a write it could not complete, or a
+  /// read from a stream already in an error state — during a save or
+  /// restore. Distinct from ZJOLT_RESULT_BAD_FORMAT, which is about the
+  /// shape of what was read rather than whether the transport delivered it.
+  ZJOLT_RESULT_IO_ERROR = 11,
 } ZJoltResult;
 
 /// Static, never-NULL description of a result code. Borrowed; do not free.
@@ -164,20 +138,56 @@ ZJOLT_API const char *zjoltResultName(ZJoltResult result);
 ZJOLT_API const char *zjoltLastError(void);
 
 //===----------------------------------------------------------------------===//
+// Host streams: Jolt asks a save/restore to talk to StreamIn/StreamOut/
+// StateRecorder (abstract C++ classes) — this ABI's standard answer to that
+// shape of question: a plain function-pointer table, not a mirrored vtable.
+//===----------------------------------------------------------------------===//
+
+/// A host-supplied byte stream: read, write, end-of-file, failure. A save
+/// entry point needs `write`/`is_failed`; a restore needs
+/// `read`/`is_eof`/`is_failed` — the unused pair may be NULL. An entry
+/// point taking this refuses with ZJOLT_RESULT_INVALID_ARGUMENT rather than
+/// calling a missing callback.
+typedef struct ZJoltStream {
+  /// Fills `data` with exactly `size` bytes. A stream that cannot honour that
+  /// reports it through `is_failed`, or `is_eof` when it simply ran out —
+  /// zero-filling what it could not supply either way, so a caller that
+  /// forgets to check reads defined bytes, not stale memory.
+  void (*read)(void *user, void *data, size_t size);
+  /// Writes exactly `size` bytes from `data`, or arranges for a later
+  /// `is_failed` to report that it could not.
+  void (*write)(void *user, const void *data, size_t size);
+  /// True once a read has run out of input. Follows StreamIn::IsEOF's own
+  /// convention: true only once a read asked for more than was left, not
+  /// merely once the read position reaches the end.
+  bool (*is_eof)(void *user);
+  /// True once this stream has failed in either direction.
+  bool (*is_failed)(void *user);
+  void *user;
+} ZJoltStream;
+
+/// Which of Jolt's own object-stream formats a save writes — see
+/// zjoltSceneSaveObjectStream / zjoltRagdollSettingsSaveObjectStream. A
+/// restore has no counterpart: the format is sniffed from the stream's own
+/// header, as Jolt's ObjectStreamIn::Open does.
+typedef enum ZJoltObjectStreamFormat {
+  /// Human-readable and diffable — every field written by name. The point
+  /// of the feature; costs more bytes than the binary form.
+  ZJOLT_OBJECT_STREAM_FORMAT_TEXT = 0,
+  /// Packed, and closer in size to zjoltSceneSave's own binary form, at the
+  /// cost of not being something a person can read or diff.
+  ZJOLT_OBJECT_STREAM_FORMAT_BINARY = 1,
+} ZJoltObjectStreamFormat;
+
+//===----------------------------------------------------------------------===//
 // Initialisation
 //===----------------------------------------------------------------------===//
 
-/// Host allocator, installed process-wide.
+/// Host allocator, installed process-wide. Mirrors Jolt's five allocation
+/// function pointers verbatim, so a host can budget physics memory itself.
 ///
-/// Jolt routes every allocation through five global function pointers, and
-/// this exposes that seam verbatim rather than hiding it, so a host can put
-/// physics memory in its own budget.
-///
-/// Note the asymmetry inherited from Jolt: `free` and `aligned_free` receive
-/// only the block pointer — no size, no alignment — while `reallocate` does
-/// get the old size. An allocator that needs the missing information (Zig's
-/// std.mem.Allocator does) must record it in a header of its own; the Zig
-/// wrapper in ../src/memory.zig does exactly that.
+/// `free`/`aligned_free` get only the block pointer (no size or alignment);
+/// `reallocate` gets the old size. Record missing info in your own header.
 typedef struct ZJoltAllocator {
   /// Returns at least `size` bytes, aligned to at least
   /// zjoltDefaultAllocateAlignment(), or NULL. `size` is never 0.
@@ -201,14 +211,12 @@ typedef struct ZJoltAllocator {
 /// advisory. Read it rather than assuming 16.
 ZJOLT_API size_t zjoltDefaultAllocateAlignment(void);
 
-/// Receives Jolt's diagnostic output, already formatted. Jolt's own hook is a
-/// varargs function; the formatting is done on the C++ side so that no host
-/// has to model a C varargs callback.
+/// Receives Jolt's diagnostic output, already formatted (formatting is done
+/// on the C++ side so no host models a C varargs callback).
 ///
-/// Supplying one is optional but recommended. Without it the messages go to
-/// stderr — which is zjolt's fallback, not Jolt's: Jolt's own default trace
-/// function is a stub whose body is an assertion, so an unhooked Jolt aborts
-/// the first time it has something to report.
+/// Optional but recommended: without it, messages fall back to stderr —
+/// zjolt's fallback, not Jolt's own (Jolt's own default trace is a stub
+/// that asserts, so an unhooked Jolt aborts on its first message).
 typedef void (*ZJoltTraceFn)(void *user, const char *message);
 
 /// Called when a Jolt assertion fails. Return true to trigger a debugger
@@ -240,56 +248,39 @@ typedef struct ZJoltInitDesc {
 ZJOLT_API ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc,
                                           uint32_t config_id);
 
-/// Installs the allocator and hooks, creates Jolt's factory and registers its
-/// types. Must be called before anything else, and is process-wide.
+/// Installs the allocator and hooks, creates Jolt's factory and registers
+/// its types. Must be called before anything else; process-wide.
 ///
-/// `desc` may be NULL for all defaults. Returns ZJOLT_RESULT_CONFIG_MISMATCH if
-/// this header was compiled with different layout-affecting settings than the
-/// library.
+/// `desc` may be NULL for all defaults. ZJOLT_RESULT_CONFIG_MISMATCH if
+/// this header was compiled with different layout-affecting settings than
+/// the library.
 static inline ZJoltResult zjoltInit(const ZJoltInitDesc *desc) {
   return zjoltInitWithConfig(desc, (uint32_t)ZJOLT_CONFIG_ID);
 }
 
-/// Unregisters Jolt's types, destroys the factory, and gives Jolt its own
-/// allocator back. Safe to call when not initialised.
+/// Unregisters Jolt's types, destroys the factory, restores Jolt's own
+/// allocator. Safe when not initialised.
 ///
-/// REFUSES, and does nothing but trace, while any handle is still alive. That
-/// is deliberate: the last thing it does is restore the allocator, and a
-/// handle destroyed after that is freed through an allocator it was never
-/// allocated from — heap corruption with no symptom anywhere near the mistake.
-/// Leaving the library up instead keeps the eventual destroy correct. Check
-/// zjoltIsInitialized or zjoltLiveHandleCount if you need to know it happened.
+/// Refuses (tracing only) while any handle is alive: destroying one after
+/// would free through an allocator never allocated from, corrupting the
+/// heap with no nearby symptom. Check zjoltIsInitialized/zjoltLiveHandleCount.
 ZJOLT_API void zjoltDeinit(void);
 
 ZJOLT_API bool zjoltIsInitialized(void);
 
-/// Owning handles currently alive, across every kind there is: physics
-/// systems, job systems, characters (both kinds), character contact
-/// listeners, character-vs-character collisions, debug renderers, compute
-/// systems, hair, vehicle constraints, and ragdolls.
+/// Every owning handle currently alive. zjoltDeinit refuses while non-zero.
 ///
-/// The full list matters because zjoltDeinit REFUSES while this is non-zero.
-/// A host that has released only the kinds it remembers has no other way to
-/// find what is holding the library up.
-///
-/// Objects that are nothing but a Jolt reference count — shapes, materials,
-/// group filters, skeletons, ragdoll settings — are not counted: Jolt owns
-/// their counts, which change inside calls zjolt does not mediate, so a
-/// number kept here would be wrong rather than merely absent. Release them
-/// anyway; they are freed through the installed allocator too. A ragdoll is
-/// counted despite being reference counted, because the handle is a
-/// zjolt-owned struct and not a tag: the count moves when
-/// zjoltRagdollSettingsCreateRagdoll allocates it and when the release that
-/// frees it drops the last reference, not on every zjoltRagdollAddRef.
+/// Excludes Jolt-refcounted objects (shapes, materials, group filters,
+/// skeletons, ragdoll settings) — release them anyway; Jolt owns their
+/// counts. A ragdoll IS counted, moving only on create and final release,
+/// not on every AddRef.
 ZJOLT_API uint32_t zjoltLiveHandleCount(void);
 
 //===----------------------------------------------------------------------===//
-// Plain-data types
-//
-// ZJoltVec3 is three floats, not four. Jolt's own Vec3 is a 16-byte SIMD
-// register with a padding lane; projecting it to 12 bytes at the boundary
-// costs one shuffle per crossing and saves every consumer from modelling a
-// lane it must never read.
+// Plain-data types. ZJoltVec3 is three floats, not four: Jolt's own Vec3 is
+// a 16-byte SIMD register with a padding lane; projecting to 12 bytes costs
+// one shuffle per crossing and saves every consumer modelling a lane it
+// must never read.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltVec3 {
@@ -301,15 +292,22 @@ typedef struct ZJoltQuat {
   float x, y, z, w;
 } ZJoltQuat;
 
-/// A 4x4 matrix in Jolt's own layout: four COLUMNS of four floats each, so
-/// column c's row r is `m[4 * c + r]`. Column-major, NOT row-major — the same
-/// layout ZJoltSoftBodyInvBind::matrix already uses.
-///
-/// Carries a transform (rotation in the first three columns, translation in
-/// the fourth) or a 3x3 tensor padded out to 4x4, which is how Jolt stores an
-/// inertia matrix.
+#if defined(__cplusplus)
+#define ZJOLT_ALIGN16 alignas(16)
+#elif defined(_MSC_VER)
+#define ZJOLT_ALIGN16 __declspec(align(16))
+#else
+#define ZJOLT_ALIGN16 _Alignas(16)
+#endif
+
+/// A 4x4 matrix in Jolt's own layout: four COLUMNS of four floats, so
+/// column c's row r is `m[4 * c + r]`. Carries a transform (rotation in the
+/// first three columns, translation in the fourth) or a 3x3 inertia tensor
+/// padded to 4x4. 16-byte aligned, matching `JPH::Mat44` and `ZozzFloat4x4`,
+/// so one buffer serves both packages; a struct embedding this one inherits
+/// that alignment.
 typedef struct ZJoltMat44 {
-  float m[16];
+  ZJOLT_ALIGN16 float m[16];
 } ZJoltMat44;
 
 /// Scalar type of a world-space position. `double` when the library was built
@@ -327,19 +325,14 @@ typedef struct ZJoltRVec3 {
   ZJoltReal x, y, z;
 } ZJoltRVec3;
 
-/// A world-space transform: ZJoltMat44 with ZJoltReal elements, exactly as
-/// ZJoltRVec3 is ZJoltVec3 with ZJoltReal elements. Its width therefore
-/// follows ZJOLT_DOUBLE_PRECISION, which is already folded into
-/// ZJOLT_CONFIG_ID above — a consumer that disagrees about that setting
-/// disagrees about the size of this struct, and zjoltInit refuses it.
+/// A world-space transform: ZJoltMat44 with ZJoltReal elements. Width
+/// follows ZJOLT_DOUBLE_PRECISION (folded into ZJOLT_CONFIG_ID); a
+/// consumer that disagrees about that setting disagrees about this
+/// struct's size, and zjoltInit refuses it.
 ///
-/// Jolt's own double-precision matrix keeps the rotation part in single
-/// precision and widens only the translation column (DMat44). This does not
-/// mirror that split: the twelve rotation entries are exact float values
-/// widened to ZJoltReal, so one element type describes the whole matrix and a
-/// consumer does not have to model two.
+/// 16-byte aligned, matching `ZJoltMat44`.
 typedef struct ZJoltRMat44 {
-  ZJoltReal m[16];
+  ZJOLT_ALIGN16 ZJoltReal m[16];
 } ZJoltRMat44;
 
 typedef struct ZJoltAABox {
@@ -368,17 +361,12 @@ typedef uint32_t ZJoltBodyId;
 /// Identifies one leaf of a compound or mesh shape within a hit.
 typedef uint32_t ZJoltSubShapeId;
 
-/// The sub-shape id that means "the shape itself, no leaf".
+/// The sub-shape id that means "the shape itself, no leaf". Required (not
+/// optional) for any entry point taking a sub-shape id on a non-compound
+/// shape — several of Jolt's accessors assert on an arbitrary value.
 ///
-/// Pass this to any entry point that takes a sub-shape id when the shape is
-/// not compound — several of Jolt's accessors assert on it rather than
-/// tolerating an arbitrary value, so it is a required argument, not a
-/// convenience.
-///
-/// Written out rather than reported by the library the way
-/// `zjoltAbiLayout` reports widths, because `JPH::SubShapeID::cEmpty` is
-/// private and zjolt does not pass `-fno-access-control`. A behavioural test
-/// pins it to what Jolt actually treats as empty.
+/// Written out, not reported by zjoltAbiLayout, because
+/// `JPH::SubShapeID::cEmpty` is private; a behavioural test pins this value.
 #define ZJOLT_SUB_SHAPE_ID_EMPTY ((ZJoltSubShapeId)0xffffffffu)
 
 #if ZJOLT_OBJECT_LAYER_BITS == 32
@@ -412,12 +400,9 @@ typedef enum ZJoltActivation {
 } ZJoltActivation;
 
 /// Degrees of freedom a body is allowed, as a bit mask. Use
-/// ZJOLT_ALLOWED_DOFS_ALL unless constraining to a plane.
-///
-/// Like every other bit mask here, it CROSSES as a uint32_t and this enum only
-/// names the bits. A field or parameter typed as the enum itself would hold a
-/// value that is not one of its enumerators the moment two bits are combined,
-/// which is what the fields carrying this used to do.
+/// ZJOLT_ALLOWED_DOFS_ALL unless constraining to a plane. Crosses as a
+/// uint32_t — this enum only names the bits, since a field typed as the
+/// enum itself could not hold two bits combined.
 typedef enum ZJoltAllowedDofs {
   ZJOLT_ALLOWED_DOFS_TRANSLATION_X = 1 << 0,
   ZJOLT_ALLOWED_DOFS_TRANSLATION_Y = 1 << 1,
@@ -433,26 +418,16 @@ typedef enum ZJoltOverrideMassProperties {
   ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_MASS_AND_INERTIA = 0,
   /// Use ZJoltBodyDesc::mass, scale the shape's inertia to match.
   ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA = 1,
+  /// Use ZJoltBodyDesc::mass_properties_override outright; the shape's own
+  /// mass and inertia are never computed.
+  ZJOLT_OVERRIDE_MASS_PROPERTIES_MASS_AND_INERTIA_PROVIDED = 2,
 } ZJoltOverrideMassProperties;
 
-/// Shape kinds this ABI can produce. Reported by zjoltShapeGetSubType, and
-/// meaningful after a restore to confirm what came back.
-///
-/// Every kind Jolt itself defines is named here. The two values that are not
-/// one of them sit at either end and mean different things:
-///
-///   * NONE is not a shape at all — what zjoltShapeGetSubType reports for a
-///     NULL handle. It is zero so that zeroed storage reads as "nothing"
-///     rather than as SPHERE.
-///   * USER_DEFINED is a shape whose kind this ABI has no name for: one of the
-///     sixteen User1..UserConvex8 slots Jolt reserves for shape types
-///     registered by C++ outside this library, whose meaning belongs to
-///     whoever registered them. Nothing here can construct one, so it only
-///     ever appears on a shape that came in from such a registration.
-///
-/// They replace a single OTHER that stood for both, which left a caller unable
-/// to tell "I passed nothing" from "I passed something you do not know". Two
-/// facts, two values.
+/// Shape kinds this ABI can produce, reported by zjoltShapeGetSubType and
+/// meaningful after a restore. Two values are not one Jolt itself defines:
+/// NONE (zero; not a shape, e.g. from a NULL handle) and USER_DEFINED (one
+/// of Jolt's sixteen User1..UserConvex8 slots for a C++-registered type
+/// this ABI cannot construct).
 typedef enum ZJoltShapeSubType {
   ZJOLT_SHAPE_SUB_TYPE_NONE = 0,
   ZJOLT_SHAPE_SUB_TYPE_SPHERE = 1,
@@ -552,13 +527,10 @@ typedef struct ZJoltStepListener ZJoltStepListener;
 typedef struct ZJoltBodyAddBatch ZJoltBodyAddBatch;
 
 //===----------------------------------------------------------------------===//
-// Job system
-//
-// The step is parallel, and which threads it runs on is a host decision. v0.1
-// ships Jolt's own thread pool and its single-threaded scheduler; a host
-// scheduler plugs in later through an ADDITIONAL constructor, which is why
-// this is an opaque handle rather than a struct the caller fills in — adding
-// a way to make one is not an ABI change.
+// Job system: the step is parallel, and which threads it runs on is a host
+// decision. v0.1 ships Jolt's own thread pool and a single-threaded
+// scheduler; zjoltJobSystemCreateHost below adds a host scheduler as an
+// ADDITIONAL constructor — why ZJoltJobSystem stayed opaque.
 //===----------------------------------------------------------------------===//
 
 /// Jolt's own recommended sizing for a physics job system.
@@ -572,33 +544,129 @@ ZJOLT_API ZJoltResult zjoltJobSystemCreateThreadPool(uint32_t max_jobs,
                                                      int32_t num_threads,
                                                      ZJoltJobSystem **out);
 
+/// Called once when a worker thread starts or exits, with its index in
+/// [0, num_threads). `user` is whatever zjoltJobSystemCreateThreadPoolWithHooks
+/// was given.
+typedef void (*ZJoltThreadHookFn)(void *user, int32_t thread_index);
+
+/// Same pool as zjoltJobSystemCreateThreadPool, with per-thread init/exit
+/// hooks reachable. Neither hook can be a setter added afterward: Jolt's
+/// SetThreadInitFunction/SetThreadExitFunction only take effect before a
+/// pool's threads start, so this constructs the pool, installs whichever
+/// hook is non-NULL, then starts the threads. Either hook may be NULL;
+/// `user` is passed to both.
+ZJOLT_API ZJoltResult zjoltJobSystemCreateThreadPoolWithHooks(
+    uint32_t max_jobs, uint32_t max_barriers, int32_t num_threads,
+    ZJoltThreadHookFn thread_init, ZJoltThreadHookFn thread_exit, void *user,
+    ZJoltJobSystem **out);
+
+/// Resizes a thread-pool job system's worker count, stopping and restarting
+/// its threads. ZJOLT_RESULT_INVALID_ARGUMENT if `job_system` was not created
+/// by zjoltJobSystemCreateThreadPool or zjoltJobSystemCreateThreadPoolWithHooks
+/// — the single-threaded and host-backed kinds have no thread count of their
+/// own to resize.
+ZJOLT_API ZJoltResult zjoltJobSystemSetNumThreads(ZJoltJobSystem *job_system,
+                                                  int32_t num_threads);
+
 /// Runs every job on the calling thread. Slower, but makes a step reproducible
 /// without pinning a thread count — which is what the tests use.
 ZJOLT_API ZJoltResult zjoltJobSystemCreateSingleThreaded(uint32_t max_jobs,
                                                          ZJoltJobSystem **out);
+
+/// One unit of the step's work, handed to a host scheduler by
+/// ZJoltHostJobSystem::queue_job(s) and run back on the library through
+/// zjoltJobRun. Reference counted like a shape, but by Jolt's own job system
+/// rather than this library's: see the lifetime note on ZJoltHostJobSystem.
+typedef struct ZJoltJob ZJoltJob;
+
+/// A host's own task graph: Jolt's step jobs run on it instead of Jolt's
+/// own pool (see zjoltJobSystemCreateHost).
+///
+/// `job` is alive only for the callback's duration — AddRef before running
+/// it later or elsewhere, release after. May run on one of Jolt's own
+/// workers; nothing may unwind out of either callback.
+typedef struct ZJoltHostJobSystem {
+  /// Maximum jobs the host's scheduler can actually run at once; Jolt sizes
+  /// its own step graph from this.
+  uint32_t (*get_max_concurrency)(void *user);
+  /// Schedule `job` to run. May run it inline before returning, or queue it
+  /// for another thread — either is a valid scheduler.
+  void (*queue_job)(void *user, ZJoltJob *job);
+  /// The batch form of queue_job, for jobs whose dependency counts cleared
+  /// together. Equivalent to calling queue_job once per element in order, but
+  /// lets a scheduler that batches its own submissions do that instead.
+  void (*queue_jobs)(void *user, ZJoltJob *const *jobs, uint32_t count);
+  void *user;
+} ZJoltHostJobSystem;
+
+/// Wraps `host` in a job system Jolt's step can run on. `max_barriers`
+/// sizes Jolt's OWN barrier bookkeeping (@see ZJOLT_MAX_PHYSICS_BARRIERS);
+/// nothing about a barrier is implemented by the host. Every field of
+/// `host` is required.
+ZJOLT_API ZJoltResult zjoltJobSystemCreateHost(const ZJoltHostJobSystem *host,
+                                               uint32_t max_barriers,
+                                               ZJoltJobSystem **out);
+
+/// Runs `job`'s function on the calling thread. Tolerates NULL. May call
+/// back into ZJoltHostJobSystem::queue_job(s) before returning (running
+/// this job can clear another one's last dependency, synchronously, on
+/// THIS thread) — the no-unwinding rule applies here too.
+ZJOLT_API void zjoltJobRun(ZJoltJob *job);
+
+/// Takes a reference, keeping `job` alive past the queue_job(s) call that
+/// handed it to the host. Tolerates NULL.
+ZJOLT_API void zjoltJobAddRef(ZJoltJob *job);
+
+/// Releases a reference taken by queue_job(s) or zjoltJobAddRef. Call this
+/// exactly once for each — including once for the reference queue_job(s)
+/// itself took, after zjoltJobRun returns. Tolerates NULL.
+ZJOLT_API void zjoltJobRelease(ZJoltJob *job);
 
 ZJOLT_API void zjoltJobSystemDestroy(ZJoltJobSystem *job_system);
 
 /// Number of jobs this scheduler can run at once. 1 for the single-threaded
 /// scheduler.
 ZJOLT_API uint32_t zjoltJobSystemGetMaxConcurrency(const ZJoltJobSystem *job_system);
+
 //===----------------------------------------------------------------------===//
-// Build report
-//
-// A consumer that hand-declares the types above gets no help from either
-// compiler in keeping them right: a field reordered here and not there is
-// silent memory corruption, not a build error. The answer is to compare
-// against THIS header — the Zig wrapper does it by reflection, in a test, with
-// no hand-written list (src/abi_check.zig).
-//
-// What comparing against the header cannot tell you is which build the linked
-// library actually is. ZJoltReal and ZJoltObjectLayer change width with the
-// macros below, so a library built with different ones presents an identical
-// header and describes different structs. zjoltAbiLayout answers that, and
-// zjoltInit refuses a ZJOLT_CONFIG_ID mismatch outright.
-//
-// In a third direction, static_asserts in zjolt_abi.cpp fail the BUILD if a
-// vendored Jolt upgrade changes a type this package converts to or from.
+// Factory: Jolt's process-wide type registry, keyed by name and hash.
+// zjoltInit registers every Jolt-defined type; hosts cannot register their
+// own. zjoltFactoryFind* and zjoltFactoryGetAllClasses read a type's name,
+// hash, size, and whether it is abstract.
+//===----------------------------------------------------------------------===//
+
+/// What Factory::Find or GetAllClasses reports about one registered type.
+/// `name` is borrowed, never NULL for a real entry (a string literal alive
+/// for the process). All-zero (name NULL) means nothing is registered
+/// under that name/hash.
+typedef struct ZJoltRttiInfo {
+  const char *name;
+  uint32_t hash;
+  int32_t size;
+  /// True if RTTI::CreateObject would return NULL — not reachable from
+  /// here either way.
+  bool is_abstract;
+} ZJoltRttiInfo;
+
+/// Looks a registered type up by name. All-zero if nothing is registered
+/// under it, or before zjoltInit.
+ZJOLT_API void zjoltFactoryFind(const char *name, ZJoltRttiInfo *out);
+
+/// Same lookup, by the hash zjoltFactoryFind's own result carries — the
+/// cheaper comparison a saved stream's type tag actually uses.
+ZJOLT_API void zjoltFactoryFindByHash(uint32_t hash, ZJoltRttiInfo *out);
+
+/// Every type this library's zjoltInit registered with Jolt's Factory.
+/// Two-call protocol: `out` NULL reports the count in `*out_count`.
+ZJOLT_API ZJoltResult zjoltFactoryGetAllClasses(ZJoltRttiInfo *out,
+                                                uint32_t capacity,
+                                                uint32_t *out_count);
+
+//===----------------------------------------------------------------------===//
+// Build report: covers what the macros below cannot show from the header
+// alone — ZJoltReal/ZJoltObjectLayer widths a mismatched build presents
+// with an identical header but different structs. zjoltAbiLayout reports
+// them; zjoltInit separately refuses a ZJOLT_CONFIG_ID mismatch outright.
 //===----------------------------------------------------------------------===//
 
 /// Bits of ZJoltAbiLayout::build_flags. These do not change any layout — they
@@ -608,19 +676,10 @@ ZJOLT_API uint32_t zjoltJobSystemGetMaxConcurrency(const ZJoltJobSystem *job_sys
 #define ZJOLT_BUILD_FLAG_ASSERTS_ENABLED (1u << 2)
 #define ZJOLT_BUILD_FLAG_CROSS_PLATFORM_DETERMINISTIC (1u << 3)
 
-/// What this library was built as, for a consumer that cannot check the header
-/// against its own declarations by reflection.
-///
-/// This used to carry a field-by-field layout report and a digest over it.
-/// Both are gone: the report was a hand-written duplicate of every struct in
-/// this header, so it could only catch a change to a field somebody remembered
-/// to list. Consumers that can enumerate their own declarations compare against
-/// the header directly instead — see src/abi_check.zig for the Zig side.
-///
-/// What is left is what reflection cannot tell you: which build this actually
-/// is. `config_id` is the same value `zjoltInit` refuses a mismatch on, so a
-/// host can check it up front and report a useful message instead of an error
-/// code.
+/// What this library was built as, for a consumer that cannot compare the
+/// header against its own declarations by reflection. `config_id` is the
+/// value zjoltInit itself refuses a mismatch on, so a host can check it
+/// up front and report a useful message instead of an error code.
 typedef struct ZJoltAbiLayout {
   /// sizeof(ZJoltAbiLayout). Read this first: if it disagrees with the
   /// consumer's own sizeof, the struct itself has changed and no field below
@@ -642,6 +701,55 @@ typedef struct ZJoltAbiLayout {
 /// Fills `out` with the layout the library was compiled with. Never fails.
 ZJOLT_API void zjoltAbiLayout(ZJoltAbiLayout *out);
 
+//===----------------------------------------------------------------------===//
+// Floating-point control word: forces denormal results on the calling
+// thread to flush to zero, so a deterministic build stays deterministic
+// across a call into third-party code that leaves the rounding/flush mode
+// changed. Pair every Enter with a Leave, LIFO, on the same thread; a no-op
+// on a target with no floating-point control word (WASM, RISC-V, PPC,
+// LoongArch).
+//===----------------------------------------------------------------------===//
+
+/// Opaque: the calling thread's control word before
+/// zjoltFPFlushDenormalsEnter ran. Meaningful only to
+/// zjoltFPFlushDenormalsLeave.
+typedef struct ZJoltFPControlWordState {
+  uint64_t reserved[1];
+} ZJoltFPControlWordState;
+
+/// Tolerates NULL.
+ZJOLT_API void zjoltFPFlushDenormalsEnter(ZJoltFPControlWordState *out);
+
+/// Restores the state `state` recorded. Tolerates NULL.
+ZJOLT_API void zjoltFPFlushDenormalsLeave(ZJoltFPControlWordState *state);
+
+//===----------------------------------------------------------------------===//
+// External profiler bridge: gated behind -Dexternal_profile
+// (JPH_EXTERNAL_PROFILE). Every entry point exists regardless, reporting
+// ZJOLT_RESULT_UNSUPPORTED when off. Once installed, `start`/`end` are
+// called at the start and end of every JPH_PROFILE scope Jolt's own source
+// (and this library's) places, until zjoltExternalProfilerClearHooks runs.
+//===----------------------------------------------------------------------===//
+
+/// Called when a profiled scope starts. `user_data` is 64 bytes, zeroed by
+/// the caller before this runs, for the host to carry state to the matching
+/// zjoltExternalProfilerEndFn call.
+typedef void (*ZJoltExternalProfilerStartFn)(void *user, const char *name,
+                                             uint32_t color,
+                                             uint8_t *user_data);
+
+/// Called when the scope that started with the same `user_data` ends.
+typedef void (*ZJoltExternalProfilerEndFn)(void *user, uint8_t *user_data);
+
+/// Installs `start`/`end`; both required. ZJOLT_RESULT_INVALID_ARGUMENT if
+/// either is NULL. ZJOLT_RESULT_UNSUPPORTED unless built with
+/// -Dexternal_profile.
+ZJOLT_API ZJoltResult zjoltExternalProfilerSetHooks(
+    ZJoltExternalProfilerStartFn start, ZJoltExternalProfilerEndFn end,
+    void *user);
+
+/// Uninstalls the hooks; a scope measured after this call is a no-op.
+ZJOLT_API void zjoltExternalProfilerClearHooks(void);
 
 #ifdef __cplusplus
 }  // extern "C"

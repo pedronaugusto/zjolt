@@ -34,7 +34,7 @@ cross-check makes any drift between the header and the Zig side a build
 failure, and there are no compatibility aliases anywhere, so there is exactly
 one spelling of everything.
 
-Working today: every Jolt subsystem, across 756 C entry points — shapes,
+Working today: every Jolt subsystem, across **1406 C entry points** — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,
 ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 [Scope](#scope) for what that covers and what is deliberately left out.
@@ -147,10 +147,10 @@ difference that matters is not spelling:
 
 |  | joltc | zjolt |
 |---|---|---|
-| entry points returning a result | none | 352 of 756 |
-| entry points returning `void` | 728 | 242 |
+| entry points returning a result | none | 739 of 1406 |
+| entry points returning `void` | 728 | 378 |
 | build-configuration handshake | none | `zjoltAbiLayout` + config id |
-| public headers | 1 | 20, one per subsystem |
+| public headers | 1 | 25, one per subsystem, behind one umbrella |
 
 joltc reports failure implicitly: a bad argument trips a Jolt assertion in a
 build that has them and does nothing in a build that does not. This package
@@ -444,6 +444,21 @@ upstream would compile perfectly and quietly start meaning something else.
 | `-Denable_asserts` | on in Debug | Keeps Jolt's internal assertions. |
 | `-Dsanitize_c` | `false` | Compiles the C and C++ with Zig's undefined-behaviour sanitizer. Off by default so the sanitizer runtime is never forced into a consumer's link; zjolt's own Debug runs turn it on. |
 | `-Dshared` | `false` | Builds the C library as a shared object. |
+| `-Ddebug_renderer` | `false` | Compiles Jolt's debug-draw geometry collection (`JPH_DEBUG_RENDERER`). |
+| `-Dprofile` | `false` | Compiles Jolt's profiler (`JPH_PROFILE_ENABLED`), which instruments every `JPH_PROFILE` scope in Jolt's own source. |
+| `-Dcpu_compute` | `true` | Compiles Jolt's CPU compute backend — what the hair solver runs on when the host lends no device. |
+| `-Dobject_stream` | `true` | Compiles Jolt's reflective object stream (`JPH_OBJECT_STREAM`) and its text and binary editor format. |
+| `-Dtrack_simulation_stats` | `false` | Tracks Jolt's per-body simulation stats (`JPH_TRACK_SIMULATION_STATS`). |
+| `-Dtrack_broadphase_stats` | `false` | Tracks Jolt's broad-phase query stats (`JPH_TRACK_BROADPHASE_STATS`). |
+| `-Dtrack_narrowphase_stats` | `false` | Tracks Jolt's per-shape-pair narrow-phase timing stats (`JPH_TRACK_NARROWPHASE_STATS`). |
+| `-Dexternal_profile` | `false` | Routes Jolt's profile scopes to a host profiler (`JPH_EXTERNAL_PROFILE`) instead of Jolt's own. Mutually exclusive with `-Dprofile`, and wins over it. |
+
+Only the first three rows change the ABI, and those three are folded into
+`ZJOLT_CONFIG_ID` so a mismatched consumer fails at link rather than at run
+time. The rest are compile-time scope: **every entry point is declared in every
+build.** One a flag turns off still exists and returns
+`ZJOLT_RESULT_UNSUPPORTED`, so a caller never has to `#ifdef` around a
+declaration, and a Zig caller never sees a missing symbol.
 
 ## Testing
 
@@ -534,11 +549,11 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 ```
 
 The default is trimmed rather than complete, which is a concession to what Jolt
-is: 174 translation units per configuration, so one is tens of seconds rather
+is: 179 translation units per configuration, so one is tens of seconds rather
 than the couple of seconds a smaller library would take. On the machine this
-was written on, `--full` is 22 checks — 14 of them building and running the
-suite, 8 cross-compiling — in about four minutes from a cold cache; the
-default is a few seconds once the cache is warm.
+was written on, `--full` is 25 checks — 17 of them building and running the
+suite, 8 cross-compiling — in about eight minutes from a cold cache; the
+default is under a minute once the cache is warm.
 
 Every number in this README comes from `ci/measurements.sh`, which recomputes
 them. Run it before editing one.
@@ -566,8 +581,11 @@ measurement said so.
 
 ## Scope
 
-Every Jolt subsystem is bound. 756 C entry points across 20 headers, each one
-mirrored by a Zig wrapper that a reflective cross-check pairs at build time.
+Every Jolt subsystem is bound: **1406 C entry points** across **25 headers**,
+each one mirrored by a Zig wrapper that a reflective cross-check pairs at build
+time. Not one entry point is stranded — `tools/zig_surface_exceptions.txt` is
+empty, and `ci/check-coverage.sh` fails both if an entry point loses its Zig
+caller and if an excuse is written for one that has a caller after all.
 
 - **Shapes** — every kind Jolt can construct: the convex primitives (box,
   sphere, capsule, cylinder, triangle, tapered capsule, tapered cylinder,
@@ -607,11 +625,34 @@ mirrored by a Zig wrapper that a reflective cross-check pairs at build time.
   rollback, replay and determinism checks.
 - **Debug draw**, as arrays of lines, triangles and text for the host to
   render.
+- **Scenes** — a whole world described as data, saved and restored, so a level
+  loads in one call instead of a thousand.
+- **Custom shapes** — a Zig host implements Jolt's own shape interface, convex
+  or general, without writing C++.
+- **Geometry primitives on their own terms** — GJK and EPA against any two
+  support functions, convex hull building, polygon clipping, triangle
+  indexing, and the AABB tree builder and splitters that `MeshShape` is packed
+  from. Usable without a physics system.
+- **Triangle collision** — collide or cast a convex shape or a sphere against
+  triangles fed one at a time, with active-edge normals and internal-edge
+  removal, which is what a custom triangle source needs.
+- **Reflection and serialisation** — Jolt's RTTI over its own registered types
+  and the ObjectStream text and binary formats.
+- **The solver's constraint parts**, ported to Zig rather than bound: all
+  fourteen of them, so a custom constraint's inner loop makes no foreign call.
+- **Deterministic maths** — Jolt's own trigonometry, matrix inversion and
+  half-float conversions, bit-for-bit, for a build that has to agree with a
+  C++ one.
 
 Deliberately out of scope, and staying that way: a fixed-timestep loop, an
 entity system, an asset format, and any coupling to a particular renderer.
 Debug geometry comes out as data for the host to draw. Those are a host's job,
 and keeping them out is what makes this package reusable.
+
+There are no known coverage gaps: `ci/check-coverage.sh` fails the build while
+any public Jolt name in the claimed areas lacks a verdict, and it recomputes
+every exclusion from Jolt's own headers on each run. Design decisions that stay settled are recorded at the end of
+[BINDING.md](BINDING.md).
 
 ## Contributing
 

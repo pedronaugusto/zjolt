@@ -15,6 +15,10 @@
 const std = @import("std");
 const zjolt = @import("zjolt.zig");
 const fixture = @import("integration_test.zig");
+// `SkeletalAnimation` is not re-exported from `zjolt.zig` yet, so it is
+// reached through `ragdoll.zig` directly. Named apart from the many local
+// `ragdoll` variables (spawned `Ragdoll` instances) below.
+const ragdoll_mod = @import("ragdoll.zig");
 
 const Layers = fixture.Layers;
 const World = fixture.World;
@@ -223,7 +227,7 @@ test "driveToPoseUsingMotors moves the pose toward the target rather than away" 
 
     // A 0.7 radian tilt off the chain's resting orientation — comfortably
     // inside the cone `Chain.build` set up.
-    const target_rotation = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), 0.7);
+    const target_rotation = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 0, 1), 0.7);
 
     var pose = try zjolt.SkeletonPose.init();
     defer pose.deinit();
@@ -474,6 +478,257 @@ test "calculateConstraintPriorities counts up from the leaves toward the root" {
     );
 }
 
+test "RagdollSettings' body-index/constraint-index maps agree with joint parentage" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var limb = try Limb.build();
+    defer limb.deinit();
+
+    // Before either Calculate* call, both tables are empty, so every index
+    // reads as out of range rather than as a zeroed entry.
+    try std.testing.expectEqual(@as(?u32, null), limb.settings.constraintIndexForBodyIndex(1));
+    try std.testing.expectError(
+        error.InvalidArgument,
+        limb.settings.bodyIndicesForConstraintIndex(0),
+    );
+
+    limb.settings.calculateBodyIndexToConstraintIndex();
+    limb.settings.calculateConstraintIndexToBodyIdxPair();
+
+    // Root (0) has no parent, so no constraint of its own; middle (1) and
+    // leaf (2) each get the constraint attaching them to their parent,
+    // numbered in the order their parts appear.
+    try std.testing.expectEqual(@as(?u32, null), limb.settings.constraintIndexForBodyIndex(0));
+    try std.testing.expectEqual(@as(?u32, 0), limb.settings.constraintIndexForBodyIndex(1));
+    try std.testing.expectEqual(@as(?u32, 1), limb.settings.constraintIndexForBodyIndex(2));
+    try std.testing.expectEqual(@as(?u32, null), limb.settings.constraintIndexForBodyIndex(99));
+
+    var table_buf: [3]i32 = undefined;
+    const table = try limb.settings.bodyIndexToConstraintIndex(&table_buf);
+    try std.testing.expectEqualSlices(i32, &.{ -1, 0, 1 }, table);
+
+    // Constraint 0 attaches body 1 (middle) to body 0 (root); constraint 1
+    // attaches body 2 (leaf) to body 1 (middle) — parent first, then child.
+    const middle_constraint = try limb.settings.bodyIndicesForConstraintIndex(0);
+    try std.testing.expectEqual(@as(i32, 0), middle_constraint.body_index1);
+    try std.testing.expectEqual(@as(i32, 1), middle_constraint.body_index2);
+
+    const leaf_constraint = try limb.settings.bodyIndicesForConstraintIndex(1);
+    try std.testing.expectEqual(@as(i32, 1), leaf_constraint.body_index1);
+    try std.testing.expectEqual(@as(i32, 2), leaf_constraint.body_index2);
+
+    try std.testing.expectError(
+        error.InvalidArgument,
+        limb.settings.bodyIndicesForConstraintIndex(2),
+    );
+
+    var pairs_buf: [2]zjolt.RagdollSettings.BodyIndexPair = undefined;
+    const pairs = try limb.settings.constraintIndexToBodyIdxPair(&pairs_buf);
+    try std.testing.expectEqual(@as(usize, 2), pairs.len);
+    try std.testing.expectEqual(@as(i32, 0), pairs[0].body_index1);
+    try std.testing.expectEqual(@as(i32, 1), pairs[0].body_index2);
+    try std.testing.expectEqual(@as(i32, 1), pairs[1].body_index1);
+    try std.testing.expectEqual(@as(i32, 2), pairs[1].body_index2);
+
+    // A buffer shorter than the table reports BufferTooSmall rather than
+    // writing a truncated table silently.
+    var short_buf: [1]i32 = undefined;
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        limb.settings.bodyIndexToConstraintIndex(&short_buf),
+    );
+}
+
+//=============================================================================
+// SkeletalAnimation
+//=============================================================================
+
+test "sampling an animation interpolates between keyframes the way SLERP and lerp do" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var skeleton = try zjolt.Skeleton.init();
+    defer skeleton.release();
+    _ = try skeleton.addJoint("j0", null);
+
+    var anim = try ragdoll_mod.SkeletalAnimation.init();
+    defer anim.release();
+    try std.testing.expectEqual(@as(u32, 0), anim.animatedJointCount());
+
+    const joint = try anim.addAnimatedJoint("j0");
+    try std.testing.expectEqual(@as(u32, 0), joint);
+    try std.testing.expectEqual(@as(u32, 1), anim.animatedJointCount());
+    try std.testing.expectEqualStrings("j0", anim.animatedJointName(joint));
+    try std.testing.expectEqualStrings("", anim.animatedJointName(1));
+
+    const end_rotation = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 0, 1), std.math.pi / 2.0);
+    try anim.addKeyframe(joint, 0.0, zjolt.quat_identity, zjolt.vec3_zero);
+    try anim.addKeyframe(joint, 1.0, end_rotation, zjolt.vec3(0, 2, 0));
+    try std.testing.expectEqual(@as(u32, 2), anim.keyframeCount(joint));
+    try std.testing.expectEqual(@as(u32, 0), anim.keyframeCount(1));
+
+    const first = try anim.keyframe(joint, 0);
+    try std.testing.expectEqual(@as(f32, 0.0), first.time);
+    try expectVec3Near(zjolt.vec3_zero, first.translation);
+    const last = try anim.keyframe(joint, 1);
+    try std.testing.expectEqual(@as(f32, 1.0), last.time);
+    try expectVec3Near(zjolt.vec3(0, 2, 0), last.translation);
+
+    try std.testing.expectEqual(@as(f32, 1.0), anim.duration());
+    try std.testing.expect(anim.isLooping());
+    anim.setIsLooping(false);
+    try std.testing.expect(!anim.isLooping());
+
+    var pose = try zjolt.SkeletonPose.init();
+    defer pose.deinit();
+    try pose.setSkeleton(skeleton);
+
+    // Halfway between the two keyframes: linear interpolation of the
+    // translation, and — since the two rotations share an axis — exactly
+    // half the rotation's angle, which is what SLERP between them gives.
+    try anim.sample(0.5, pose);
+
+    var rotations: [1]zjolt.Quat = undefined;
+    var translations: [1]zjolt.Vec3 = undefined;
+    try pose.getJoints(&rotations, &translations);
+
+    try expectVec3Near(zjolt.vec3(0, 1, 0), translations[0]);
+    const expected_rotation = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 0, 1), std.math.pi / 4.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), quatAngle(expected_rotation, rotations[0]), 1e-4);
+
+    // Before the first keyframe and after the last: clamped to the nearest
+    // end (looping is off), not extrapolated.
+    try anim.sample(0.0, pose);
+    try pose.getJoints(&rotations, &translations);
+    try expectVec3Near(zjolt.vec3_zero, translations[0]);
+
+    try anim.sample(5.0, pose);
+    try pose.getJoints(&rotations, &translations);
+    try expectVec3Near(zjolt.vec3(0, 2, 0), translations[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), quatAngle(end_rotation, rotations[0]), 1e-4);
+
+    // ScaleJoints scales every keyframe's translation, not its rotation.
+    anim.scaleJoints(2.0);
+    const scaled = try anim.keyframe(joint, 1);
+    try expectVec3Near(zjolt.vec3(0, 4, 0), scaled.translation);
+}
+
+test "invalid indices, times and poses into an animation return an error" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var anim = try ragdoll_mod.SkeletalAnimation.init();
+    defer anim.release();
+    const joint = try anim.addAnimatedJoint("only");
+    try anim.addKeyframe(joint, 0.0, zjolt.quat_identity, zjolt.vec3_zero);
+
+    try std.testing.expectError(
+        error.InvalidArgument,
+        anim.addKeyframe(joint + 1, 0.0, zjolt.quat_identity, zjolt.vec3_zero),
+    );
+    try std.testing.expectError(error.InvalidArgument, anim.keyframe(joint + 1, 0));
+    try std.testing.expectError(error.InvalidArgument, anim.keyframe(joint, 1));
+
+    // Keyframes must be added in non-decreasing time order — Sample's binary
+    // search over them assumes it, and Jolt does not check.
+    try anim.addKeyframe(joint, 2.0, zjolt.quat_identity, zjolt.vec3_zero);
+    try std.testing.expectError(
+        error.InvalidArgument,
+        anim.addKeyframe(joint, 1.0, zjolt.quat_identity, zjolt.vec3_zero),
+    );
+
+    // Sampling onto a pose whose skeleton does not have the animated joint's
+    // name would index the pose with no bounds check inside Jolt.
+    var different = try zjolt.Skeleton.init();
+    defer different.release();
+    _ = try different.addJoint("not-only", null);
+    var mismatched_pose = try zjolt.SkeletonPose.init();
+    defer mismatched_pose.deinit();
+    try mismatched_pose.setSkeleton(different);
+    try std.testing.expectError(error.InvalidArgument, anim.sample(0.0, mismatched_pose));
+
+    // A pose with no skeleton assigned at all, and a negative time, are
+    // refused the same way.
+    var bare_pose = try zjolt.SkeletonPose.init();
+    defer bare_pose.deinit();
+    try std.testing.expectError(error.InvalidArgument, anim.sample(0.0, bare_pose));
+
+    var matching = try zjolt.Skeleton.init();
+    defer matching.release();
+    _ = try matching.addJoint("only", null);
+    try bare_pose.setSkeleton(matching);
+    try std.testing.expectError(error.InvalidArgument, anim.sample(-1.0, bare_pose));
+}
+
+test "SaveBinaryState / sRestoreFromBinaryState round-trips an animation" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var anim = try ragdoll_mod.SkeletalAnimation.init();
+    defer anim.release();
+    const j0 = try anim.addAnimatedJoint("root");
+    const j1 = try anim.addAnimatedJoint("child");
+    try anim.addKeyframe(j0, 0.0, zjolt.quat_identity, zjolt.vec3_zero);
+    try anim.addKeyframe(
+        j0,
+        1.0,
+        try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 1, 0), 1.0),
+        zjolt.vec3(1, 0, 0),
+    );
+    try anim.addKeyframe(
+        j1,
+        0.5,
+        try zjolt.Quat.fromAxisAngle(zjolt.vec3(1, 0, 0), 0.25),
+        zjolt.vec3(0, 0, 3),
+    );
+    anim.setIsLooping(false);
+
+    var stream_buffer: [4096]u8 = undefined;
+    var writer: zjolt.StreamBufferWriter = .{ .buffer = &stream_buffer };
+    try anim.saveBinaryState(zjolt.hostStream(zjolt.StreamBufferWriter, &writer));
+
+    var reader: zjolt.StreamBufferReader = .{ .buffer = writer.slice() };
+    var restored = try ragdoll_mod.SkeletalAnimation.restoreBinaryState(
+        zjolt.hostStream(zjolt.StreamBufferReader, &reader),
+    );
+    defer restored.release();
+
+    try std.testing.expectEqual(anim.animatedJointCount(), restored.animatedJointCount());
+    try std.testing.expectEqual(anim.isLooping(), restored.isLooping());
+    try std.testing.expectEqual(anim.duration(), restored.duration());
+
+    var i: u32 = 0;
+    while (i < restored.animatedJointCount()) : (i += 1) {
+        try std.testing.expectEqualStrings(anim.animatedJointName(i), restored.animatedJointName(i));
+        try std.testing.expectEqual(anim.keyframeCount(i), restored.keyframeCount(i));
+
+        var k: u32 = 0;
+        while (k < anim.keyframeCount(i)) : (k += 1) {
+            const original = try anim.keyframe(i, k);
+            const copy = try restored.keyframe(i, k);
+            try std.testing.expectEqual(original.time, copy.time);
+            try expectVec3Near(original.translation, copy.translation);
+            try std.testing.expectApproxEqAbs(@as(f32, 0), quatAngle(original.rotation, copy.rotation), 1e-6);
+        }
+    }
+}
+
+test "JointState.toMatrix and fromMatrix invert each other" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const rotation = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 1, 0), 0.9);
+    const translation = zjolt.vec3(1, 2, 3);
+    const state: ragdoll_mod.SkeletalAnimation.JointState = .{ .rotation = rotation, .translation = translation };
+
+    const matrix = state.toMatrix();
+    const back = ragdoll_mod.SkeletalAnimation.JointState.fromMatrix(matrix);
+
+    try expectVec3Near(translation, back.translation);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), quatAngle(rotation, back.rotation), 1e-5);
+}
+
 //=============================================================================
 // SkeletonMapper
 //=============================================================================
@@ -499,7 +754,7 @@ test "a skeleton mapper drives a high-detail skeleton from a low-detail one" {
 
     // The simulated pose: the whole ragdoll has moved two metres along x, and
     // the hand has rotated.
-    const twist = try zjolt.quatFromAxisAngle(zjolt.vec3(0, 0, 1), 0.5);
+    const twist = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 0, 1), 0.5);
     const pose1 = try zjolt.SkeletonPose.init();
     defer pose1.deinit();
     try pose1.setSkeleton(pair.ragdoll_skeleton);
@@ -673,6 +928,96 @@ test "locking translations holds a stretched joint at its neutral offset" {
             some.lockTranslations(pair.neutral2, &.{ false, false }),
         );
     }
+}
+
+test "GetChains reports the joints of skeleton 2 between two mapped joints" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // Skeleton 1: root -> hand, directly. Skeleton 2 has the same two named
+    // joints, but with an extra "elbow" between them that skeleton 1 has no
+    // equivalent for — exactly the shape a chain describes.
+    var low = try zjolt.Skeleton.init();
+    defer low.release();
+    const low_root = try low.addJoint("root", null);
+    _ = try low.addJoint("hand", low_root);
+
+    var high = try zjolt.Skeleton.init();
+    defer high.release();
+    const high_root = try high.addJoint("root", null);
+    const high_elbow = try high.addJoint("elbow", high_root);
+    _ = try high.addJoint("hand", high_elbow);
+
+    const neutral_low = try zjolt.SkeletonPose.init();
+    defer neutral_low.deinit();
+    try neutral_low.setSkeleton(low);
+    try neutral_low.setJoints(
+        &.{ zjolt.quat_identity, zjolt.quat_identity },
+        &.{ zjolt.vec3_zero, zjolt.vec3(0, 2, 0) },
+    );
+    try neutral_low.calculateJointMatrices();
+
+    const neutral_high = try zjolt.SkeletonPose.init();
+    defer neutral_high.deinit();
+    try neutral_high.setSkeleton(high);
+    try neutral_high.setJoints(
+        &.{ zjolt.quat_identity, zjolt.quat_identity, zjolt.quat_identity },
+        &.{ zjolt.vec3_zero, zjolt.vec3(0, 1, 0), zjolt.vec3(0, 1, 0) },
+    );
+    try neutral_high.calculateJointMatrices();
+
+    const mapper = try zjolt.SkeletonMapper.init();
+    defer mapper.release();
+    try mapper.initialize(neutral_low, neutral_high, null, null);
+
+    try std.testing.expectEqual(@as(u32, 2), mapper.mappingCount());
+    try std.testing.expectEqual(@as(u32, 0), mapper.unmappedCount());
+    try std.testing.expectEqual(@as(u32, 1), mapper.chainCount());
+
+    const counts = mapper.chainJointCounts(0);
+    try std.testing.expectEqual(@as(u32, 2), counts.count1);
+    try std.testing.expectEqual(@as(u32, 3), counts.count2);
+
+    // Skeleton 1's run is just the two mapped ends, root then hand.
+    try std.testing.expectEqual(@as(?u32, 0), mapper.chainJointIndex1(0, 0));
+    try std.testing.expectEqual(@as(?u32, 1), mapper.chainJointIndex1(0, 1));
+    try std.testing.expectEqual(@as(?u32, null), mapper.chainJointIndex1(0, 2));
+
+    // Skeleton 2's run is the same two ends with elbow in between.
+    try std.testing.expectEqual(@as(?u32, 0), mapper.chainJointIndex2(0, 0));
+    try std.testing.expectEqual(@as(?u32, high_elbow), mapper.chainJointIndex2(0, 1));
+    try std.testing.expectEqual(@as(?u32, 2), mapper.chainJointIndex2(0, 2));
+    try std.testing.expectEqual(@as(?u32, null), mapper.chainJointIndex2(0, 3));
+
+    // Past the chain count, both axes report the same as an empty chain.
+    try std.testing.expectEqual(@as(?u32, null), mapper.chainJointIndex1(1, 0));
+    try std.testing.expectEqual(@as(?u32, null), mapper.chainJointIndex2(1, 0));
+    const empty_counts = mapper.chainJointCounts(1);
+    try std.testing.expectEqual(@as(u32, 0), empty_counts.count1);
+    try std.testing.expectEqual(@as(u32, 0), empty_counts.count2);
+}
+
+test "GetUnmapped reports a joint of skeleton 2 that has no counterpart at all" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // The render skeleton's "finger" is a leaf beyond the last mapped joint,
+    // not a joint between two mapped ones — so it is unmapped, not a chain.
+    var pair = try SkeletonPair.build();
+    defer pair.deinit();
+
+    const mapper = try zjolt.SkeletonMapper.init();
+    defer mapper.release();
+    try mapper.initialize(pair.neutral1, pair.neutral2, null, null);
+
+    try std.testing.expectEqual(@as(u32, 0), mapper.chainCount());
+    try std.testing.expectEqual(@as(u32, 1), mapper.unmappedCount());
+
+    const finger = try mapper.unmapped(0);
+    try std.testing.expectEqual(@as(u32, 2), finger.joint_index);
+    try std.testing.expectEqual(@as(?u32, 1), finger.parent_joint_index);
+
+    try std.testing.expectError(error.InvalidArgument, mapper.unmapped(1));
 }
 
 //=============================================================================

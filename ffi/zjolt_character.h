@@ -1,8 +1,5 @@
 //===----------------------------------------------------------------------===//
 // zjolt — character controllers.
-//
-// Part of the zjolt C ABI. Include <zjolt.h>, which pulls in every part; this
-// file is split out so that no single header has to carry the whole surface.
 //===----------------------------------------------------------------------===//
 
 #ifndef ZJOLT_CHARACTER_H_
@@ -19,12 +16,10 @@ extern "C" {
 #endif
 
 //===----------------------------------------------------------------------===//
-// Character
-//
-// CharacterVirtual is not a rigid body: it is a shape that is swept through
-// the world under the host's control, which is what makes it feel like a game
-// character rather than a barrel. It can optionally carry an inner rigid body
-// so that other bodies and queries can see it.
+// Character: CharacterVirtual is not a rigid body — a shape swept through
+// the world under the host's control, which is what makes it feel like a
+// game character rather than a barrel. Optionally carries an inner rigid
+// body so other bodies and queries can see it.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltCharacterDesc {
@@ -128,6 +123,27 @@ ZJOLT_API uint64_t zjoltCharacterGetGroundUserData(
 /// Recomputes the ground velocity, for reading after moving the ground body.
 ZJOLT_API void zjoltCharacterUpdateGroundVelocity(ZJoltCharacter *character);
 
+/// The velocity `body_b` counts as having for ground-velocity purposes: its
+/// own linear/angular velocity (zero if STATIC), adjusted by this
+/// character's listener if one is installed via zjoltCharacterSetListener —
+/// CharacterVirtual::GetAdjustedBodyVelocity, the building block
+/// zjoltCharacterUpdateGroundVelocity itself uses. ZJOLT_RESULT_BODY_NOT_FOUND
+/// for a stale `body_b`.
+ZJOLT_API ZJoltResult zjoltCharacterGetAdjustedBodyVelocity(
+    const ZJoltCharacter *character, ZJoltBodyId body_b,
+    ZJoltVec3 *out_linear_velocity, ZJoltVec3 *out_angular_velocity);
+
+/// What this character's own velocity would be if it stood on an object at
+/// `center_of_mass` moving with `linear_velocity`/`angular_velocity` —
+/// CharacterVirtual::CalculateCharacterGroundVelocity, the other building
+/// block zjoltCharacterUpdateGroundVelocity uses, exposed standalone for a
+/// hypothetical ground body rather than the character's actual one. Reads
+/// only the character's current position; writes nothing.
+ZJOLT_API void zjoltCharacterCalculateGroundVelocity(
+    const ZJoltCharacter *character, const ZJoltRVec3 *center_of_mass,
+    const ZJoltVec3 *linear_velocity, const ZJoltVec3 *angular_velocity,
+    float delta_time, ZJoltVec3 *out);
+
 /// Swaps the shape — crouching. Fails without changing anything if the new
 /// shape would be more than `max_penetration_depth` inside the world.
 ZJOLT_API ZJoltResult zjoltCharacterSetShape(
@@ -141,28 +157,18 @@ ZJOLT_API ZJoltBodyId zjoltCharacterGetInnerBodyId(
     const ZJoltCharacter *character);
 
 /// Gives the inner rigid body a shape of its own, independent of the one the
-/// character sweeps.
-///
-/// zjoltCharacterSetShape already keeps the inner body in step by handing it
-/// the new swept shape, which is what a crouch wants. This is for the case
-/// that undoes: a character created with an `inner_body_shape` DIFFERENT from
-/// its `shape` — a cheap proxy for casts against a detailed sweep volume, say
-/// — loses that distinction the first time the swept shape is swapped, and
-/// this is what puts it back.
-///
-/// Reports ZJOLT_RESULT_INVALID_ARGUMENT for a character created without an
-/// inner body, rather than silently doing nothing: Jolt's own SetInnerBodyShape
-/// would reach the body interface with an invalid id and return quietly.
+/// character sweeps. zjoltCharacterSetShape already keeps the inner body in
+/// step with the new swept shape (what a crouch wants); this is for undoing
+/// that — putting back an `inner_body_shape` DIFFERENT from `shape` (a cheap
+/// cast proxy, say) after a swap overwrote it. ZJOLT_RESULT_INVALID_ARGUMENT
+/// for a character with no inner body, rather than silently doing nothing.
 ZJOLT_API ZJoltResult zjoltCharacterSetInnerBodyShape(
     ZJoltCharacter *character, const ZJoltShape *shape);
 
 //===----------------------------------------------------------------------===//
-// CharacterBase, on the virtual character
-//
-// Everything below was on CharacterBase or CharacterVirtual but missing above.
-// The identifier of a character (as opposed to a body) is a CharacterID —
-// used for deterministic sort order and to name a character in a contact
-// callback after it may already be gone.
+// CharacterBase, on the virtual character. A character's identifier (as
+// opposed to a body's) is a CharacterID — used for deterministic sort order
+// and to name a character in a contact callback after it may already be gone.
 //===----------------------------------------------------------------------===//
 
 /// The numeric value of a Jolt CharacterID. Two characters never share one,
@@ -235,22 +241,17 @@ ZJOLT_API bool zjoltCharacterIsSlopeTooSteep(const ZJoltCharacter *character,
                                              const ZJoltVec3 *normal);
 
 //===----------------------------------------------------------------------===//
-// The supporting volume
+// The supporting volume: a plane in the character's LOCAL space, (normal,
+// distance) with signed distance `dot(normal, p) + distance`. A contact
+// behind it may support the character; one in front only collides — the
+// second half of the ground test (max slope angle rejects by normal, this
+// rejects by where on the shape it landed), keeping a wall the character
+// leans on from reading as floor.
 //
-// A plane in the character's LOCAL space. A contact behind it may support the
-// character; one in front of it only collides. It is the second half of the
-// ground test — the max slope angle rejects a contact by its normal, this
-// rejects one by where on the shape it landed — and it is what keeps a wall
-// the character is pressed against from being reported as the floor.
-//
-// The plane is (normal, distance) with signed distance
-// `dot(normal, p) + distance` for a local point p, matching Jolt's own Plane.
-// zjoltCharacterCreate installs one an inner radius above the shape's lowest
-// point, which is what Jolt's samples use; Jolt's own default accepts every
-// contact. Raising it makes the character pickier about what counts as
-// ground, and putting it at the shape's lowest point is the tempting mistake
-// that breaks every slope, because a capsule on a ramp touches it on the SIDE
-// of its bottom cap, above the lowest point.
+// zjoltCharacterCreate installs one an inner radius above the shape's
+// lowest point. Putting it AT the lowest point is the tempting mistake that
+// breaks every slope: a capsule on a ramp touches the plane on the SIDE of
+// its bottom cap, above the lowest point.
 //===----------------------------------------------------------------------===//
 
 ZJOLT_API void zjoltCharacterGetSupportingVolume(
@@ -313,26 +314,21 @@ ZJOLT_API void zjoltCharacterCancelVelocityTowardsSteepSlopes(
     const ZJoltCharacter *character, const ZJoltVec3 *desired_velocity,
     ZJoltVec3 *out);
 
-/// Groups a run of Update / WalkStairs / StickToFloor / ExtendedUpdate calls
-/// so the contact listener sees one added/persisted/removed transition per
-/// contact for the whole run, instead of one per call. Every
-/// zjoltCharacterStartTrackingContactChanges needs exactly one matching
-/// zjoltCharacterFinishTrackingContactChanges — Jolt asserts on an unbalanced
-/// pair in a debug build, and an unfinished one leaks its bookkeeping into the
-/// next frame.
+/// Groups a run of Update/WalkStairs/StickToFloor/ExtendedUpdate calls so
+/// the contact listener sees one added/persisted/removed transition per
+/// contact for the run, not one per call. Every Start needs exactly one
+/// matching Finish — an unbalanced pair asserts in debug and leaks
+/// bookkeeping into the next frame otherwise.
 ZJOLT_API void zjoltCharacterStartTrackingContactChanges(
     ZJoltCharacter *character);
 ZJOLT_API void zjoltCharacterFinishTrackingContactChanges(
     ZJoltCharacter *character);
 
 //===----------------------------------------------------------------------===//
-// Stair walking and floor sticking, standalone
-//
-// zjoltCharacterUpdate already runs both of these through
-// ZJoltCharacterUpdateSettings when it is given one (that is Jolt's own
-// ExtendedUpdate). These are the two pieces on their own, for a host that
-// wants to run them at a different point in its frame than Update, or with
-// different parameters per call.
+// Stair walking and floor sticking, standalone: zjoltCharacterUpdate already
+// runs both through ZJoltCharacterUpdateSettings (Jolt's ExtendedUpdate).
+// These are the two pieces alone, for a host that wants to run them at a
+// different point in its frame, or with different parameters per call.
 //===----------------------------------------------------------------------===//
 
 /// True if the character just moved into a slope steeper than it can climb,
@@ -382,33 +378,28 @@ ZJOLT_API bool zjoltCharacterHasCollidedWithCharacter(
     const ZJoltCharacter *character, ZJoltCharacterId other_character_id);
 
 //===----------------------------------------------------------------------===//
-// Asking about a placement the character is not at
+// Asking about a placement the character is not at: "what would happen if"
+// — whether a stance fits, whether a spawn point is clear, what a shot
+// would hit — without moving it. zjolt_transformed.h owns the handle the
+// first call hands back; declared here too since naming an opaque type
+// doesn't require its defining header.
 //
-// Everything above reports where the character IS. These two answer "what
-// would happen if" — whether a stance fits, whether a spawn point is clear,
-// what a shot at this character would hit — without moving it.
-//
-// zjolt_transformed.h owns the handle the first one hands back; it is
-// declared here as well because a C header naming an opaque type does not
-// need the header that defines it, and pulling that one in for a single
-// pointer would drag its query surface along with it.
+// zjoltCharacterCheckCollision is not zjoltCollideShapeAll with the
+// character's shape: it applies the character's own back-face mode,
+// active-edge handling, enhanced internal edge removal and padding, skips
+// its inner body, and also tests the character-vs-character list —
+// unreachable from zjolt_query.h, since those characters are not in the
+// broad phase.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltTransformedShape ZJoltTransformedShape;
 
 /// The character's current volume, placed where the character is, as a
-/// standalone queryable shape — release it with zjoltTransformedShapeDestroy.
-///
-/// This is the only way to hit a virtual character with a cast. Jolt never
-/// puts a CharacterVirtual in the broad phase, so no zjoltCastRay* against
-/// the system will ever find one unless it was given an inner body; running
-/// the cast against this handle instead is what closes that.
-///
-/// It is a SNAPSHOT: the placement is copied out, and the handle does not
-/// follow the character afterwards. Take a fresh one per frame, or reposition
-/// this one with zjoltTransformedShapeSetWorldTransform — note that takes a
-/// centre-of-mass position, which is what this was built from and NOT what
-/// zjoltCharacterGetPosition returns.
+/// standalone queryable shape — release with zjoltTransformedShapeDestroy.
+/// The only way to hit a virtual character with a cast (Jolt never puts one
+/// in the broad phase, so zjoltCastRay* misses it without an inner body). A
+/// SNAPSHOT: reposition with zjoltTransformedShapeSetWorldTransform, whose
+/// position is centre-of-mass, NOT what zjoltCharacterGetPosition returns.
 ZJOLT_API ZJoltResult zjoltCharacterGetTransformedShape(
     const ZJoltCharacter *character, ZJoltTransformedShape **out);
 
@@ -441,25 +432,11 @@ typedef struct ZJoltCharacterCollisionHit {
 } ZJoltCharacterCollisionHit;
 
 /// Everything `shape` would overlap if the character stood at
-/// `position`/`rotation`, without moving the character or touching its
-/// contacts. Count-then-fill: `out_hits` NULL reports the count in
-/// `*out_count` and writes nothing; a `capacity` short of that reports
-/// ZJOLT_RESULT_BUFFER_TOO_SMALL with the true count still written.
-///
-/// This is not zjoltCollideShapeAll with the character's shape. It applies
-/// the character's own back-face mode, active-edge handling, enhanced
-/// internal edge removal and padding, skips the character's own inner body,
-/// and also tests the character-vs-character list — which nothing in
-/// zjolt_query.h can reach, because those characters are not in the broad
-/// phase to be found.
-///
-/// `shape` NULL uses the character's current shape, which is what a "does the
-/// standing pose fit here" test wants; pass a different one to ask about a
-/// stance the character has not switched to yet. `rotation` NULL uses the
-/// character's current rotation, `movement_direction` NULL means no hint —
-/// it only steers which mesh edges count as active, so a wrong one costs
-/// accuracy on internal edges rather than correctness. `filters` NULL
-/// collides with everything.
+/// `position`/`rotation`, without moving it or touching its contacts.
+/// Count-then-fill: `out_hits` NULL reports the count; a short `capacity`
+/// reports ZJOLT_RESULT_BUFFER_TOO_SMALL with the true count. `shape`/
+/// `rotation` NULL use the character's current shape/rotation;
+/// `movement_direction`/`filters` NULL mean no hint / collide with everything.
 ZJOLT_API ZJoltResult zjoltCharacterCheckCollision(
     const ZJoltCharacter *character, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *movement_direction,
@@ -468,22 +445,14 @@ ZJOLT_API ZJoltResult zjoltCharacterCheckCollision(
     uint32_t capacity, uint32_t *out_count);
 
 //===----------------------------------------------------------------------===//
-// CharacterContactListener
+// CharacterContactListener: fires as a virtual character finds, keeps and
+// loses contacts. A NULL field behaves as Jolt's own default (accept every
+// contact, change nothing). A callback names the character by
+// ZJoltCharacterId, not handle — match it against zjoltCharacterGetId,
+// since Jolt hands this a raw internal CharacterVirtual pointer that cannot
+// be turned back into a ZJoltCharacter.
 //
-// Fires as a virtual character finds, keeps and loses contacts. Crosses as
-// function pointers plus a `void *user`, never a mirrored C++ vtable — any
-// field left NULL behaves as Jolt's own default override (accept every
-// contact, change nothing).
-//
-// A callback names the character it was called about by ZJoltCharacterId, not
-// by handle: Jolt hands this code a raw pointer to its own internal
-// CharacterVirtual, which is not the ZJoltCharacter this API handed out and
-// cannot be turned back into one. Match the id against whichever
-// ZJoltCharacter(s) you attached this listener to with zjoltCharacterGetId.
-//
-// NOTHING MAY UNWIND OUT OF ONE OF THESE. Jolt is built with exceptions off,
-// so an exception crossing a callback is std::terminate — and from a Zig host,
-// a panic crossing one skips lock destructors and can wedge the next Update.
+// NOTHING MAY UNWIND OUT OF ONE OF THESE — Jolt is built with exceptions off.
 //===----------------------------------------------------------------------===//
 
 typedef void (*ZJoltCharacterOnAdjustBodyVelocityFn)(
@@ -573,12 +542,13 @@ ZJOLT_API ZJoltCharacterContactListener *zjoltCharacterGetListener(
     const ZJoltCharacter *character);
 
 //===----------------------------------------------------------------------===//
-// Character-vs-character collision
-//
-// CharacterVirtual is not in the broad phase, so nothing sees it unless it is
-// told to look. This is Jolt's CharacterVsCharacterCollisionSimple: a plain
-// list of characters, checked by brute force. It is not thread-safe — only
-// one CharacterVirtual may be checking collision against it at a time.
+// Character-vs-character collision: CharacterVirtual is not in the broad
+// phase, so nothing sees it unless told to look. This is Jolt's
+// CharacterVsCharacterCollisionSimple — a plain list, checked by brute
+// force, NOT thread-safe (one CharacterVirtual may check it at a time).
+// zjoltCharacterVsCharacterCollisionCreateCustom below builds the same kind
+// of handle from a host's own callbacks instead, for a spatial structure or
+// anything else the brute-force scan cannot do.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltCharacterVsCharacterCollision ZJoltCharacterVsCharacterCollision;
@@ -588,6 +558,9 @@ ZJOLT_API ZJoltResult zjoltCharacterVsCharacterCollisionCreate(
 ZJOLT_API void zjoltCharacterVsCharacterCollisionDestroy(
     ZJoltCharacterVsCharacterCollision *collision);
 
+/// Meaningful only on a handle from zjoltCharacterVsCharacterCollisionCreate;
+/// on one from zjoltCharacterVsCharacterCollisionCreateCustom, which has no
+/// list of its own, these do nothing.
 ZJOLT_API void zjoltCharacterVsCharacterCollisionAdd(
     ZJoltCharacterVsCharacterCollision *collision, ZJoltCharacter *character);
 ZJOLT_API void zjoltCharacterVsCharacterCollisionRemove(
@@ -599,17 +572,63 @@ ZJOLT_API void zjoltCharacterSetCharacterVsCharacterCollision(
     ZJoltCharacter *character, ZJoltCharacterVsCharacterCollision *collision);
 
 //===----------------------------------------------------------------------===//
-// RigidCharacter
-//
-// Jolt's own name for this is "Character" — spent above on the swept virtual
-// one, which this binding settled on first. This is the other character base
-// class, Jolt/Physics/Character/Character.h: a real dynamic rigid body that
-// the host drives by setting its velocity every frame, same as the virtual
-// one, but collision response, sleeping and being pushed by other dynamics
-// fall out of the ordinary rigid-body solver instead of a hand-rolled sweep.
-// Prefer this one when the world needs to see the character as an ordinary
-// body — felt by a trigger volume, knocked back by an explosion — and can
-// live with the solver's collision response instead of a per-frame sweep.
+// A custom character-vs-character broad phase: CharacterVsCharacterCollision
+// is the interface CharacterVirtual::Update asks two questions through while
+// moving — CollideCharacter ("who overlaps this character") and CastCharacter
+// ("who is in the way of this sweep") — handed to a host as callbacks instead
+// of CharacterVsCharacterCollisionSimple's brute-force scan.
+// Each callback gets a VISITOR in place of Jolt's own collector: call it once
+// per OTHER character to test `character` against; zjolt runs the real test
+// on every candidate the visitor accepts. Return false once you have seen
+// enough (calling again after is harmless). `character` is named by id —
+// match zjoltCharacterGetId on whichever ZJoltCharacter this was installed
+// on; `candidate` is one of the host's own handles, `visit`/`visit_user`
+// valid only for the call. NOTHING MAY UNWIND OUT OF ONE OF THESE.
+//===----------------------------------------------------------------------===//
+
+/// `candidate` is a character the host itself created and still holds.
+/// Returns whether to keep visiting: false once the underlying test has seen
+/// enough, true to be offered another.
+typedef bool (*ZJoltCharacterVsCharacterVisitFn)(void *visit_user,
+                                                 ZJoltCharacter *candidate);
+
+/// `center_of_mass_transform` is `character`'s placement for this test, world
+/// space, valid only for the duration of the call.
+typedef void (*ZJoltCollideCharacterFn)(
+    void *user, ZJoltCharacterId character,
+    const ZJoltRMat44 *center_of_mass_transform,
+    ZJoltCharacterVsCharacterVisitFn visit, void *visit_user);
+
+/// As ZJoltCollideCharacterFn, but `character`'s shape is being swept along
+/// `direction` from `center_of_mass_transform` rather than tested in place.
+typedef void (*ZJoltCastCharacterFn)(
+    void *user, ZJoltCharacterId character,
+    const ZJoltRMat44 *center_of_mass_transform, const ZJoltVec3 *direction,
+    ZJoltCharacterVsCharacterVisitFn visit, void *visit_user);
+
+typedef struct ZJoltCharacterVsCharacterCollisionCallbacks {
+  ZJoltCollideCharacterFn collide_character;
+  ZJoltCastCharacterFn cast_character;
+  void *user;
+} ZJoltCharacterVsCharacterCollisionCallbacks;
+
+/// Builds a collision object from `callbacks` in place of the brute-force
+/// list; install through zjoltCharacterSetCharacterVsCharacterCollision and
+/// release with zjoltCharacterVsCharacterCollisionDestroy. `callbacks` is
+/// copied; only its `user` pointer needs to outlive this call. A NULL field
+/// behaves as Jolt's own default override would if it had one: that
+/// question is never asked, so `character` collides with nothing through it.
+ZJOLT_API ZJoltResult zjoltCharacterVsCharacterCollisionCreateCustom(
+    const ZJoltCharacterVsCharacterCollisionCallbacks *callbacks,
+    ZJoltCharacterVsCharacterCollision **out);
+
+//===----------------------------------------------------------------------===//
+// RigidCharacter (Jolt's Character.h): a real dynamic rigid body the host
+// drives by setting its velocity each frame, like the virtual character,
+// but collision response, sleeping and being pushed fall out of the
+// ordinary rigid-body solver instead of a hand-rolled sweep. Prefer this
+// when the world needs to see the character as an ordinary body — felt by
+// a trigger, knocked back by an explosion.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltRigidCharacter ZJoltRigidCharacter;
@@ -638,14 +657,11 @@ typedef struct ZJoltRigidCharacterDesc {
 /// Fills `desc` with Jolt's defaults. `shape` is left NULL and is required.
 ZJOLT_API void zjoltRigidCharacterDescInit(ZJoltRigidCharacterDesc *desc);
 
-/// Builds the character's rigid body but does not add it to the system yet —
-/// call zjoltRigidCharacterAddToPhysicsSystem to make it move and collide.
-///
-/// Fails with ZJOLT_RESULT_OUT_OF_MEMORY, and creates nothing, if `system` is
-/// already holding max_bodies bodies.
-///
-/// The character borrows `system` for its lifetime and must be destroyed
-/// before it.
+/// Builds the character's rigid body but does not add it to the system yet
+/// — call zjoltRigidCharacterAddToPhysicsSystem to make it move and collide.
+/// Fails with ZJOLT_RESULT_OUT_OF_MEMORY, and creates nothing, if `system`
+/// is already holding max_bodies bodies. The character borrows `system` for
+/// its lifetime and must be destroyed before it.
 ZJOLT_API ZJoltResult zjoltRigidCharacterCreate(
     ZJoltPhysicsSystem *system, const ZJoltRigidCharacterDesc *desc,
     ZJoltRigidCharacter **out);
@@ -765,13 +781,10 @@ ZJOLT_API ZJoltResult zjoltRigidCharacterGetTransformedShape(
 
 /// Everything `shape` would overlap if the character stood at
 /// `position`/`rotation`. @see zjoltCharacterCheckCollision for the protocol
-/// and the NULL arguments.
-///
-/// There are no filters to pass: Jolt builds them from the character's own
-/// object layer, and always skips the character's own body and every sensor.
-/// `character_id` on every hit is ZJOLT_CHARACTER_ID_INVALID — a rigid
-/// character collides through the broad phase like anything else, so there is
-/// no character-vs-character list in play.
+/// and the NULL arguments. There are no filters: Jolt builds them from the
+/// character's own object layer, skipping its own body and every sensor.
+/// `character_id` on every hit is ZJOLT_CHARACTER_ID_INVALID: a rigid
+/// character collides through the ordinary broad phase, no character list.
 ZJOLT_API ZJoltResult zjoltRigidCharacterCheckCollision(
     const ZJoltRigidCharacter *character, const ZJoltRVec3 *position,
     const ZJoltQuat *rotation, const ZJoltVec3 *movement_direction,

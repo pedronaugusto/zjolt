@@ -1,20 +1,18 @@
 //===----------------------------------------------------------------------===//
 // zjolt — ragdolls.
 //
-// A few conversions are duplicated from zjolt_body.cpp (ToJoltMotionType,
-// the ZJoltBodyDesc -> JPH::BodyCreationSettings fields) and zjolt_internal.h
-// (ToJolt/ToC for the tag handles this file introduces). Both would
-// normally live in one shared place, but this subsystem is scoped to add
-// files and append registrations only — not to edit the existing
-// translation units they would otherwise join — so each stays local to this
-// file instead.
+// A few conversions are duplicated from zjolt_body.cpp/zjolt_internal.h
+// rather than shared, since this subsystem is scoped to add files and append registrations only — not to edit the existing translation units they would otherwise join.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
 
+#include <Jolt/ObjectStream/ObjectStreamIn.h>
+#include <Jolt/ObjectStream/ObjectStreamOut.h>
 #include <Jolt/Physics/Collision/CollisionGroup.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Skeleton/SkeletalAnimation.h>
 #include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Skeleton/SkeletonMapper.h>
 #include <Jolt/Skeleton/SkeletonPose.h>
@@ -24,15 +22,8 @@
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// Three of the five are reinterpret_cast tags directly onto the Jolt type,
-// exactly like ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h — never
-// completed, never dereferenced except after converting back. Skeleton and
-// RagdollSettings are reference counted (JPH::RefTarget); SkeletonPose is a
-// plain value type with no reference count of its own, allocated and freed
-// like a job system.
-//
-// The other two are not tags, and each says why where it is defined: see The
-// handle (ZJoltRagdoll) and The mapper handle (ZJoltSkeletonMapper) below.
+// Three of the five are reinterpret_cast tags directly onto the Jolt type, like ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h. Skeleton/RagdollSettings are reference counted; SkeletonPose is a plain value type, allocated/freed like a job system.
+// The other two are not tags — see "The handle" and "The mapper handle" below for why.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -58,6 +49,19 @@ inline JPH::SkeletonPose *ToJolt(ZJoltSkeletonPose *p) {
 }
 inline ZJoltSkeletonPose *ToC(JPH::SkeletonPose *p) {
   return reinterpret_cast<ZJoltSkeletonPose *>(p);
+}
+
+inline const JPH::SkeletalAnimation *ToJolt(const ZJoltSkeletalAnimation *a) {
+  return reinterpret_cast<const JPH::SkeletalAnimation *>(a);
+}
+inline JPH::SkeletalAnimation *ToJolt(ZJoltSkeletalAnimation *a) {
+  return reinterpret_cast<JPH::SkeletalAnimation *>(a);
+}
+inline ZJoltSkeletalAnimation *ToC(JPH::SkeletalAnimation *a) {
+  return reinterpret_cast<ZJoltSkeletalAnimation *>(a);
+}
+inline const ZJoltSkeletalAnimation *ToC(const JPH::SkeletalAnimation *a) {
+  return reinterpret_cast<const ZJoltSkeletalAnimation *>(a);
 }
 
 inline const JPH::RagdollSettings *ToJolt(const ZJoltRagdollSettings *s) {
@@ -90,32 +94,8 @@ inline ZJoltConstraint *ToC(JPH::Constraint *constraint) {
 //===----------------------------------------------------------------------===//
 // The handle
 //
-// A ragdoll cannot be a tag on JPH::Ragdoll the way the three types above
-// are, because releasing the last reference to one has to be able to take
-// its bodies out of the broad phase first. `~Ragdoll` calls
-// `BodyInterface::DestroyBodies` where the bodies stand, and
-// `BodyManager::RemoveBodyInternal` asserts `!IsInBroadPhase()` before it
-// frees one (BodyManager.cpp:354) — so releasing a still-added ragdoll aborts
-// a build with assertions and corrupts the broad phase in one without.
-//
-// Removing it needs the PhysicsSystem, and `Ragdoll::mSystem` is private
-// with no getter (Ragdoll.h:248). So the handle keeps it: `owner`, the same
-// shape ZJoltCharacter (zjolt_internal.h) and ZJoltVehicleConstraint
-// (zjolt_vehicle.cpp) already have. Defined here rather than in the shared
-// header for the same reason the vehicle one is — nothing outside this file
-// ever sees a ZJoltRagdoll *.
-//
-// `refs` is the third member, and it is not a duplicate of the ragdoll's own
-// JPH::RefTarget count. BINDING.md's rule for the Release verb is that there
-// may be other holders, so two of them releasing at once must both be
-// correct and exactly one must run the teardown below. RefTarget cannot say
-// which: its Release destroys the object on the way to telling you, and
-// reading GetRefCount() before releasing leaves a gap between the read and
-// the drop that another thread fits into. Counting the handle's own
-// references is what makes that answer atomic. `impl` therefore holds Jolt's
-// only reference, pinned at one for as long as the handle lives, and
-// zjoltRagdollGetRefCount reports `refs` — which is the number the caller was
-// moving anyway.
+// Not a tag like the others: releasing the last reference must take its bodies out of the broad phase first, needing the PhysicsSystem — `owner` holds it (`Ragdoll::mSystem` has no getter).
+// `refs` counts the HANDLE's references, not JPH::RefTarget's: two concurrent Release calls must resolve race-free, which RefTarget's own count cannot (`impl` pins Jolt's reference at one for the handle's lifetime).
 //===----------------------------------------------------------------------===//
 
 struct ZJoltRagdoll {
@@ -131,27 +111,8 @@ struct ZJoltRagdoll {
 //===----------------------------------------------------------------------===//
 // The mapper handle
 //
-// A second handle that is not a tag, for a smaller reason than the ragdoll's
-// and a sharper one.
-//
-// JPH::SkeletonMapper is reference counted (SkeletonMapper.h:14) but carries
-// no JPH_OVERRIDE_NEW_DELETE, and unlike Skeleton and RagdollSettings it has
-// no JPH_DECLARE_SERIALIZABLE_NON_VIRTUAL to bring one in. Its
-// RefTarget::Release therefore ends in a GLOBAL `delete this`
-// (Core/Reference.h:70) on a block zjolt::New took from the HOST allocator —
-// a pointer the host's free never saw, freed by an allocator it never came
-// from. That is a heap corruption a test only finds if the host allocator
-// happens to check, which is exactly the kind of thing this ABI must not
-// leave to chance.
-//
-// So the count is the handle's, as it is for ZJoltRagdoll above, and the
-// JPH::SkeletonMapper is a member this file constructs and destroys through
-// zjolt::New/Delete. Nothing ever AddRefs the inner object, so Jolt's own
-// count stays at zero — which is what ~RefTarget asserts on the way out.
-//
-// It is NOT counted by zjoltLiveHandleCount, matching ZJoltSkeletonPose,
-// which is the same shape of thing: storage zjolt owns holding a Jolt value,
-// with nothing of the physics system in it.
+// Not a tag either, for a sharper reason: JPH::SkeletonMapper's Release ends in a GLOBAL `delete this` on a block zjolt::New took from the HOST allocator — heap corruption a test might not catch. So the count is the handle's; this file constructs/destroys the member directly and never AddRefs it, keeping Jolt's own count at zero.
+// NOT counted by zjoltLiveHandleCount, like ZJoltSkeletonPose.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltSkeletonMapper {
@@ -192,13 +153,18 @@ const JPH::SkeletonMapper *Impl(const ZJoltSkeletonMapper *mapper) {
 // Small conversions duplicated from zjolt_body.cpp — see the file comment.
 //===----------------------------------------------------------------------===//
 
-JPH::EActivation ToJoltActivation(ZJoltActivation activation) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h.
+JPH::EActivation ToJoltActivation(int32_t activation) {
   return activation == ZJOLT_ACTIVATION_DONT_ACTIVATE
              ? JPH::EActivation::DontActivate
              : JPH::EActivation::Activate;
 }
 
-JPH::EMotionType ToJoltMotionType(ZJoltMotionType type) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Its caller reads this straight out of a host-supplied
+// ZJoltBodyDesc, which is the entry point this value arrives from.
+JPH::EMotionType ToJoltMotionType(int32_t type) {
   switch (type) {
     case ZJOLT_MOTION_TYPE_STATIC:
       return JPH::EMotionType::Static;
@@ -211,14 +177,11 @@ JPH::EMotionType ToJoltMotionType(ZJoltMotionType type) {
 }
 
 /// Fills the BodyCreationSettings half of a ragdoll part from a flat
-/// ZJoltBodyDesc. Mirrors zjolt_body.cpp's BuildCreationSettings field for
-/// field; RagdollSettings::Part is a BodyCreationSettings plus mToParent,
-/// which the caller fills in separately.
+/// ZJoltBodyDesc — mirrors zjolt_body.cpp's BuildCreationSettings field
+/// for field; RagdollSettings::Part is BodyCreationSettings plus
+/// mToParent, filled in separately by the caller.
 ///
-/// Called only after ValidatePart has already accepted `desc`, so the checks
-/// it repeats (shape present, mass positive when required) cannot actually
-/// fail here — this always returns ZJOLT_RESULT_OK. It still reports them
-/// rather than asserting, so it stays correct if ever called on its own.
+/// Called only after ValidatePart accepts `desc`, so its repeated checks always pass here (always returns ZJOLT_RESULT_OK) — still reported rather than asserted, so this stays correct called on its own.
 ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
                           JPH::BodyCreationSettings *out) {
   if (desc.shape == nullptr) {
@@ -237,10 +200,11 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
   out->mUserData = desc.user_data;
   out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
-  out->mMotionType = ToJoltMotionType(desc.motion_type);
-  out->mMotionQuality = desc.motion_quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-                            ? JPH::EMotionQuality::LinearCast
-                            : JPH::EMotionQuality::Discrete;
+  out->mMotionType = ToJoltMotionType(zjolt::RawEnum(desc.motion_type));
+  out->mMotionQuality =
+      zjolt::RawEnum(desc.motion_quality) == ZJOLT_MOTION_QUALITY_LINEAR_CAST
+          ? JPH::EMotionQuality::LinearCast
+          : JPH::EMotionQuality::Discrete;
   out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
   out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
   out->mIsSensor = desc.is_sensor;
@@ -254,7 +218,7 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   out->mMaxAngularVelocity = desc.max_angular_velocity;
   out->mGravityFactor = desc.gravity_factor;
 
-  if (desc.override_mass_properties ==
+  if (zjolt::RawEnum(desc.override_mass_properties) ==
       ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
     if (!(desc.mass > 0.0f)) {
       return zjolt::SetError(
@@ -271,18 +235,20 @@ ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
   return ZJOLT_RESULT_OK;
 }
 
-JPH::ESwingType ToJoltSwingType(ZJoltSwingType type) {
+// Takes the raw integer, not the enum — see zjolt::RawEnum in
+// zjolt_internal.h. Its one caller reads this straight out of a host-supplied
+// ZJoltRagdollConstraintDesc, which is the entry point this value arrives
+// from.
+JPH::ESwingType ToJoltSwingType(int32_t type) {
   return type == ZJOLT_SWING_TYPE_PYRAMID ? JPH::ESwingType::Pyramid
                                           : JPH::ESwingType::Cone;
 }
 
-/// Builds a swing-twist constraint settings object on the heap (it must
-/// outlive this call, unlike the parts' BodyCreationSettings above, because
-/// RagdollSettings::Part::mToParent keeps a reference to it) from a flat
-/// descriptor. Never crosses the ABI: it is assigned straight into
-/// mToParent, which takes its own reference on assignment.
-///
-/// Returns NULL only on allocation failure.
+/// Builds a swing-twist constraint settings object on the heap — must
+/// outlive this call, unlike the parts' BodyCreationSettings above,
+/// since RagdollSettings::Part::mToParent keeps a reference to it.
+/// Never crosses the ABI: assigned straight into mToParent, which
+/// takes its own reference on assignment. Returns NULL only on allocation failure.
 JPH::SwingTwistConstraintSettings *BuildConstraint(
     const ZJoltRagdollConstraintDesc &desc) {
   JPH::SwingTwistConstraintSettings *settings =
@@ -296,7 +262,7 @@ JPH::SwingTwistConstraintSettings *BuildConstraint(
   settings->mPosition2 = zjolt::ToJoltR(desc.position2);
   settings->mTwistAxis2 = zjolt::ToJolt(desc.twist_axis2);
   settings->mPlaneAxis2 = zjolt::ToJolt(desc.plane_axis2);
-  settings->mSwingType = ToJoltSwingType(desc.swing_type);
+  settings->mSwingType = ToJoltSwingType(zjolt::RawEnum(desc.swing_type));
   settings->mNormalHalfConeAngle = desc.normal_half_cone_angle;
   settings->mPlaneHalfConeAngle = desc.plane_half_cone_angle;
   settings->mTwistMinAngle = desc.twist_min_angle;
@@ -308,11 +274,9 @@ JPH::SwingTwistConstraintSettings *BuildConstraint(
 /// Everything zjoltRagdollSettingsBuild must reject BEFORE it starts
 /// mutating `settings`, so a rejected call leaves it exactly as it was.
 ///
-/// The to_parent check is the one CreateRagdoll itself does not make: it
-/// indexes `bodies[mSkeleton->GetJoint(joint_idx).mParentJointIndex]` for
-/// every part with a non-null mToParent, so a root part (parent index -1)
-/// carrying one would read `bodies[-1]` — out of bounds, found by reading
-/// Ragdoll.cpp's CreateRagdoll rather than by any JPH_ASSERT.
+/// The to_parent check is the one CreateRagdoll itself does not make:
+/// it indexes `bodies[...mParentJointIndex]` for every part with a
+/// non-null mToParent, so a root part (parent index -1) carrying one reads `bodies[-1]` — out of bounds, found by reading Ragdoll.cpp's CreateRagdoll, not any JPH_ASSERT.
 ZJoltResult ValidatePart(const JPH::Skeleton &skeleton,
                          const ZJoltRagdollPartDesc &part,
                          uint32_t joint_index) {
@@ -320,7 +284,7 @@ ZJoltResult ValidatePart(const JPH::Skeleton &skeleton,
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a ragdoll part needs a shape");
   }
-  if (part.body.override_mass_properties ==
+  if (zjolt::RawEnum(part.body.override_mass_properties) ==
           ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA &&
       !(part.body.mass > 0.0f)) {
     return zjolt::SetError(
@@ -340,14 +304,12 @@ ZJoltResult ValidatePart(const JPH::Skeleton &skeleton,
   return ZJOLT_RESULT_OK;
 }
 
-/// How many joints a pose of skeleton 1 and a pose of skeleton 2 must have
-/// for the mapper to stay inside both of them.
+/// How many joints a pose of skeleton 1 and a pose of skeleton 2 must
+/// have for the mapper to stay inside both of them.
 ///
-/// SkeletonMapper holds nothing but joint indices once Initialize has run, and
-/// it does not keep the skeletons it was built from — so this is what stands
-/// in for "is this the right pose". Every index it can reach is one of these:
-/// a mapping's pair, a chain's two index runs, an unmapped joint, or a locked
-/// joint and its parent.
+/// SkeletonMapper keeps nothing but joint indices after Initialize, and
+/// not the skeletons it was built from — this stands in for "is this
+/// the right pose". Every index it can reach: a mapping's pair, a chain's two index runs, an unmapped joint, or a locked joint and its parent.
 void MapperExtent(const JPH::SkeletonMapper &mapper, uint32_t *out_needed1,
                   uint32_t *out_needed2) {
   int needed1 = 0;
@@ -652,6 +614,285 @@ ZJoltResult zjoltSkeletonPoseCalculateJointStates(ZJoltSkeletonPose *pose) {
 }
 
 //===----------------------------------------------------------------------===//
+// SkeletalAnimation
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltSkeletalAnimationCreate(ZJoltSkeletalAnimation **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::SkeletalAnimation *fresh = zjolt::New<JPH::SkeletalAnimation>();
+  if (fresh == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
+                           "could not allocate a skeletal animation");
+  }
+  *out = zjolt::ToC(zjolt::Own(fresh));
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltSkeletalAnimationAddRef(const ZJoltSkeletalAnimation *animation) {
+  if (animation == nullptr) return;
+  zjolt::ToJolt(animation)->AddRef();
+}
+
+void zjoltSkeletalAnimationRelease(const ZJoltSkeletalAnimation *animation) {
+  if (animation == nullptr) return;
+  zjolt::ToJolt(animation)->Release();
+}
+
+uint32_t zjoltSkeletalAnimationGetRefCount(
+    const ZJoltSkeletalAnimation *animation) {
+  if (animation == nullptr) return 0;
+  return static_cast<uint32_t>(zjolt::ToJolt(animation)->GetRefCount());
+}
+
+ZJoltResult zjoltSkeletalAnimationAddAnimatedJoint(
+    ZJoltSkeletalAnimation *animation, const char *name, uint32_t *out_index) {
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out_index, (uint32_t)0xffffffffu));
+  if (!zjolt::Present(animation, out_index)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::SkeletalAnimation::AnimatedJointVector &joints =
+      zjolt::ToJolt(animation)->GetAnimatedJoints();
+  JPH::SkeletalAnimation::AnimatedJoint fresh;
+  fresh.mJointName = name != nullptr ? name : "";
+  joints.push_back(fresh);
+  *out_index = static_cast<uint32_t>(joints.size() - 1);
+  return ZJOLT_RESULT_OK;
+}
+
+uint32_t zjoltSkeletalAnimationGetAnimatedJointCount(
+    const ZJoltSkeletalAnimation *animation) {
+  if (animation == nullptr) return 0;
+  return static_cast<uint32_t>(zjolt::ToJolt(animation)->GetAnimatedJoints().size());
+}
+
+const char *zjoltSkeletalAnimationGetAnimatedJointName(
+    const ZJoltSkeletalAnimation *animation, uint32_t joint_index) {
+  if (animation == nullptr) return "";
+  const JPH::SkeletalAnimation::AnimatedJointVector &joints =
+      zjolt::ToJolt(animation)->GetAnimatedJoints();
+  if (joint_index >= static_cast<uint32_t>(joints.size())) return "";
+  return joints[joint_index].mJointName.c_str();
+}
+
+ZJoltResult zjoltSkeletalAnimationAddKeyframe(
+    ZJoltSkeletalAnimation *animation, uint32_t joint_index, float time,
+    const ZJoltQuat *rotation, const ZJoltVec3 *translation) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(animation, rotation, translation)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  JPH::SkeletalAnimation::AnimatedJointVector &joints =
+      zjolt::ToJolt(animation)->GetAnimatedJoints();
+  if (joint_index >= static_cast<uint32_t>(joints.size())) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "joint_index is out of range");
+  }
+
+  JPH::SkeletalAnimation::KeyframeVector &keyframes = joints[joint_index].mKeyframes;
+  // Sample's binary search over a joint's keyframes assumes ascending mTime;
+  // Jolt does not check this itself.
+  if (!keyframes.empty() && time < keyframes.back().mTime) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "keyframes must be added in non-decreasing time order");
+  }
+
+  JPH::SkeletalAnimation::Keyframe fresh;
+  fresh.mTime = time;
+  fresh.mRotation = zjolt::ToJoltRotation(*rotation);
+  fresh.mTranslation = zjolt::ToJolt(*translation);
+  keyframes.push_back(fresh);
+  return ZJOLT_RESULT_OK;
+}
+
+uint32_t zjoltSkeletalAnimationGetKeyframeCount(
+    const ZJoltSkeletalAnimation *animation, uint32_t joint_index) {
+  if (animation == nullptr) return 0;
+  const JPH::SkeletalAnimation::AnimatedJointVector &joints =
+      zjolt::ToJolt(animation)->GetAnimatedJoints();
+  if (joint_index >= static_cast<uint32_t>(joints.size())) return 0;
+  return static_cast<uint32_t>(joints[joint_index].mKeyframes.size());
+}
+
+ZJoltResult zjoltSkeletalAnimationGetKeyframe(
+    const ZJoltSkeletalAnimation *animation, uint32_t joint_index,
+    uint32_t keyframe_index, float *out_time, ZJoltQuat *out_rotation,
+    ZJoltVec3 *out_translation) {
+  ZJOLT_ENTER(out_time, zjolt::OutIsEmptyAs(out_rotation, ZJoltQuat{0, 0, 0, 1}),
+              out_translation);
+  if (!zjolt::Present(animation, out_time, out_rotation, out_translation)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  const JPH::SkeletalAnimation::AnimatedJointVector &joints =
+      zjolt::ToJolt(animation)->GetAnimatedJoints();
+  if (joint_index >= static_cast<uint32_t>(joints.size())) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "joint_index is out of range");
+  }
+  const JPH::SkeletalAnimation::KeyframeVector &keyframes =
+      joints[joint_index].mKeyframes;
+  if (keyframe_index >= static_cast<uint32_t>(keyframes.size())) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "keyframe_index is out of range");
+  }
+
+  const JPH::SkeletalAnimation::Keyframe &k = keyframes[keyframe_index];
+  *out_time = k.mTime;
+  *out_rotation = zjolt::ToC(k.mRotation);
+  *out_translation = zjolt::ToC(k.mTranslation);
+  return ZJOLT_RESULT_OK;
+}
+
+float zjoltSkeletalAnimationGetDuration(const ZJoltSkeletalAnimation *animation) {
+  if (animation == nullptr) return 0.0f;
+  return zjolt::ToJolt(animation)->GetDuration();
+}
+
+void zjoltSkeletalAnimationScaleJoints(ZJoltSkeletalAnimation *animation,
+                                       float scale) {
+  if (animation == nullptr) return;
+  zjolt::ToJolt(animation)->ScaleJoints(scale);
+}
+
+void zjoltSkeletalAnimationSetIsLooping(ZJoltSkeletalAnimation *animation,
+                                        bool is_looping) {
+  if (animation == nullptr) return;
+  zjolt::ToJolt(animation)->SetIsLooping(is_looping);
+}
+
+bool zjoltSkeletalAnimationIsLooping(const ZJoltSkeletalAnimation *animation) {
+  if (animation == nullptr) return false;
+  return zjolt::ToJolt(animation)->IsLooping();
+}
+
+ZJoltResult zjoltSkeletalAnimationSample(const ZJoltSkeletalAnimation *animation,
+                                         float time, ZJoltSkeletonPose *pose) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(animation, pose)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!(time >= 0.0f)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "time must not be negative");
+  }
+
+  JPH::SkeletonPose *p = zjolt::ToJolt(pose);
+  const JPH::Skeleton *skeleton = p->GetSkeleton();
+  if (skeleton == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "the pose has no skeleton assigned");
+  }
+
+  const JPH::SkeletalAnimation *a = zjolt::ToJolt(animation);
+  // Jolt looks up each animated joint by name and indexes the pose with no
+  // bounds check; a name that is not a joint of the pose's skeleton would
+  // read out of bounds.
+  for (const JPH::SkeletalAnimation::AnimatedJoint &aj : a->GetAnimatedJoints()) {
+    if (skeleton->GetJointIndex(aj.mJointName) < 0) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "an animated joint's name is not a joint of the pose's skeleton");
+    }
+  }
+
+  a->Sample(time, *p);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// SkeletalAnimation — Jolt's own binary stream
+//===----------------------------------------------------------------------===//
+
+namespace {
+constexpr uint8_t kAnimationStreamMagic[4] = {'Z', 'S', 'A', 'N'};
+}  // namespace
+
+ZJoltResult zjoltSkeletalAnimationSaveBinaryState(
+    const ZJoltSkeletalAnimation *animation, const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(animation, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+
+  zjolt::HostStream host(*stream);
+  zjolt::WriteStreamHeader(host, kAnimationStreamMagic);
+  zjolt::ToJolt(animation)->SaveBinaryState(host);
+
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while writing the animation");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSkeletalAnimationRestoreBinaryState(
+    const ZJoltStream *stream, ZJoltSkeletalAnimation **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(
+      host, kAnimationStreamMagic,
+      "not an animation saved by zjoltSkeletalAnimationSaveBinaryState");
+  if (header != ZJOLT_RESULT_OK) return header;
+
+  JPH::SkeletalAnimation::AnimationResult result =
+      JPH::SkeletalAnimation::sRestoreFromBinaryState(host);
+
+  if (result.HasError()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT, result.GetError().c_str());
+  }
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while reading the animation");
+  }
+  if (!result.IsValid() || host.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the stream ended before the animation did");
+  }
+
+  // Same arithmetic as zjoltSceneRestoreStream: the Result's own Ref drops
+  // when it goes out of scope below, so the handle needs its own reference
+  // added before that happens.
+  JPH::SkeletalAnimation *restored = result.Get();
+  restored->AddRef();
+  *out = zjolt::ToC(restored);
+  return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// SkeletalAnimation — JointState
+//===----------------------------------------------------------------------===//
+
+void zjoltSkeletalAnimationJointStateFromMatrix(const ZJoltMat44 *matrix,
+                                                ZJoltQuat *out_rotation,
+                                                ZJoltVec3 *out_translation) {
+  if (matrix == nullptr) return;
+  JPH::SkeletalAnimation::JointState state;
+  state.FromMatrix(zjolt::ToJolt(*matrix));
+  zjolt::WriteQuat(out_rotation, state.mRotation);
+  zjolt::WriteVec3(out_translation, state.mTranslation);
+}
+
+void zjoltSkeletalAnimationJointStateToMatrix(const ZJoltQuat *rotation,
+                                              const ZJoltVec3 *translation,
+                                              ZJoltMat44 *out) {
+  if (rotation == nullptr || translation == nullptr) return;
+  JPH::SkeletalAnimation::JointState state;
+  state.mRotation = zjolt::ToJoltRotation(*rotation);
+  state.mTranslation = zjolt::ToJolt(*translation);
+  zjolt::WriteMat44(out, state.ToMatrix());
+}
+
+//===----------------------------------------------------------------------===//
 // SkeletonMapper
 //===----------------------------------------------------------------------===//
 
@@ -726,13 +967,12 @@ ZJoltResult zjoltSkeletonMapperInitialize(
         "have more joints than neutral2");
   }
 
-  // A null callback is the default rather than an error, so a caller who does
-  // not need one never has to write a shim that compares names.
+  // A null callback is the default rather than an error, so a caller
+  // who does not need one never has to write a shim that compares names.
   //
-  // Nothing may unwind out of this one: it runs inside Jolt's own loop, and
-  // Jolt is compiled without exceptions. The C signature carries no way to
-  // report a failure for exactly that reason — a predicate that cannot answer
-  // has nothing to say beyond "these two joints are not the same joint".
+  // Nothing may unwind out of this one: it runs inside Jolt's own loop,
+  // compiled without exceptions. The C signature carries no way to
+  // report a failure for that reason — a predicate that cannot answer has nothing to say beyond "these two joints are not the same joint".
   JPH::SkeletonMapper::CanMapJoint can_map =
       &JPH::SkeletonMapper::sDefaultCanMapJoint;
   if (can_map_joint != nullptr) {
@@ -762,6 +1002,71 @@ int32_t zjoltSkeletonMapperGetMappedJointIndex(
   // A scan for a match, so an index past the end simply matches nothing.
   return Impl(mapper)->GetMappedJointIdx(
       static_cast<int>(joint1_index));
+}
+
+uint32_t zjoltSkeletonMapperGetChainCount(const ZJoltSkeletonMapper *mapper) {
+  if (mapper == nullptr) return 0;
+  return static_cast<uint32_t>(Impl(mapper)->GetChains().size());
+}
+
+void zjoltSkeletonMapperGetChainJointCounts(const ZJoltSkeletonMapper *mapper,
+                                            uint32_t chain_index,
+                                            uint32_t *out_count1,
+                                            uint32_t *out_count2) {
+  if (out_count1 != nullptr) *out_count1 = 0;
+  if (out_count2 != nullptr) *out_count2 = 0;
+  if (mapper == nullptr) return;
+
+  const JPH::SkeletonMapper::ChainVector &chains = Impl(mapper)->GetChains();
+  if (chain_index >= chains.size()) return;
+  if (out_count1 != nullptr) {
+    *out_count1 = static_cast<uint32_t>(chains[chain_index].mJointIndices1.size());
+  }
+  if (out_count2 != nullptr) {
+    *out_count2 = static_cast<uint32_t>(chains[chain_index].mJointIndices2.size());
+  }
+}
+
+int32_t zjoltSkeletonMapperGetChainJointIndex1(const ZJoltSkeletonMapper *mapper,
+                                               uint32_t chain_index,
+                                               uint32_t index) {
+  if (mapper == nullptr) return -1;
+  const JPH::SkeletonMapper::ChainVector &chains = Impl(mapper)->GetChains();
+  if (chain_index >= chains.size()) return -1;
+  const JPH::Array<int> &indices = chains[chain_index].mJointIndices1;
+  if (index >= indices.size()) return -1;
+  return indices[index];
+}
+
+int32_t zjoltSkeletonMapperGetChainJointIndex2(const ZJoltSkeletonMapper *mapper,
+                                               uint32_t chain_index,
+                                               uint32_t index) {
+  if (mapper == nullptr) return -1;
+  const JPH::SkeletonMapper::ChainVector &chains = Impl(mapper)->GetChains();
+  if (chain_index >= chains.size()) return -1;
+  const JPH::Array<int> &indices = chains[chain_index].mJointIndices2;
+  if (index >= indices.size()) return -1;
+  return indices[index];
+}
+
+uint32_t zjoltSkeletonMapperGetUnmappedCount(const ZJoltSkeletonMapper *mapper) {
+  if (mapper == nullptr) return 0;
+  return static_cast<uint32_t>(Impl(mapper)->GetUnmapped().size());
+}
+
+ZJoltResult zjoltSkeletonMapperGetUnmapped(const ZJoltSkeletonMapper *mapper,
+                                           uint32_t index,
+                                           ZJoltSkeletonMapperUnmapped *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(mapper, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::SkeletonMapper::UnmappedVector &unmapped = Impl(mapper)->GetUnmapped();
+  if (index >= unmapped.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "index is out of range");
+  }
+  out->joint_index = unmapped[index].mJointIdx;
+  out->parent_joint_index = unmapped[index].mParentJointIdx;
+  return ZJOLT_RESULT_OK;
 }
 
 ZJoltResult zjoltSkeletonMapperLockTranslations(
@@ -920,6 +1225,86 @@ uint32_t zjoltRagdollSettingsGetRefCount(const ZJoltRagdollSettings *settings) {
   return static_cast<uint32_t>(zjolt::ToJolt(settings)->GetRefCount());
 }
 
+//===----------------------------------------------------------------------===//
+// Jolt's own object stream
+//
+// Same feature as zjoltSceneSaveObjectStream/RestoreObjectStream (zjolt_scene.cpp), on RagdollSettings instead of PhysicsScene — see that file for what the two entry points do and do not check.
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltRagdollSettingsSaveObjectStream(
+    const ZJoltRagdollSettings *settings, ZJoltObjectStreamFormat format,
+    const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_format = zjolt::RawEnum(format);
+  if (!zjolt::Present(settings, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+#ifdef JPH_OBJECT_STREAM
+  zjolt::ObjectStreamOStream out(*stream);
+  const JPH::ObjectStream::EStreamType type =
+      raw_format == ZJOLT_OBJECT_STREAM_FORMAT_TEXT
+          ? JPH::ObjectStream::EStreamType::Text
+          : JPH::ObjectStream::EStreamType::Binary;
+  const bool ok =
+      JPH::ObjectStreamOut::sWriteObject(out, type, *zjolt::ToJolt(settings));
+
+  if (out.StreamFailed()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_IO_ERROR,
+        "the stream failed while writing the ragdoll settings");
+  }
+  if (!ok) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "Jolt's object stream could not write these ragdoll settings");
+  }
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
+ZJoltResult zjoltRagdollSettingsRestoreObjectStream(const ZJoltStream *stream,
+                                                    ZJoltRagdollSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+#ifdef JPH_OBJECT_STREAM
+  zjolt::ObjectStreamIStream in(*stream);
+  JPH::RagdollSettings *settings = nullptr;
+  const bool ok = JPH::ObjectStreamIn::sReadObject(in, settings);
+
+  if (in.StreamFailed()) {
+    delete settings;
+    return zjolt::SetError(
+        ZJOLT_RESULT_IO_ERROR,
+        "the stream failed while reading the ragdoll settings");
+  }
+  if (!ok || settings == nullptr) {
+    delete settings;
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "not ragdoll settings Jolt's object stream can read");
+  }
+
+  // Same arithmetic as zjoltSceneRestoreObjectStream: a fresh object nobody
+  // has referenced yet, not the AddRef-once compensation a dropped Ref<>
+  // elsewhere in this file needs.
+  *out = zjolt::ToC(zjolt::Own(settings));
+  return ZJOLT_RESULT_OK;
+#else
+  return ZJOLT_RESULT_UNSUPPORTED;
+#endif
+}
+
 ZJoltResult zjoltRagdollSettingsBuild(ZJoltRagdollSettings *settings,
                                       const ZJoltSkeleton *skeleton,
                                       const ZJoltRagdollPartDesc *parts,
@@ -1036,6 +1421,77 @@ void zjoltRagdollSettingsCalculateBodyIndexToConstraintIndex(
   zjolt::ToJolt(settings)->CalculateBodyIndexToConstraintIndex();
 }
 
+int32_t zjoltRagdollSettingsGetConstraintIndexForBodyIndex(
+    const ZJoltRagdollSettings *settings, uint32_t body_index) {
+  if (settings == nullptr) return -1;
+  const JPH::Array<int> &table =
+      zjolt::ToJolt(settings)->GetBodyIndexToConstraintIndex();
+  if (body_index >= table.size()) return -1;
+  return table[body_index];
+}
+
+ZJoltResult zjoltRagdollSettingsGetBodyIndexToConstraintIndex(
+    const ZJoltRagdollSettings *settings, int32_t *out_indices,
+    uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(settings, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Array<int> &table =
+      zjolt::ToJolt(settings)->GetBodyIndexToConstraintIndex();
+  const uint32_t count = static_cast<uint32_t>(table.size());
+  *out_count = count;
+  if (out_indices == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  for (uint32_t i = 0; i < count; ++i) out_indices[i] = table[i];
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltRagdollSettingsCalculateConstraintIndexToBodyIdxPair(
+    ZJoltRagdollSettings *settings) {
+  if (settings == nullptr) return;
+  zjolt::ToJolt(settings)->CalculateConstraintIndexToBodyIdxPair();
+}
+
+ZJoltResult zjoltRagdollSettingsGetBodyIndicesForConstraintIndex(
+    const ZJoltRagdollSettings *settings, uint32_t constraint_index,
+    ZJoltRagdollBodyIndexPair *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(settings, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Array<JPH::RagdollSettings::BodyIdxPair> &table =
+      zjolt::ToJolt(settings)->GetConstraintIndexToBodyIdxPair();
+  if (constraint_index >= table.size()) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "constraint_index is out of range, or the table has not been built "
+        "by zjoltRagdollSettingsCalculateConstraintIndexToBodyIdxPair");
+  }
+  const JPH::RagdollSettings::BodyIdxPair &pair = table[constraint_index];
+  out->body_index1 = pair.first;
+  out->body_index2 = pair.second;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRagdollSettingsGetConstraintIndexToBodyIdxPair(
+    const ZJoltRagdollSettings *settings, ZJoltRagdollBodyIndexPair *out_pairs,
+    uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(settings, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Array<JPH::RagdollSettings::BodyIdxPair> &table =
+      zjolt::ToJolt(settings)->GetConstraintIndexToBodyIdxPair();
+  const uint32_t count = static_cast<uint32_t>(table.size());
+  *out_count = count;
+  if (out_pairs == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  for (uint32_t i = 0; i < count; ++i) {
+    out_pairs[i] = ZJoltRagdollBodyIndexPair{table[i].first, table[i].second};
+  }
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltRagdollSettingsCreateRagdoll(
     const ZJoltRagdollSettings *settings, ZJoltPhysicsSystem *system,
     uint32_t collision_group, uint64_t user_data, ZJoltRagdoll **out) {
@@ -1096,18 +1552,12 @@ void zjoltRagdollRelease(const ZJoltRagdoll *ragdoll) {
   ZJoltRagdoll *handle = const_cast<ZJoltRagdoll *>(ragdoll);
   JPH::Ragdoll *impl = handle->impl.GetPtr();
 
-  // Dropping `impl` below runs ~Ragdoll, which destroys the bodies where
-  // they stand — so anything the broad phase still holds has to come out
-  // first. Asked rather than assumed, because RemoveFromPhysicsSystem is not
-  // safe on a ragdoll that was never added: it removes the constraints
-  // before the bodies, and ConstraintManager::Remove asserts that each one
-  // was added (ConstraintManager.cpp:47).
-  //
-  // AddToPhysicsSystem and RemoveFromPhysicsSystem move every part as one
-  // batch and this ABI offers no way to split them, so the first body
-  // answers for all of them. A ragdoll with no parts — settings never built,
-  // or built from a skeleton with no joints — has nothing to ask and nothing
-  // to remove.
+  // Dropping `impl` below runs ~Ragdoll, which destroys the bodies
+  // where they stand — so anything the broad phase still holds has to
+  // come out first. Asked rather than assumed: RemoveFromPhysicsSystem
+  // is not safe on a ragdoll never added (it removes constraints before
+  // bodies, and ConstraintManager::Remove asserts each was added).
+  // AddToPhysicsSystem/RemoveFromPhysicsSystem move every part as one batch with no way to split them, so the first body answers for all; no parts means nothing to ask or remove.
   const JPH::Array<JPH::BodyID> &ids = impl->GetBodyIDs();
   if (!ids.empty() &&
       handle->owner->system.GetBodyInterface().IsAdded(ids.front())) {
@@ -1129,9 +1579,12 @@ uint32_t zjoltRagdollGetRefCount(const ZJoltRagdoll *ragdoll) {
 void zjoltRagdollAddToPhysicsSystem(ZJoltRagdoll *ragdoll,
                                     ZJoltActivation activation,
                                     bool lock_bodies) {
+  // Converted here, at the entry point that receives it from the host — see
+  // zjolt::RawEnum in zjolt_internal.h.
+  const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::Ragdoll *impl = Impl(ragdoll);
   if (impl == nullptr) return;
-  impl->AddToPhysicsSystem(ToJoltActivation(activation), lock_bodies);
+  impl->AddToPhysicsSystem(ToJoltActivation(raw_activation), lock_bodies);
 }
 
 void zjoltRagdollRemoveFromPhysicsSystem(ZJoltRagdoll *ragdoll,

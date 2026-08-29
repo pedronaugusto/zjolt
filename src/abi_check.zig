@@ -1,42 +1,17 @@
-//! Comptime cross-check: the hand-written externs in `c.zig` against the real
-//! C header.
+//! Comptime cross-check: the hand-written externs in `c.zig` against the
+//! real C header — `@cImport`-ed in a test only (the shipped module stays
+//! translate-c-free), compared declaration by declaration by reflection.
+//! No hand-written list of what to check: an unclassified declaration is
+//! a compile error, not a silent pass.
 //!
-//! `c.zig` is written by hand so the wrapper gets exactly the types it wants
-//! and the shipped module never runs translate-c. The cost of hand-writing is
-//! drift, and nothing in either compiler notices when this file's twin stops
-//! matching `ffi/zjolt.h`.
+//! Naming conventions are load-bearing: type `Foo` pairs with `ZJoltFoo`,
+//! function `zjoltFoo` with itself, constant `foo_bar` with
+//! `ZJOLT_FOO_BAR`, enum `Foo`'s field `bar` with `ZJOLT_FOO_BAR`.
 //!
-//! This closes that by `@cImport`-ing the header — in a test only, so the
-//! shipped module stays translate-c-free — and comparing the two namespaces
-//! declaration by declaration. There is **no hand-written list of what to
-//! check**: every public declaration in `c.zig` is discovered by reflection,
-//! paired with its counterpart by naming convention, and compared. A
-//! declaration that fits no category is a compile error rather than a silent
-//! pass, so the check cannot quietly stop covering something.
-//!
-//! The naming conventions are therefore load-bearing, not cosmetic:
-//!
-//!   * a type `Foo`            pairs with `ZJoltFoo`
-//!   * a function `zjoltFoo`   pairs with itself
-//!   * a constant `foo_bar`    pairs with `ZJOLT_FOO_BAR`
-//!   * an enum `Foo`'s field `bar` pairs with `ZJOLT_FOO_BAR`
-//!
-//! A declaration that breaks the convention fails this check, which is the
-//! pressure that keeps the two sides legible as twins.
-//!
-//! ## What it does not catch
-//!
-//! translate-c renders every C pointer as `[*c]T`, while `c.zig` writes the
-//! pointer it means (`*T`, `?*const T`, `[*]T`). Pointee types are therefore
-//! compared only by size and alignment: a `float *` declared here as `*i32`
-//! passes. `tests/c_smoke.c` drives the same scenarios as the Zig suite
-//! through the header itself, which is what covers that residue.
-//!
-//! It also compares this build's externs against this build's *header*, not
-//! against the *library*. Those two diverge only when the header is compiled
-//! with different macros than the library was, which is why `build.zig` gives
-//! the test module its macros from the same `applyBuildMacros` the library
-//! uses, and why `zjoltInit` checks `ZJOLT_CONFIG_ID` at runtime as well.
+//! Does NOT catch: pointee type mismatches (translate-c renders every C
+//! pointer as `[*c]T`, so pointees compare by size/alignment only — see
+//! `tests/c_smoke.c`), or drift from a header built with different
+//! macros (both get `applyBuildMacros`; `zjoltInit` also checks `ZJOLT_CONFIG_ID` at runtime).
 
 const std = @import("std");
 const c = @import("c.zig");
@@ -93,9 +68,8 @@ fn fieldCName(comptime type_name: []const u8, comptime field_name: []const u8) [
 //=============================================================================
 // Comparison primitives
 //
-// Every failure is a compile error naming both sides, because a build that
-// cannot state which declaration drifted is a guard that costs more to read
-// than the drift it found.
+// Every failure is a compile error naming both sides — a guard that
+// cannot state which declaration drifted costs more to read than the drift it found.
 //=============================================================================
 
 fn fail(comptime msg: []const u8) void {
@@ -127,19 +101,12 @@ fn sameSizeAndAlign(
     }
 }
 
-/// The scalar a type really is at the boundary, with the Zig-side wrapper
-/// removed.
-///
-/// translate-c renders every C enum as a plain integer alias, and this side
-/// deliberately keeps enums as `enum(c_int)` and bit masks as
-/// `packed struct(u32)` — that is what the wrapper is FOR. Comparing those to
-/// an integer as they stand would report drift on every one of them, so each
-/// is resolved to its backing integer first and what remains is a comparison
-/// of what actually crosses.
-///
-/// This is not a loosening. An `enum(u32)` paired with a C enum the compiler
-/// gave `int` is a real disagreement about signedness, and resolving both to
-/// their backing integers is what surfaces it.
+/// The scalar a type really is at the boundary, with the Zig-side
+/// wrapper removed. translate-c renders every C enum as a plain
+/// integer; this side deliberately keeps enums as `enum(c_int)` and
+/// masks as `packed struct(u32)`, so each is resolved to its backing
+/// integer first — not a loosening: an `enum(u32)` against a C `int`
+/// enum is a real signedness disagreement, and this is what surfaces it.
 fn scalarIdentity(comptime T: type) type {
     return switch (@typeInfo(T)) {
         .@"enum" => |e| e.tag_type,
@@ -148,17 +115,11 @@ fn scalarIdentity(comptime T: type) type {
     };
 }
 
-/// Size and alignment, plus the part of a scalar's identity they do not carry.
-///
-/// Two integers of the same width are interchangeable to `@sizeOf`, so a
-/// `uint32_t` field declared as `i32` — or a `float` parameter declared as
-/// `u32` — passes a size-and-alignment comparison and then silently
-/// reinterprets every value that crosses. Comparing signedness, and
-/// int-versus-float, is what closes that.
-///
-/// It is applied wherever a type crosses the boundary — struct fields,
-/// function parameters, return values — rather than only to the top-level
-/// scalar typedefs, because those are not where the mistake gets made.
+/// Size and alignment, plus the part of a scalar's identity they do
+/// not carry: a `uint32_t` declared `i32`, or a `float` declared `u32`,
+/// passes size/alignment and then silently reinterprets every value —
+/// comparing signedness and int-vs-float closes that. Applied wherever
+/// a type crosses (struct fields, parameters, returns), not just top-level typedefs, since that is not where the mistake gets made.
 fn sameScalar(
     comptime what: []const u8,
     comptime Ours: type,
@@ -169,18 +130,12 @@ fn sameScalar(
     const oi = @typeInfo(scalarIdentity(Ours));
     const ti = @typeInfo(scalarIdentity(Theirs));
 
-    // Signedness, EXCEPT across an enum. C leaves an enum's underlying type to
-    // the implementation, and the implementations disagree: clang and gcc pick
-    // an unsigned type when no enumerator is negative, MSVC uses `int`. So the
-    // signedness of `ZJoltMotionType` is a property of the compiler, not of
-    // this ABI, and comparing it would fail a correct binding on one toolchain
-    // and pass it on another.
-    //
-    // What makes that safe to skip is not tolerance, it is a precondition:
-    // every enumerator in this ABI is non-negative, so every value represents
-    // identically either way. `checkEnumValues` asserts that precondition
-    // rather than assuming it — a negative enumerator would make the
-    // implementation's choice observable, and it fails the build.
+    // Signedness, EXCEPT across an enum: C leaves an enum's underlying
+    // type to the implementation (clang/gcc pick unsigned when no
+    // enumerator is negative, MSVC uses `int`), so comparing it would
+    // fail a correct binding on one toolchain and pass on another. Safe
+    // to skip only because every enumerator here is non-negative —
+    // `checkEnumValues` asserts that precondition rather than assuming it.
     const across_enum = scalarIdentity(Ours) != Ours or scalarIdentity(Theirs) != Theirs;
     if (!across_enum and oi == .int and ti == .int and
         oi.int.signedness != ti.int.signedness)
@@ -229,13 +184,10 @@ fn checkFnType(
     sameScalar(what ++ " return value", OR, TR);
 }
 
-/// Struct layout, compared field by NAME rather than by position.
-///
-/// This is the distinction that makes the check worth having. Two same-sized
-/// adjacent fields swapping places leaves the *sequence* of offsets identical,
-/// so a positional comparison — or a digest folded over offsets alone — passes
-/// a swap that silently reinterprets both fields. Pairing each name with its
-/// own offset is what catches it.
+/// Struct layout, compared field by NAME rather than by position — the
+/// distinction that makes the check worth having. Two same-sized
+/// adjacent fields swapping places leaves the *sequence* of offsets
+/// identical, so a positional comparison passes a swap that silently reinterprets both fields; pairing each name with its own offset catches it.
 fn checkStructLayout(
     comptime what: []const u8,
     comptime Ours: type,
@@ -357,14 +309,11 @@ fn sweepOurs() Counts {
     comptime {
         var n = Counts{};
 
-        // One pass per module in `c.zig`'s list. A name appearing in more than
-        // one module is a re-export — every module re-exports the shared
-        // primitives it takes, so its callers see one namespace — and it is
-        // checked once, against the module that declares it.
-        //
-        // The identity assertion is what keeps that safe: if a re-export ever
-        // stops being the same declaration, this refuses the build rather than
-        // checking one copy and trusting the other.
+        // One pass per module in `c.zig`'s list. A name in more than one
+        // module is a re-export (every module re-exports the shared
+        // primitives it takes, so callers see one namespace) and is
+        // checked once, against the declaring module. The identity
+        // assertion keeps that safe: a re-export that stops being the same declaration refuses the build rather than trusting the copy.
         for (c.modules, 0..) |m, mi| for (@typeInfo(m).@"struct".decls) |d| {
             // A name that an EARLIER module already declared is a re-export:
             // every module re-exports the shared primitives it takes so that
@@ -468,14 +417,12 @@ fn sweepOurs() Counts {
             // ---- functions -------------------------------------------------
             if (@typeInfo(Decl) == .@"fn") {
                 if (@typeInfo(Decl).@"fn".calling_convention == .auto) {
-                    // A Zig helper, not an extern. Skipping it is right — it
-                    // has no counterpart in the header — but skipping it
-                    // SILENTLY is not, because the reverse sweep asks only
-                    // whether a name exists. A helper written on an exported
-                    // symbol's name would be skipped here and satisfy the
-                    // reverse sweep there, and the extern it displaced would
-                    // vanish with neither direction noticing. So: a helper is
-                    // allowed, a helper wearing a boundary name is not.
+                    // A Zig helper, not an extern — right to skip (no
+                    // header counterpart), but not SILENTLY: the reverse
+                    // sweep only checks a name exists, so a helper on an
+                    // exported symbol's name would satisfy it there while
+                    // the extern it displaced vanishes unnoticed. A
+                    // helper is allowed; one wearing a boundary name is not.
                     if (std.mem.startsWith(u8, d.name, "zjolt")) {
                         fail("src/c.zig declares `" ++ d.name ++ "` as a Zig function, not an " ++
                             "extern. The `zjolt` prefix is reserved for the C boundary here: a " ++
@@ -555,15 +502,12 @@ fn sweepTheirs() usize {
                     "this check nor the misuse sweep covers.");
             }
             const Home = home.?;
-            // Existence is not enough: the name has to resolve to something
-            // that actually links. A Zig helper or a type sitting on the name
-            // satisfies `@hasDecl` while the extern is gone.
-            //
-            // The forward sweep now rejects those first, so in practice this
-            // is the backstop rather than the catch — which is the point. The
-            // forward sweep's rejection depends on its name filter; this one
-            // depends on nothing but the header, so a future change that
-            // widens that filter cannot reopen the hole silently.
+            // Existence is not enough: the name must resolve to something
+            // that actually links — a Zig helper or a type on the name
+            // satisfies `@hasDecl` while the extern is gone. The forward
+            // sweep rejects those first, so this is the backstop, on
+            // purpose: it depends only on the header, so a future change
+            // to the forward sweep's name filter cannot reopen the hole silently.
             const Ours = @TypeOf(@field(Home, d.name));
             if (@typeInfo(Ours) != .@"fn") {
                 fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++
@@ -581,10 +525,8 @@ fn sweepTheirs() usize {
 //=============================================================================
 // The test
 //
-// The comparisons above are compile errors, so reaching this body at all means
-// they passed. What is left to assert is that they actually ran: a sweep that
-// silently matched nothing would be indistinguishable from a sweep that
-// matched everything.
+// The comparisons above are compile errors, so reaching this body means
+// they passed. What's left: assert they actually ran — a sweep matching nothing silently would be indistinguishable from one matching everything.
 //=============================================================================
 
 test "ABI: src/c.zig agrees with ffi/zjolt.h" {

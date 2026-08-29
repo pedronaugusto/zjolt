@@ -79,6 +79,26 @@ section 'Hygiene'
 # be reformatted, or the next re-vendor becomes an unreadable diff.
 run 'zig fmt (src, tests, build.zig)' zig fmt --check src tests/consumer build.zig
 
+# Every header ffi/zjolt.h pulls in has to be installed with the library, or a
+# C consumer gets an umbrella header that does not resolve. The consumer test
+# catches this too, but only under --full and only after a full build.
+run 'installed headers cover every include' bash -c '
+  comm -23 \
+    <(grep -hoE "#include \"zjolt_[a-z_]+\.h\"" ffi/*.h | sed "s/#include \"//; s/\"//" | sort -u) \
+    <(grep -oE "ffi/zjolt_[a-z_]+\.h" build.zig | sed "s|ffi/||" | sort -u) |
+  grep . && { echo "not in build.zig'"'"'s installHeader list"; exit 1; }; exit 0'
+
+# Every public Jolt name in the areas this ABI claims has a verdict, and every
+# verdict that says "reachable" names a symbol the headers really declare. It
+# is here rather than under --full because it takes a second and because a gap
+# is the kind of thing that should stop a push, not wait for a nightly.
+# Comment blocks stay short and stay out of the narrative register. Cheap, and
+# the kind of drift that is invisible in review until a whole file reads like a
+# diary.
+run 'comment standard' ci/check-comments.sh
+
+run 'coverage (every name has a verdict)' ci/check-coverage.sh
+
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------
@@ -109,7 +129,7 @@ if [ $FULL -eq 1 ]; then
   # Mutation test for the ABI cross-check itself — see the script's own header
   # for why a check that guards everything else needs one. It rebuilds once per
   # mutation, which is why it is here and not in the default run.
-  run 'guard mutations (17)' ci/check-abi-drift.sh
+  run 'guard mutations (22)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
   section 'Tests — build configurations'

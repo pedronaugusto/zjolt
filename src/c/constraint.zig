@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const core = @import("core.zig");
+const debug = @import("debug.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
@@ -22,6 +23,10 @@ pub const max_physics_jobs = core.max_physics_jobs;
 pub const Constraint = opaque {};
 
 pub const PathConstraintPath = opaque {};
+
+/// What a custom constraint's save_state / restore_state callbacks talk to.
+/// @see ZJoltCustomConstraintCallbacks.
+pub const StateRecorder = opaque {};
 
 /// The body id that stands for "the world" when creating a constraint. Spelled
 /// as the invalid id because that is what Jolt's own fixed-to-world body
@@ -46,6 +51,7 @@ pub const ConstraintSubType = enum(c_int) {
     gear = 10,
     rack_and_pinion = 11,
     pulley = 12,
+    custom = 13,
 };
 
 pub const ConstraintSpace = enum(c_int) {
@@ -335,6 +341,28 @@ pub extern fn zjoltConstraintSetDrawSize(constraint: *Constraint, size: f32) Res
 pub extern fn zjoltConstraintGetDrawSize(constraint: *const Constraint, out: *f32) Result;
 
 pub extern fn zjoltConstraintResetWarmStart(constraint: *Constraint) void;
+
+//=============================================================================
+// Constraint settings
+//=============================================================================
+
+pub const ConstraintSettings = opaque {};
+
+pub extern fn zjoltConstraintGetConstraintSettings(constraint: *const Constraint, out: **ConstraintSettings) Result;
+
+pub extern fn zjoltConstraintSettingsAddRef(settings: *const ConstraintSettings) void;
+pub extern fn zjoltConstraintSettingsRelease(settings: *const ConstraintSettings) void;
+pub extern fn zjoltConstraintSettingsGetRefCount(settings: *const ConstraintSettings) u32;
+
+pub extern fn zjoltConstraintSettingsGetEnabled(settings: *const ConstraintSettings) bool;
+pub extern fn zjoltConstraintSettingsGetConstraintPriority(settings: *const ConstraintSettings) u32;
+pub extern fn zjoltConstraintSettingsGetNumVelocityStepsOverride(settings: *const ConstraintSettings) u32;
+pub extern fn zjoltConstraintSettingsGetNumPositionStepsOverride(settings: *const ConstraintSettings) u32;
+pub extern fn zjoltConstraintSettingsGetDrawConstraintSize(settings: *const ConstraintSettings) f32;
+pub extern fn zjoltConstraintSettingsGetUserData(settings: *const ConstraintSettings) u64;
+
+pub extern fn zjoltConstraintSettingsSaveBinaryState(settings: *const ConstraintSettings, stream: *const core.Stream) Result;
+pub extern fn zjoltConstraintSettingsRestoreBinaryState(stream: *const core.Stream, out: **ConstraintSettings) Result;
 
 pub extern fn zjoltFixedConstraintGetTotalLambdaPosition(constraint: *const Constraint, out: *Vec3) Result;
 
@@ -631,3 +659,64 @@ pub extern fn zjoltPathConstraintGetTotalLambdaRotationHinge(constraint: *const 
 pub extern fn zjoltPathConstraintGetTotalLambdaRotation(constraint: *const Constraint, out: *Vec3) Result;
 
 pub extern fn zjoltPathConstraintGetTotalLambdaMotor(constraint: *const Constraint, out: *f32) Result;
+
+//=============================================================================
+// Custom constraints
+//=============================================================================
+
+/// Body state a custom constraint's solver callbacks read and write. @see
+/// ffi/zjolt_constraint.h's ZJoltSolverBody for what each field means and the
+/// "world space, already rotated" contract on `inverse_inertia`.
+pub const SolverBody = extern struct {
+    linear_velocity: Vec3,
+    angular_velocity: Vec3,
+    position_delta: Vec3,
+    rotation_delta: Vec3,
+    inverse_mass: f32,
+    inverse_inertia: [9]f32,
+    center_of_mass: Vec3,
+    rotation: Quat,
+    is_dynamic: bool,
+};
+
+pub const SolverBodyPair = extern struct {
+    body1: SolverBody,
+    body2: SolverBody,
+};
+
+/// One function pointer per Jolt solver virtual. Every one but `draw` and
+/// `destroy` is required — @see zjoltConstraintCreateCustom.
+pub const CustomConstraintCallbacks = extern struct {
+    setup_velocity: ?*const fn (user: ?*anyopaque, bodies: *SolverBodyPair, delta_time: f32) callconv(.c) void = null,
+    warm_start_velocity: ?*const fn (user: ?*anyopaque, bodies: *SolverBodyPair, warm_start_impulse_ratio: f32) callconv(.c) void = null,
+    solve_velocity: ?*const fn (user: ?*anyopaque, bodies: *SolverBodyPair, delta_time: f32) callconv(.c) bool = null,
+    solve_position: ?*const fn (user: ?*anyopaque, bodies: *SolverBodyPair, delta_time: f32, baumgarte: f32) callconv(.c) bool = null,
+    reset_warm_start: ?*const fn (user: ?*anyopaque) callconv(.c) void = null,
+    is_active: ?*const fn (user: ?*anyopaque) callconv(.c) bool = null,
+    notify_shape_changed: ?*const fn (user: ?*anyopaque, body: BodyId, delta_center_of_mass: Vec3) callconv(.c) void = null,
+    save_state: ?*const fn (user: ?*anyopaque, recorder: *StateRecorder) callconv(.c) void = null,
+    restore_state: ?*const fn (user: ?*anyopaque, recorder: *StateRecorder) callconv(.c) void = null,
+    draw: ?*const fn (user: ?*anyopaque, renderer: *debug.DebugRenderer) callconv(.c) void = null,
+    destroy: ?*const fn (user: ?*anyopaque) callconv(.c) void = null,
+};
+
+pub const CustomConstraintDesc = extern struct {
+    body1: BodyId,
+    body2: BodyId,
+    constraint_to_body1: Mat44,
+    constraint_to_body2: Mat44,
+    enabled: bool = true,
+    num_velocity_steps_override: u32 = 0,
+    num_position_steps_override: u32 = 0,
+    draw_constraint_size: f32 = 1,
+    callbacks: CustomConstraintCallbacks = .{},
+    user: ?*anyopaque = null,
+};
+
+pub extern fn zjoltStateRecorderWriteBytes(recorder: *StateRecorder, data: ?*const anyopaque, size: usize) void;
+
+pub extern fn zjoltStateRecorderReadBytes(recorder: *StateRecorder, data: ?*anyopaque, size: usize) void;
+
+pub extern fn zjoltConstraintCreateCustom(system: *PhysicsSystem, desc: *const CustomConstraintDesc, out: **Constraint) Result;
+
+pub extern fn zjoltConstraintGetCustomUserData(constraint: *const Constraint, out: *?*anyopaque) Result;

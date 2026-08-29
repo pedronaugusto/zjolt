@@ -27,6 +27,23 @@ pub const Activation = c.Activation;
 pub const AllowedDofs = c.AllowedDofs;
 pub const OverrideMassProperties = c.OverrideMassProperties;
 pub const ObjectLayer = c.ObjectLayer;
+pub const MassProperties = c.MassProperties;
+pub const SimulationStats = c.SimulationStats;
+
+/// The 8-bit generation counter packed into `id`'s top byte — two ids that
+/// share an index (one recycled from the other) never share this. Pure bit
+/// extraction; unlike everything else in this file it needs no
+/// `BodyInterface` and answers the same whether `id` still names a live body.
+pub fn getSequenceNumber(id: BodyId) u8 {
+    return c.zjoltBodyIdGetSequenceNumber(id);
+}
+
+/// Whether a body wearing `shape` may only ever be STATIC — true for a height
+/// field, a plane, a mesh, and any compound or decorated shape with one of
+/// those inside it.
+pub fn shapeMustBeStatic(shape: shape_mod.Shape) bool {
+    return c.zjoltShapeMustBeStatic(shape.handle);
+}
 
 /// How a body is born.
 ///
@@ -55,9 +72,15 @@ pub const BodyDesc = struct {
     allowed_dofs: AllowedDofs = .all,
 
     /// `.calculate_inertia` uses `mass` below and scales the shape's inertia
-    /// to match; the default computes both from the shape and its density.
+    /// to match; `.mass_and_inertia_provided` uses `mass_properties_override`
+    /// outright; the default computes both from the shape and its density.
     override_mass_properties: OverrideMassProperties = .calculate_mass_and_inertia,
     mass: f32 = 0,
+    /// Used when override_mass_properties is `.mass_and_inertia_provided`.
+    /// `inertia` is a direct (not inverse) tensor, decomposed into principal
+    /// axes at construction — a non-diagonal one round-trips to an
+    /// equivalent tensor rather than byte-for-byte.
+    mass_properties_override: MassProperties = .{ .mass = 0, .inertia = @splat(0) },
 
     /// Lets a static body be switched to kinematic or dynamic later.
     allow_dynamic_or_kinematic: bool = false,
@@ -93,6 +116,7 @@ pub const BodyDesc = struct {
         out.allowed_dofs = self.allowed_dofs;
         out.override_mass_properties = self.override_mass_properties;
         out.mass = self.mass;
+        out.mass_properties_override = self.mass_properties_override;
         out.allow_dynamic_or_kinematic = self.allow_dynamic_or_kinematic;
         out.is_sensor = self.is_sensor;
         out.allow_sleeping = self.allow_sleeping;
@@ -153,13 +177,11 @@ pub const BodyInterface = struct {
     }
 
     /// As `create`, but the body takes `id` instead of the next one Jolt
-    /// would assign — the id deterministic lockstep networking needs a body
-    /// to carry identically on every peer.
-    ///
-    /// `id` must not be `invalid_body_id`, must not already name a live
-    /// body, and must not set bit 31 (Jolt reserves it for the broad phase).
-    /// An id round-tripped from a body this binding already created always
-    /// satisfies all three; error.Error.InvalidArgument otherwise.
+    /// would assign — for lockstep networking, where every peer needs
+    /// the identical id. `id` must not be `invalid_body_id`, name a live
+    /// body, or set bit 31 (Jolt reserves it for the broad phase); an id
+    /// round-tripped from a body this binding created always satisfies
+    /// all three — `error.InvalidArgument` otherwise.
     pub fn createWithId(self: BodyInterface, desc: BodyDesc, id: BodyId) err.Error!BodyId {
         const c_desc = desc.toC();
         var out: BodyId = invalid_body_id;
@@ -178,6 +200,17 @@ pub const BodyInterface = struct {
         var out: BodyId = invalid_body_id;
         try err.check(c.zjoltBodyCreateAndAddWithId(self.handle, &c_desc, id, activation, &out));
         return out;
+    }
+
+    /// Overwrites `body`'s state from `desc`, as though it had just been
+    /// created with it. `body` must not currently be added to this system.
+    ///
+    /// `error.InvalidArgument` if `body` is added, or if `desc` implies
+    /// motion properties this body was created without (STATIC with
+    /// `allow_dynamic_or_kinematic = false` cannot gain any here).
+    pub fn applyBodyCreationSettings(self: BodyInterface, body: BodyId, desc: BodyDesc) err.Error!void {
+        const c_desc = desc.toC();
+        try err.check(c.zjoltBodyApplyBodyCreationSettings(self.handle, body, &c_desc));
     }
 
     /// Removes the body if it is still added, then destroys it. The id becomes
@@ -293,16 +326,148 @@ pub const BodyInterface = struct {
         return out;
     }
 
-    /// The inverse inertia tensor rotated into world space, as a 3x3 matrix
-    /// padded out to 4x4 the way Jolt stores one.
+    /// The inverse inertia tensor rotated into world space, as a 3x3
+    /// matrix padded out to 4x4 the way Jolt stores one.
     ///
-    /// Only a dynamic body has one. A static or kinematic body is
-    /// `error.InvalidArgument` rather than a default, because Jolt's own
-    /// accessor asserts on it instead of returning anything; a stale id is
-    /// `error.BodyNotFound`.
+    /// Only a dynamic body has one: `error.InvalidArgument` for a static
+    /// or kinematic body (Jolt's own accessor asserts rather than
+    /// returning a default); `error.BodyNotFound` for a stale id.
     pub fn getInverseInertia(self: BodyInterface, body: BodyId) err.Error!math.Mat44 {
         var out: math.Mat44 = math.mat44_identity;
         try err.check(c.zjoltBodyGetInverseInertia(self.handle, body, &out));
+        return out;
+    }
+
+    /// As `getInverseInertia`, but in LOCAL (body) space rather than rotated
+    /// into world space.
+    pub fn getLocalSpaceInverseInertia(self: BodyInterface, body: BodyId) err.Error!math.Mat44 {
+        var out: math.Mat44 = math.mat44_identity;
+        try err.check(c.zjoltBodyGetLocalSpaceInverseInertia(self.handle, body, &out));
+        return out;
+    }
+
+    /// As `getInverseInertia`, but for the hypothetical orientation
+    /// `rotation` instead of the body's actual current one. Only the
+    /// rotation part of `rotation` is used; translation is ignored.
+    pub fn getInverseInertiaForRotation(
+        self: BodyInterface,
+        body: BodyId,
+        rotation: math.Mat44,
+    ) err.Error!math.Mat44 {
+        var out: math.Mat44 = math.mat44_identity;
+        try err.check(c.zjoltBodyGetInverseInertiaForRotation(self.handle, body, &rotation, &out));
+        return out;
+    }
+
+    /// Inverse mass (1/kg), without the dynamic check `getInverseInertia`
+    /// makes. Meaningful on a currently-kinematic body too, if it was
+    /// created with `allow_dynamic_or_kinematic` and therefore has a real
+    /// mass ready for the moment it becomes dynamic. 0 on a static body,
+    /// which has no motion properties to hold this.
+    pub fn getInverseMassUnchecked(self: BodyInterface, body: BodyId) f32 {
+        return c.zjoltBodyGetInverseMassUnchecked(self.handle, body);
+    }
+
+    /// Which axes this body is allowed to move along — the same mask
+    /// `BodyDesc.allowed_dofs` sets at creation. `.all`, Jolt's own
+    /// `MotionProperties` default, on a static body or a stale id.
+    pub fn getAllowedDOFs(self: BodyInterface, body: BodyId) AllowedDofs {
+        return c.zjoltBodyGetAllowedDOFs(self.handle, body);
+    }
+
+    /// Whether this body currently has motion properties allocated at all.
+    /// A static body has none, a kinematic or dynamic one always does, and a
+    /// body created static with `allow_dynamic_or_kinematic = true` is the
+    /// one case this actually distinguishes from an ordinary static body,
+    /// since both currently report `getMotionType() == .static`.
+    pub fn hasMotionProperties(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyHasMotionProperties(self.handle, body);
+    }
+
+    /// Sets the inverse mass (1 / mass) directly, no validation, no
+    /// derived recomputation. Unlike `setMassProperties`, this can
+    /// express `inverse_mass == 0` on a body that still translates (an
+    /// infinitely heavy object pushed by nothing), since it never
+    /// computes 1/mass or asserts mass is positive. A no-op on a static body.
+    pub fn setInverseMass(self: BodyInterface, body: BodyId, inverse_mass: f32) err.Error!void {
+        try err.check(c.zjoltBodySetInverseMass(self.handle, body, inverse_mass));
+    }
+
+    /// Sets the already-diagonalised inverse inertia tensor directly —
+    /// the diagonal and the rotation that carries it into local space.
+    /// Unlike `setMassProperties`, this never runs Jolt's
+    /// principal-moments eigen-solver (which can fail and silently
+    /// substitute a unit-sphere tensor). A no-op on a static body.
+    pub fn setInverseInertia(self: BodyInterface, body: BodyId, diagonal: math.Vec3, rotation: math.Quat) err.Error!void {
+        try err.check(c.zjoltBodySetInverseInertia(self.handle, body, &diagonal, &rotation));
+    }
+
+    /// Rescales an already-live body's mass and inertia together, keeping
+    /// their ratio. `mass` must be positive.
+    ///
+    /// A no-op on a static body, or one whose current inverse mass is
+    /// zero (every translation DOF locked, or a kinematic body never
+    /// given a finite mass). Read `getInverseMassUnchecked` to confirm it changed anything.
+    pub fn scaleToMass(self: BodyInterface, body: BodyId, mass: f32) err.Error!void {
+        try err.check(c.zjoltBodyScaleToMass(self.handle, body, mass));
+    }
+
+    /// Gives a body a fully custom mass and inertia tensor, and sets its
+    /// allowed degrees of freedom at the same time — Jolt couples the two
+    /// since the inverse inertia is masked to the allowed rotation axes.
+    /// Pass `getAllowedDOFs` back to leave the existing ones alone.
+    ///
+    /// A no-op on a static body. `allowed_dofs` with nothing set, or a non-positive mass with any translation allowed, is `error.InvalidArgument`.
+    pub fn setMassProperties(
+        self: BodyInterface,
+        body: BodyId,
+        allowed_dofs: AllowedDofs,
+        mass_properties: MassProperties,
+    ) err.Error!void {
+        try err.check(c.zjoltBodySetMassProperties(self.handle, body, allowed_dofs, &mass_properties));
+    }
+
+    /// `v` with the translation axes `getAllowedDOFs` excludes zeroed out.
+    /// `v` unchanged on a static body, matching `getAllowedDOFs`'s `.all` default.
+    pub fn maskTranslationDOFs(self: BodyInterface, body: BodyId, v: math.Vec3) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltBodyMaskTranslationDOFs(self.handle, body, &v, &out);
+        return out;
+    }
+
+    /// As `maskTranslationDOFs`, but for the rotation axes.
+    pub fn maskAngularDOFs(self: BodyInterface, body: BodyId, v: math.Vec3) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltBodyMaskAngularDOFs(self.handle, body, &v, &out);
+        return out;
+    }
+
+    /// Rescales the body's current linear velocity down to
+    /// `getMaxLinearVelocity` if it exceeds it, in place. No-op below the
+    /// limit or on a static body.
+    pub fn clampLinearVelocity(self: BodyInterface, body: BodyId) err.Error!void {
+        try err.check(c.zjoltBodyClampLinearVelocity(self.handle, body));
+    }
+
+    /// As `clampLinearVelocity`, for angular velocity and `getMaxAngularVelocity`.
+    pub fn clampAngularVelocity(self: BodyInterface, body: BodyId) err.Error!void {
+        try err.check(c.zjoltBodyClampAngularVelocity(self.handle, body));
+    }
+
+    /// `I_world^-1 * v`, using the body's current rotation. Same dynamic-only
+    /// requirement as `getInverseInertia`.
+    pub fn multiplyWorldSpaceInverseInertiaByVector(self: BodyInterface, body: BodyId, v: math.Vec3) err.Error!math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        try err.check(c.zjoltBodyMultiplyWorldSpaceInverseInertiaByVector(self.handle, body, &v, &out));
+        return out;
+    }
+
+    /// As `getLocalSpaceInverseInertia`, but answers for a kinematic body too
+    /// instead of refusing. Only a static body (no motion properties) is
+    /// `error.InvalidArgument`.
+    pub fn getLocalSpaceInverseInertiaUnchecked(self: BodyInterface, body: BodyId) err.Error!math.Mat44 {
+        var out: math.Mat44 = math.mat44_identity;
+        try err.check(c.zjoltBodyGetLocalSpaceInverseInertiaUnchecked(self.handle, body, &out));
         return out;
     }
 
@@ -459,6 +624,33 @@ pub const BodyInterface = struct {
         torque: math.Vec3,
     ) void {
         c.zjoltBodyAddForceAndTorque(self.handle, body, &force, &torque);
+    }
+
+    /// What `addForce`/`addForceAtPoint`/`addTorque`/`addForceAndTorque`
+    /// have accumulated since the last step consumed it. Zero for a body
+    /// that is not dynamic or whose lock fails.
+    ///
+    /// A step clears both automatically; `resetForce`/`resetTorque` cancel one early.
+    pub fn getAccumulatedForce(self: BodyInterface, body: BodyId) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltBodyGetAccumulatedForce(self.handle, body, &out);
+        return out;
+    }
+
+    pub fn getAccumulatedTorque(self: BodyInterface, body: BodyId) math.Vec3 {
+        var out: math.Vec3 = math.vec3_zero;
+        c.zjoltBodyGetAccumulatedTorque(self.handle, body, &out);
+        return out;
+    }
+
+    /// A no-op on a body that is not dynamic or whose lock fails, same as
+    /// the getters above.
+    pub fn resetForce(self: BodyInterface, body: BodyId) void {
+        c.zjoltBodyResetForce(self.handle, body);
+    }
+
+    pub fn resetTorque(self: BodyInterface, body: BodyId) void {
+        c.zjoltBodyResetTorque(self.handle, body);
     }
 
     /// Changes velocity immediately, unlike a force.
@@ -621,13 +813,18 @@ pub const BodyInterface = struct {
         return c.zjoltBodyGetUseManifoldReduction(self.handle, body);
     }
 
-    /// Whether this body is allowed to settle and go to sleep. Disabling it
-    /// on a body that is already asleep does not wake it — pair with
-    /// `activate` when it should.
+    /// Whether a contact between `body1` and `body2` uses manifold
+    /// reduction — true only when BOTH allow it. `true`, matching
+    /// `getUseManifoldReduction`'s own default, if either lock fails.
+    pub fn getUseManifoldReductionWithBody(self: BodyInterface, body1: BodyId, body2: BodyId) bool {
+        return c.zjoltBodyGetUseManifoldReductionWithBody(self.handle, body1, body2);
+    }
+
+    /// Whether this body is allowed to settle and go to sleep. Disabling
+    /// it on a sleeping body does not wake it — pair with `activate`.
     ///
-    /// Both are a no-op on a static body, which has no motion properties to
-    /// hold this. The getter then answers `true`, Jolt's own
-    /// construction-time default, exactly as for a stale id.
+    /// Both are a no-op on a static body (no motion properties); the
+    /// getter then answers `true`, Jolt's default, same as for a stale id.
     pub fn setAllowSleeping(self: BodyInterface, body: BodyId, allow: bool) void {
         c.zjoltBodySetAllowSleeping(self.handle, body, allow);
     }
@@ -636,14 +833,12 @@ pub const BodyInterface = struct {
         return c.zjoltBodyGetAllowSleeping(self.handle, body);
     }
 
-    /// Runtime linear damping: dv/dt = -c * v. `BodyDesc.linear_damping` sets
-    /// the starting value at creation; this is the missing other half, for a
-    /// caller that wants to change drag after the fact instead of destroying
-    /// and recreating the body — a mud patch, an underwater volume.
+    /// Runtime linear damping: dv/dt = -c * v. `BodyDesc.linear_damping`
+    /// sets the starting value at creation; this changes drag after the
+    /// fact — a mud patch, an underwater volume.
     ///
-    /// `damping` must not be negative. A no-op (the setter) or 0.05, Jolt's
-    /// own construction-time default (the getter), on a static body, which
-    /// has no motion properties to hold this.
+    /// `damping` must not be negative. No-op (setter) or 0.05, Jolt's
+    /// default (getter), on a static body (no motion properties).
     pub fn setLinearDamping(self: BodyInterface, body: BodyId, damping: f32) err.Error!void {
         try err.check(c.zjoltBodySetLinearDamping(self.handle, body, damping));
     }
@@ -671,16 +866,49 @@ pub const BodyInterface = struct {
         return c.zjoltBodyIsSensor(self.handle, body);
     }
 
+    /// Whether this body applies the gyroscopic force (the Dzhanibekov
+    /// "tennis racket" effect) as part of the step. `false`, Jolt's own
+    /// construction-time default, on a stale id.
+    pub fn getApplyGyroscopicForce(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyGetApplyGyroscopicForce(self.handle, body);
+    }
+
+    /// Whether a kinematic body generates contacts against other kinematic
+    /// or static bodies. Meaningless for a dynamic body, which already
+    /// collides with everything its object layer allows regardless of this
+    /// flag. `false`, Jolt's own construction-time default, on a stale id.
+    pub fn getCollideKinematicVsNonDynamic(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyGetCollideKinematicVsNonDynamic(self.handle, body);
+    }
+
+    /// Whether this body gets the extra ghost-contact suppression a convex
+    /// shape sliding over a mesh's internal edges needs. `false`, Jolt's own
+    /// construction-time default, on a stale id.
+    pub fn getEnhancedInternalEdgeRemoval(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyGetEnhancedInternalEdgeRemoval(self.handle, body);
+    }
+
+    /// Whether a contact between `body1` and `body2` gets enhanced
+    /// internal-edge removal — true if EITHER body requests it. `false`,
+    /// matching `getEnhancedInternalEdgeRemoval`'s own default, if either
+    /// lock fails.
+    pub fn getEnhancedInternalEdgeRemovalWithBody(self: BodyInterface, body1: BodyId, body2: BodyId) bool {
+        return c.zjoltBodyGetEnhancedInternalEdgeRemovalWithBody(self.handle, body1, body2);
+    }
+
+    /// Whether this body changed in a way that invalidates cached contact
+    /// results for every pair touching it. Set by `invalidateContactCache`
+    /// and cleared once the next step reprocesses those pairs.
+    pub fn isCollisionCacheInvalid(self: BodyInterface, body: BodyId) bool {
+        return c.zjoltBodyIsCollisionCacheInvalid(self.handle, body);
+    }
+
     /// The material of one leaf of the body's shape. @see `Shape.material`
-    /// for what a material is and for the sub-shape id rules.
+    /// for what a material is and the sub-shape id rules.
     ///
-    /// **This is not a way to test whether a body exists.** Jolt takes a body
-    /// lock and answers with the shared default material when it fails, so a
-    /// destroyed body and a body whose shape has no materials of its own read
-    /// identically. That answer is forwarded rather than replaced with an
-    /// invented null, because reporting a failure Jolt did not report would be
-    /// a different contract, not a stricter one. Use `isAdded` when the
-    /// question is really about the body.
+    /// **Not a way to test whether a body exists**: a failed lock answers
+    /// with the shared default material, same as a body with no materials
+    /// of its own — Jolt's own answer, forwarded rather than replaced with a null. Use `isAdded` when the question is really about the body.
     pub fn getMaterial(
         self: BodyInterface,
         body: BodyId,
@@ -691,13 +919,12 @@ pub const BodyInterface = struct {
         return .{ .handle = handle };
     }
 
-    /// Tells the system a body's shape changed underneath it — which is what
-    /// the `MutableCompound` methods do.
+    /// Tells the system a body's shape changed underneath it — what the
+    /// `MutableCompound` methods do.
     ///
     /// `previous_center_of_mass` is the shape's centre of mass BEFORE the
-    /// change; the body is moved so its geometry stays where it was. Without
-    /// this call the broad phase and the contact cache go on describing the
-    /// shape as it used to be.
+    /// change; the body is moved so its geometry stays where it was.
+    /// Without this call the broad phase and contact cache keep describing the prior shape.
     pub fn notifyShapeChanged(
         self: BodyInterface,
         body: BodyId,
@@ -750,31 +977,68 @@ pub const BodyInterface = struct {
         return group_mod.fromC(raw);
     }
 
-    /// Drops the cached collision result for every pair involving this body,
-    /// so the next step re-evaluates them.
-    ///
-    /// This is what makes a collision-group change take effect on a pair that
-    /// is already resting. `PhysicsSettings.use_body_pair_contact_cache` is on
-    /// by default, and it skips the narrow phase for a pair whose relative
-    /// transform has not moved — which a group change does not.
+    /// Drops the cached collision result for every pair involving this
+    /// body, so the next step re-evaluates them — what makes a
+    /// collision-group change take effect on a pair already resting.
+    /// `PhysicsSettings.use_body_pair_contact_cache` (on by default)
+    /// skips the narrow phase for a pair whose transform has not moved, which a group change does not.
     pub fn invalidateContactCache(self: BodyInterface, body: BodyId) void {
         c.zjoltBodyInvalidateContactCache(self.handle, body);
+    }
+
+    //-------------------------------------------------------------------------
+    // Detaching a body from its id
+    //-------------------------------------------------------------------------
+
+    /// Removes `body`'s id and hands back the still-alive object, added
+    /// or not — freeing the id for reuse while the body survives for a
+    /// new one (`UnassignedBody.assignId`) or a later
+    /// `UnassignedBody.destroy`. `body` must currently name a live body;
+    /// `error.BodyNotFound` otherwise.
+    pub fn unassignId(self: BodyInterface, body: BodyId) err.Error!UnassignedBody {
+        var handle: *c.UnassignedBody = undefined;
+        try err.check(c.zjoltBodyUnassignId(self.handle, body, &handle));
+        return .{ .handle = handle, .owner = self.handle };
+    }
+};
+
+/// A body that had `BodyInterface.unassignId` called on it: it keeps its
+/// shape, transform, velocity and every other property, but no longer has an
+/// id and cannot be queried, stepped, or found by any `BodyInterface` call
+/// until it is given one back. Owned outright — release it with `assignId`
+/// or `destroy`, exactly one of the two.
+pub const UnassignedBody = struct {
+    handle: *c.UnassignedBody,
+    owner: *c.PhysicsSystem,
+
+    /// Gives this body the id `id`, consuming it. `id` is checked the same
+    /// way `BodyInterface.createWithId` checks one: not `invalid_body_id`,
+    /// bit 31 clear, and not already naming a live body.
+    pub fn assignId(self: UnassignedBody, id: BodyId) err.Error!BodyId {
+        var out: BodyId = invalid_body_id;
+        try err.check(c.zjoltUnassignedBodyAssignId(self.owner, self.handle, id, &out));
+        return out;
+    }
+
+    /// Destroys the object outright instead of giving it back an id.
+    pub fn destroy(self: UnassignedBody) err.Error!void {
+        try err.check(c.zjoltUnassignedBodyDestroy(self.owner, self.handle));
     }
 };
 
 //=============================================================================
 // Locks
 //
-// The accessors above take a lock per call. A lock holds one body still for a
-// scope and hands out a borrowed `Body` — right when reading several of its
-// properties at once, and the only way to reach the mutators that bypass
-// activation.
-//
-// Jolt's locks are RAII; these are explicit, because a scope is not something
-// a C ABI can express. `defer lock.release()` restores the shape.
+// The accessors above take a lock per call; a lock holds one body still
+// for a scope — for reading several properties at once, or reaching the mutators that bypass activation. `defer lock.release()`.
 //=============================================================================
 
 /// A borrowed view of a locked body. Must not outlive its lock.
+///
+/// Composes into what Jolt's own `BodyFilter::ShouldCollideLocked` gives a
+/// query filter for free — a body already locked, no second acquisition:
+/// `PhysicsSystem.lockRead`/`lockWrite` plus these accessors filter by body
+/// member exactly as that callback would, at the cost of one extra lock.
 pub const Body = struct {
     handle: *c.Body,
 
@@ -782,6 +1046,11 @@ pub const Body = struct {
         return c.zjoltBodyGetId(self.handle);
     }
 
+    /// Position, rotation and velocity accessors below assume ordinary
+    /// caller code, outside `PhysicsSystem.step`. Jolt narrows this window
+    /// itself during its own step — a contact listener, a custom
+    /// constraint's setup — and asserts a violation in a debug build; mind
+    /// the same split from inside one of those.
     pub fn position(self: Body) math.RVec3 {
         var out: math.RVec3 = math.rvec3_zero;
         c.zjoltBodyGetPosition(self.handle, &out);
@@ -828,6 +1097,11 @@ pub const Body = struct {
         return c.zjoltBodyIsActiveLocked(self.handle);
     }
 
+    /// Whether this body's motion type is `.dynamic` — Body::IsDynamic.
+    pub fn isDynamic(self: Body) bool {
+        return self.motionType() == .dynamic;
+    }
+
     pub fn isSensor(self: Body) bool {
         return c.zjoltBodyIsSensorLocked(self.handle);
     }
@@ -843,12 +1117,41 @@ pub const Body = struct {
         return out;
     }
 
+    /// MotionProperties::GetSimulationStats, averaged over the simulation
+    /// island this body was part of during its last step.
+    ///
+    /// `error.Unsupported` unless built with `-Dtrack_simulation_stats`
+    /// (Jolt compiles the counters out without it). A STATIC body reads
+    /// back all zeroes either way — an ordinary body with nothing tracked, not an unsupported build.
+    pub fn simulationStats(self: Body) err.Error!SimulationStats {
+        var out: SimulationStats = undefined;
+        try err.check(c.zjoltBodyGetSimulationStatsLocked(self.handle, &out));
+        return out;
+    }
+
+    /// Debug check: this body's cached broad-phase bounds still match its
+    /// shape's actual bounds, asserting on a mismatch (a mutable compound
+    /// edited without `BodyInterface.notifyShapeChanged`).
+    ///
+    /// `error.Unsupported` when Jolt is built without asserts, where the
+    /// check does not exist to run.
+    pub fn validateCachedBounds(self: Body) err.Error!void {
+        try err.check(c.zjoltBodyValidateCachedBoundsLocked(self.handle));
+    }
+
+    /// Debug check: a sleeping body has zero velocity, catching a velocity
+    /// set directly on motion properties rather than through
+    /// `BodyInterface.setLinearVelocity`/`setAngularVelocity`, which wake
+    /// the body first. `error.Unsupported` without asserts, same as `validateCachedBounds`.
+    pub fn validateMotion(self: Body) err.Error!void {
+        try err.check(c.zjoltBodyValidateMotionLocked(self.handle));
+    }
+
     //-------------------------------------------------------------------------
     // Mutators — require a write lock
     //
-    // These bypass activation, which is the point: they are for adjusting a
-    // body you are already holding still. A sleeping body stays asleep, so
-    // activate it separately if it should wake.
+    // These bypass activation on purpose: for adjusting a body already
+    // held still. A sleeping body stays asleep — activate it separately.
     //-------------------------------------------------------------------------
 
     pub fn setLinearVelocity(self: Body, velocity: math.Vec3) void {
@@ -892,6 +1195,32 @@ pub const Lock = struct {
             c.zjoltBodyLockWriteRelease(&self.raw);
         } else {
             c.zjoltBodyLockReadRelease(&self.raw);
+        }
+    }
+};
+
+/// A lock held over several bodies at once, under one mutex mask so
+/// nothing else can touch any of them between the first read and the
+/// last — what taking them one at a time with `Lock` cannot promise.
+/// Release it exactly once.
+///
+/// `ids` (the slice `lockMultiRead`/`lockMultiWrite` was given) must stay valid until `release`: this borrows it, same as Jolt's own BodyLockMultiRead.
+pub const MultiLock = struct {
+    raw: c.BodyLockMulti,
+    write: bool,
+
+    /// The body at `index`, or null if that id no longer names a live body —
+    /// which is normal, not an error. `index` must be less than the length of
+    /// the slice this lock was taken over.
+    pub fn body(self: *const MultiLock, index: u32) ?Body {
+        return .{ .handle = c.zjoltBodyLockMultiGet(&self.raw, index) orelse return null };
+    }
+
+    pub fn release(self: *MultiLock) void {
+        if (self.write) {
+            c.zjoltBodyLockMultiWriteRelease(&self.raw);
+        } else {
+            c.zjoltBodyLockMultiReadRelease(&self.raw);
         }
     }
 };
