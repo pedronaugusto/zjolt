@@ -1,0 +1,34 @@
+# Entry points the Zig API does not call, because it computes the same
+# answer itself.
+#
+# `ci/check-coverage.sh` otherwise requires every entry point to have a Zig
+# caller, since one without is a capability stranded in C. These are not
+# stranded: the operation is reachable from Zig, it is simply DEFINED there
+# instead of delegated. A cross-TU call cannot be inlined, and for a value
+# op — a quaternion product, a matrix transform — the call costs more than
+# the arithmetic it wraps.
+#
+# The price is two implementations of one formula, which is the arrangement
+# this repository trusts least. So a line here is not an excuse, it is a
+# proof obligation, and the checker holds all four parts of it:
+#
+#   1. NAME is a real entry point.
+#   2. Nothing in non-test Zig calls it — otherwise it is not native and this
+#      line is stale.
+#   3. The Zig declaration named here exists.
+#   4. The test named here exists, and it is what compares the two.
+#
+# Format: NAME<TAB>src/FILE.zig:Type.method<TAB>test name
+zjoltMat44InverseRotationTranslation	src/c/core.zig:Mat44.inverseRotationTranslation	the Mat44 formulas agree with their entry points
+zjoltMat44Multiply	src/c/core.zig:Mat44.multiply	the Mat44 formulas agree with their entry points
+zjoltMat44TransformDirection	src/c/core.zig:Mat44.transformDirection	the Mat44 formulas agree with their entry points
+zjoltMat44TransformPoint	src/c/core.zig:Mat44.transformPoint	the Mat44 formulas agree with their entry points
+zjoltQuatConjugate	src/c/core.zig:Quat.conjugate	the Quat formulas agree with their entry points
+zjoltQuatDot	src/c/core.zig:Quat.dot	the Quat formulas agree with their entry points
+zjoltQuatInverse	src/c/core.zig:Quat.inverse	the Quat formulas agree with their entry points
+zjoltQuatIsNormalized	src/c/core.zig:Quat.isNormalized	the Quat formulas agree with their entry points
+zjoltQuatLerp	src/c/core.zig:Quat.lerp	the Quat formulas agree with their entry points
+zjoltQuatMultiply	src/c/core.zig:Quat.multiply	the Quat formulas agree with their entry points
+zjoltQuatNormalize	src/c/core.zig:Quat.normalize	the Quat formulas agree with their entry points
+zjoltRVec3Lerp	src/c/core.zig:RVec3.lerp	RVec3.lerp agrees with zjoltRVec3Lerp
+zjoltVec3Lerp	src/c/core.zig:Vec3.lerp	Vec3.lerp agrees with zjoltVec3Lerp

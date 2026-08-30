@@ -18,6 +18,7 @@ const options = @import("zjolt_options");
 const shape = @import("shape.zig");
 const c_math = @import("math.zig");
 const err = @import("../error.zig");
+const vec = @import("../vec.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
@@ -99,63 +100,26 @@ pub const ObjectStreamFormat = enum(c_int) {
 };
 
 //=============================================================================
-// Private vector-algebra primitives shared by the methods below. Not part of
-// the public API — see `src/math.zig` for the small, separate copy the
-// pure-Zig value types declared there (`IndexedTriangle`, the `closest_point`
-// and `ray` namespaces, `Plane`) need of their own.
+// The value algebra these methods are built from lives in `src/vec.zig`, one
+// home shared with `src/math.zig`. Each method below is either that algebra
+// applied here, or a call into the C library — never both, and the choice is
+// stated per method.
+//
+// The rule: an operation that is ONE FORMULA over its inputs is computed
+// here, because a cross-TU call for it cannot be inlined and costs more than
+// the arithmetic. An operation that follows a Jolt CONVENTION — a
+// decomposition, a shortest-arc choice, a transcendental, a narrowing rule —
+// stays a call, because agreeing with Jolt is the whole point of it.
+// `src/vec_test.zig` proves every formula here against the entry point that
+// reaches Jolt, and `tools/zig_native.txt` records the pairing.
 //=============================================================================
 
-fn v3add(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
-}
-
-fn v3sub(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
-}
-
-fn v3dot(a: Vec3, b: Vec3) f32 {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-fn v3min(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y), .z = @min(a.z, b.z) };
-}
-
-fn v3max(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y), .z = @max(a.z, b.z) };
-}
-
-fn v3lengthSq(a: Vec3) f32 {
-    return v3dot(a, a);
-}
-
-/// FMA-compensated `a*b - c*d`, matching Jolt's `sDifferenceOfProducts` under
-/// `JPH_USE_FMADD` — the extra `err` term is what makes `v3crossPrecise`
-/// (and so `Mat44.determinant3x3`) more accurate than a plain cross product.
-fn v3differenceOfProducts(a: Vec3, b: Vec3, cc: Vec3, d: Vec3) Vec3 {
-    const cd = Vec3{ .x = cc.x * d.x, .y = cc.y * d.y, .z = cc.z * d.z };
-    const compensation = Vec3{
-        .x = @mulAdd(f32, -cc.x, d.x, cd.x),
-        .y = @mulAdd(f32, -cc.y, d.y, cd.y),
-        .z = @mulAdd(f32, -cc.z, d.z, cd.z),
-    };
-    const dop = Vec3{
-        .x = @mulAdd(f32, a.x, b.x, -cd.x),
-        .y = @mulAdd(f32, a.y, b.y, -cd.y),
-        .z = @mulAdd(f32, a.z, b.z, -cd.z),
-    };
-    return v3add(dop, compensation);
-}
-
-/// Jolt's `Vec3::CrossPrecise`: a cross product built from
-/// `v3differenceOfProducts` instead of the plain `a.y*b.z - a.z*b.y` form, so
-/// it stays accurate where the plain product cancels badly.
-fn v3crossPrecise(a: Vec3, b: Vec3) Vec3 {
-    const a_yzx = Vec3{ .x = a.y, .y = a.z, .z = a.x };
-    const b_yzx = Vec3{ .x = b.y, .y = b.z, .z = b.x };
-    const diff = v3differenceOfProducts(a, b_yzx, a_yzx, b);
-    return .{ .x = diff.y, .y = diff.z, .z = diff.x };
-}
+/// HALF the length tolerance `zjoltQuatRotateVector` applies (`1.0e-5`), and
+/// half on purpose: the two sides sum a squared length in different orders,
+/// so on the exact line they disagree in the last bits. The fast path takes
+/// only what is clearly inside; everything near the line goes to the C entry
+/// point, which decides. `src/vec_test.zig` sweeps across it.
+const quat_fast_path_tolerance: f32 = 0.5e-5;
 
 /// A direction, velocity or extent. Three floats even in a double-precision
 /// build — only positions get the extra range, which is the same split Jolt
@@ -165,11 +129,9 @@ pub const Vec3 = extern struct {
     y: f32,
     z: f32,
 
-    /// `(1 - t) * a + t * b`, componentwise.
+    /// `a + (b - a) * t`, componentwise.
     pub fn lerp(a: Vec3, b: Vec3, t: f32) Vec3 {
-        var out: Vec3 = .{ .x = 0, .y = 0, .z = 0 };
-        c_math.zjoltVec3Lerp(&a, &b, t, &out);
-        return out;
+        return vec.to(Vec3, vec.lerp(vec.from(a), vec.from(b), t));
     }
 
     /// A unit vector perpendicular to `v`, choosing the more numerically
@@ -185,19 +147,19 @@ pub const Vec3 = extern struct {
     /// Whether `a` and `b` are within `max_dist_sq` of each other. Pass
     /// `1e-12` to match Jolt's own default.
     pub fn isClose(a: Vec3, b: Vec3, max_dist_sq: f32) bool {
-        return v3lengthSq(v3sub(b, a)) <= max_dist_sq;
+        return vec.lengthSq3(vec.from(b) - vec.from(a)) <= max_dist_sq;
     }
 
     /// Whether `v`'s squared length is within `max_dist_sq` of zero. Pass
     /// `1e-12` to match Jolt's own default.
     pub fn isNearZero(v: Vec3, max_dist_sq: f32) bool {
-        return v3lengthSq(v) <= max_dist_sq;
+        return vec.lengthSq3(vec.from(v)) <= max_dist_sq;
     }
 
     /// Whether `v`'s squared length is within `tolerance` of 1. Pass `1e-6`
     /// to match Jolt's own default.
     pub fn isNormalized(v: Vec3, tolerance: f32) bool {
-        return @abs(v3lengthSq(v) - 1.0) <= tolerance;
+        return @abs(vec.lengthSq3(vec.from(v)) - 1.0) <= tolerance;
     }
 
     /// Packs a unit `Vec3` into 32 bits: 1 sign bit, 2 bits for which axis had
@@ -286,15 +248,19 @@ pub const Quat = extern struct {
     /// rotating a vector by the result matches rotating it by `rhs` first,
     /// then `lhs`.
     pub fn multiply(lhs: Quat, rhs: Quat) Quat {
-        var out: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
-        c_math.zjoltQuatMultiply(&lhs, &rhs, &out);
-        return out;
+        return vec.to(Quat, vec.quatMul(vec.from(lhs), vec.from(rhs)));
     }
 
     /// Rotates `v` by `q`. `error.InvalidArgument` when `q` is not unit
     /// length; see `Quat.normalize`.
     pub fn rotateVector(q: Quat, v: Vec3) err.Error!Vec3 {
         var out: Vec3 = .{ .x = 0, .y = 0, .z = 0 };
+        if (vec.quatIsNormalized(vec.from(q), quat_fast_path_tolerance)) {
+            return vec.to(Vec3, vec.quatRotate(vec.from(q), vec.from(v)));
+        }
+        // The refusal goes back through the C entry point, which owns the
+        // sentence `zjolt.lastError` returns. Writing that sentence again
+        // here would be a second home for it, free to disagree.
         try err.check(c_math.zjoltQuatRotateVector(&q, &v, &out));
         return out;
     }
@@ -302,35 +268,29 @@ pub const Quat = extern struct {
     /// The inverse rotation. NaN on a zero-length `q`, exactly as Jolt's own
     /// `Inversed()` — infallible, not refused.
     pub fn inverse(q: Quat) Quat {
-        var out: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
-        c_math.zjoltQuatInverse(&q, &out);
-        return out;
+        return vec.to(Quat, vec.quatInverse(vec.from(q)));
     }
 
     /// `(-x, -y, -z, w)`. Equal to `Quat.inverse` for a unit `q`, and cheaper.
     pub fn conjugate(q: Quat) Quat {
-        var out: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
-        c_math.zjoltQuatConjugate(&q, &out);
-        return out;
+        return vec.to(Quat, vec.quatConjugate(vec.from(q)));
     }
 
     /// The four-component dot product.
     pub fn dot(a: Quat, b: Quat) f32 {
-        return c_math.zjoltQuatDot(&a, &b);
+        return vec.dot4(vec.from(a), vec.from(b));
     }
 
     /// Whether `q`'s SQUARED length is within `tolerance` of 1 — see
     /// `zjoltQuatIsNormalized` in `ffi/zjolt_math.h` for why that is stricter
     /// than it looks. Pass `1e-5` to match what Jolt's own asserts require.
     pub fn isNormalized(q: Quat, tolerance: f32) bool {
-        return c_math.zjoltQuatIsNormalized(&q, tolerance);
+        return vec.quatIsNormalized(vec.from(q), tolerance);
     }
 
     /// `q` rescaled to unit length. NaN on a zero-length `q`, not refused.
     pub fn normalize(q: Quat) Quat {
-        var out: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
-        c_math.zjoltQuatNormalize(&q, &out);
-        return out;
+        return vec.to(Quat, vec.quatNormalize(vec.from(q)));
     }
 
     /// A right-handed rotation of `radians` about `axis`.
@@ -420,9 +380,7 @@ pub const Quat = extern struct {
     /// shortest-path. Prefer `Quat.slerp` to interpolate a rotation across a
     /// frame.
     pub fn lerp(a: Quat, b: Quat, t: f32) Quat {
-        var out: Quat = .{ .x = 0, .y = 0, .z = 0, .w = 1 };
-        c_math.zjoltQuatLerp(&a, &b, t, &out);
-        return out;
+        return vec.to(Quat, vec.quatLerp(vec.from(a), vec.from(b), t));
     }
 
     /// Spherical interpolation from `a` to `b`, taking the shorter of the two
@@ -549,9 +507,12 @@ pub const RVec3 = extern struct {
     /// narrows it to `f32` first, losing exactly the range
     /// `-Ddouble_precision` exists to keep.
     pub fn lerp(a: RVec3, b: RVec3, t: f32) RVec3 {
-        var out: RVec3 = .{ .x = 0, .y = 0, .z = 0 };
-        c_math.zjoltRVec3Lerp(&a, &b, t, &out);
-        return out;
+        const ft: Real = @floatCast(t);
+        return .{
+            .x = a.x + (b.x - a.x) * ft,
+            .y = a.y + (b.y - a.y) * ft,
+            .z = a.z + (b.z - a.z) * ft,
+        };
     }
 
     /// `v` narrowed to `f32`, rounding every component TOWARD NEGATIVE
@@ -593,9 +554,8 @@ pub const Mat44 = extern struct {
 
     /// Composes two transforms: `a * b` — apply `b` first, then `a`.
     pub fn multiply(a: Mat44, b: Mat44) Mat44 {
-        var out: Mat44 = .{ .m = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 } };
-        c_math.zjoltMat44Multiply(&a, &b, &out);
-        return out;
+        const cols = vec.mat44Mul(vec.loadCols(a.m), vec.loadCols(b.m));
+        return .{ .m = vec.storeCols(cols) };
     }
 
     /// The general inverse. NaN/Inf on a singular `m`, not refused. Prefer
@@ -610,24 +570,19 @@ pub const Mat44 = extern struct {
     /// rotation, no scale). Cheaper and exact where `Mat44.inverse` merely
     /// converges; wrong, silently, if that assumption does not hold.
     pub fn inverseRotationTranslation(m: Mat44) Mat44 {
-        var out: Mat44 = .{ .m = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 } };
-        c_math.zjoltMat44InverseRotationTranslation(&m, &out);
-        return out;
+        const cols = vec.mat44InverseRotationTranslation(vec.loadCols(m.m));
+        return .{ .m = vec.storeCols(cols) };
     }
 
     /// Transforms `point` as a POSITION: the translation column is added.
     pub fn transformPoint(m: Mat44, point: Vec3) Vec3 {
-        var out: Vec3 = .{ .x = 0, .y = 0, .z = 0 };
-        c_math.zjoltMat44TransformPoint(&m, &point, &out);
-        return out;
+        return vec.to(Vec3, vec.mat44Point(vec.loadCols(m.m), vec.from(point)));
     }
 
     /// Transforms `direction` as a DIRECTION: the translation column is
     /// ignored.
     pub fn transformDirection(m: Mat44, direction: Vec3) Vec3 {
-        var out: Vec3 = .{ .x = 0, .y = 0, .z = 0 };
-        c_math.zjoltMat44TransformDirection(&m, &direction, &out);
-        return out;
+        return vec.to(Vec3, vec.mat44Direction(vec.loadCols(m.m), vec.from(direction)));
     }
 
     /// Splits `m` into a scale and the rigid rotation-and-translation left
@@ -761,10 +716,14 @@ pub const Mat44 = extern struct {
         return true;
     }
 
-    /// The determinant of `m`'s upper 3x3, via `v3crossPrecise` — see
-    /// `v3differenceOfProducts` for why this isn't the plain triple product.
+    /// The determinant of `m`'s upper 3x3, via `vec.crossPrecise` — see
+    /// `vec.differenceOfProducts` for why this is not the plain triple
+    /// product.
     pub fn determinant3x3(m: Mat44) f32 {
-        return v3dot(m.axisX(), v3crossPrecise(m.axisY(), m.axisZ()));
+        return vec.dot3(
+            vec.from(m.axisX()),
+            vec.crossPrecise(vec.from(m.axisY()), vec.from(m.axisZ())),
+        );
     }
 
     /// `m`'s upper 3x3 times `n`'s, translation columns ignored and forced to
@@ -1149,18 +1108,27 @@ pub const AABox = extern struct {
     max: Vec3,
 
     pub fn encapsulatePoint(box: AABox, point: Vec3) AABox {
-        return .{ .min = v3min(box.min, point), .max = v3max(box.max, point) };
+        return .{
+            .min = vec.to(Vec3, @min(vec.from(box.min), vec.from(point))),
+            .max = vec.to(Vec3, @max(vec.from(box.max), vec.from(point))),
+        };
     }
 
     pub fn encapsulateBox(a: AABox, b: AABox) AABox {
-        return .{ .min = v3min(a.min, b.min), .max = v3max(a.max, b.max) };
+        return .{
+            .min = vec.to(Vec3, @min(vec.from(a.min), vec.from(b.min))),
+            .max = vec.to(Vec3, @max(vec.from(a.max), vec.from(b.max))),
+        };
     }
 
     /// The overlapping region of `a` and `b`. Not itself a valid box (`min`
     /// may end up past `max` on some axis) when `a` and `b` don't actually
     /// overlap — check with `AABox.overlaps` first if that matters.
     pub fn intersect(a: AABox, b: AABox) AABox {
-        return .{ .min = v3max(a.min, b.min), .max = v3min(a.max, b.max) };
+        return .{
+            .min = vec.to(Vec3, @max(vec.from(a.min), vec.from(b.min))),
+            .max = vec.to(Vec3, @min(vec.from(a.max), vec.from(b.max))),
+        };
     }
 
     pub fn overlaps(a: AABox, b: AABox) bool {
@@ -1184,11 +1152,12 @@ pub const AABox = extern struct {
     }
 
     pub fn closestPoint(box: AABox, point: Vec3) Vec3 {
-        return v3min(v3max(point, box.min), box.max);
+        const clamped = @min(@max(vec.from(point), vec.from(box.min)), vec.from(box.max));
+        return vec.to(Vec3, clamped);
     }
 
     pub fn sqDistanceTo(box: AABox, point: Vec3) f32 {
-        return v3lengthSq(v3sub(box.closestPoint(point), point));
+        return vec.lengthSq3(vec.from(box.closestPoint(point)) - vec.from(point));
     }
 };
 

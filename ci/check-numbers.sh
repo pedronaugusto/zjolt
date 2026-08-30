@@ -96,6 +96,7 @@ version=$(version_triple)
 # are worth gating: a hand-typed one would never be re-derived.
 load_coverage_totals
 verdict_rows=$(count_verdicts_total)
+zig_native=$(count_zig_native)
 
 vehicle_points=$(count_api_decls_in ffi/zjolt_vehicle.h)
 ragdoll_points=$(count_api_decls_in ffi/zjolt_ragdoll.h)
@@ -133,6 +134,8 @@ claim 'README reflective sweeps' README.md \
 claim 'README ABI-changing options' README.md \
   'Exactly [0-9]+ rows change the ABI' "$abi_options"
 
+claim 'README native entry points' README.md \
+  '\*\*[0-9]+ entry points are native' "$zig_native"
 claim 'README public Jolt names' README.md \
   '\*\*[0-9]+ public Jolt names\*\*' "$coverage_names_public"
 claim 'README names spelled out by an entry point' README.md \

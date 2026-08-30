@@ -13,6 +13,7 @@ const std = @import("std");
 const c = @import("c/core.zig");
 const c_math = @import("c/math.zig");
 const c_shape = @import("c/shape.zig");
+const vec = @import("vec.zig");
 const err = @import("error.zig");
 
 /// A direction, velocity or extent. Three floats even in a double-precision
@@ -84,22 +85,6 @@ pub fn rvec3(x: Real, y: Real, z: Real) RVec3 {
 
 pub fn quat(x: f32, y: f32, z: f32, w: f32) Quat {
     return .{ .x = x, .y = y, .z = z, .w = w };
-}
-
-fn v3add(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
-}
-
-fn v3sub(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
-}
-
-fn v3dot(a: Vec3, b: Vec3) f32 {
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-fn v3cross(a: Vec3, b: Vec3) Vec3 {
-    return .{ .x = a.y * b.z - a.z * b.y, .y = a.z * b.x - a.x * b.z, .z = a.x * b.y - a.y * b.x };
 }
 
 //=============================================================================
@@ -660,14 +645,14 @@ pub const Plane = c_shape.Plane;
 /// Zig has no mechanism to add a method to a type from outside the file that
 /// declares it. Stays a free function for that reason alone.
 pub fn planeSignedDistance(p: Plane, point: Vec3) f32 {
-    return v3dot(point, p.normal) + p.constant;
+    return vec.dot3(vec.from(point), vec.from(p.normal)) + p.constant;
 }
 
 /// A triangle by position, no vertex list attached — `Jolt::Triangle`. No
 /// dedicated Zig type backs a bare triangle (only `IndexedTriangle`, which
 /// carries a vertex list), so this has no receiver and stays flat.
 pub fn triangleCentroid(v0: Vec3, v1: Vec3, v2: Vec3) Vec3 {
-    const sum = v3add(v3add(v0, v1), v2);
+    const sum = vec.to(Vec3, vec.from(v0) + vec.from(v1) + vec.from(v2));
     return .{ .x = sum.x * (1.0 / 3.0), .y = sum.y * (1.0 / 3.0), .z = sum.z * (1.0 / 3.0) };
 }
 
@@ -686,7 +671,10 @@ pub const IndexedTriangle = struct {
         const v0 = vertices[t.idx[0]];
         const v1 = vertices[t.idx[1]];
         const v2 = vertices[t.idx[2]];
-        const cross = v3cross(v3sub(v1, v0), v3sub(v2, v0));
+        const cross = vec.to(Vec3, vec.cross3(
+            vec.from(v1) - vec.from(v0),
+            vec.from(v2) - vec.from(v0),
+        ));
         return cross.isNearZero(1.0e-12);
     }
 
@@ -717,7 +705,8 @@ pub const IndexedTriangle = struct {
     /// where `triangleCentroid` multiplies by `1/3`, matching a genuine (if
     /// inconsequential) difference between the two methods in Jolt itself.
     pub fn centroid(t: IndexedTriangle, vertices: []const Vec3) Vec3 {
-        const sum = v3add(v3add(vertices[t.idx[0]], vertices[t.idx[1]]), vertices[t.idx[2]]);
+        const sum = vec.to(Vec3, vec.from(vertices[t.idx[0]]) +
+            vec.from(vertices[t.idx[1]]) + vec.from(vertices[t.idx[2]]));
         return .{ .x = sum.x / 3.0, .y = sum.y / 3.0, .z = sum.z / 3.0 };
     }
 };

@@ -97,6 +97,13 @@ load_coverage_totals() {
   coverage_names_public=${line##* }
 }
 
+# Entry points the Zig API computes rather than calls. Each is a line in
+# tools/zig_native.txt naming the declaration that computes it and the test
+# that proves the two answers agree.
+count_zig_native() {
+  awk -F'\t' '/^#/ || !NF { next } { n++ } END { print n + 0 }' tools/zig_native.txt
+}
+
 # Ledger lines carrying one verdict. ci/check-coverage.sh has already proved
 # every line well formed, every verdict known, and the set equal to what
 # tools/coverage.sh printed; this only tallies what it validated.

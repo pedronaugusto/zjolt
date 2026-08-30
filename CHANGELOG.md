@@ -132,6 +132,18 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   place before falling back to allocate-copy-free. Every `reallocate` used to
   move the whole block, and Jolt reallocates its body list, its contact cache
   and every temporary collector.
+- Value math is computed in Zig over `@Vector(4, f32)` instead of crossing the
+  ABI once per operation: `Vec3.lerp`, `RVec3.lerp`, `Quat.multiply`,
+  `conjugate`, `inverse`, `dot`, `isNormalized`, `normalize`, `lerp`,
+  `rotateVector`, and `Mat44.multiply`, `transformPoint`, `transformDirection`
+  and `inverseRotationTranslation`. A quaternion product measured 1.80–1.84
+  ns/op through the entry point and 0.77–0.79 ns/op computed in Zig, four runs,
+  ReleaseFast, x86_64-windows-gnu, 4096 independent operand pairs per pass so
+  neither arm is a dependency chain. The C entry points are unchanged and every
+  one is still exported; `src/vec_test.zig` compares the two answers.
+- `Quat.rotateVector` computes in Zig only for a quaternion clearly inside the
+  length tolerance and hands anything near the line to the C entry point, so a
+  refusal is still the library's, with the library's message.
 
 ### Documentation, and what now holds it
 
@@ -142,6 +154,12 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   were stale.
 - `ci/counts.sh` is the single home for every count formula; the three scripts
   that quote one now source it instead of recomputing it.
+- `ci/check-coverage.sh` strips comments before deciding whether Zig calls an
+  entry point. A doc comment that merely NAMED one counted as calling it, so
+  prose could satisfy the rule that nothing is stranded.
+- `tools/zig_native.txt` records every entry point the Zig API computes rather
+  than calls, with the declaration that computes it and the test that proves
+  the two agree; `ci/check-coverage.sh` holds all four parts.
 - `tools/coverage.sh` harvests the public data members of Jolt's `*Settings`
   types as well as its methods, and matches them against the declarator names
   in `ffi/*.h`. A settings object is the whole public API of several

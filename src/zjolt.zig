@@ -738,6 +738,7 @@ test {
     _ = reflect_mod;
     _ = tree_mod;
     _ = @import("tree_test.zig");
+    _ = @import("vec_test.zig");
     _ = @import("reflect_test.zig");
     _ = @import("customshape_test.zig");
     _ = collision_mod;

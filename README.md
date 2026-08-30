@@ -608,6 +608,15 @@ time. Not one entry point is stranded — `tools/zig_surface_exceptions.txt` is
 empty, and `ci/check-coverage.sh` fails both if an entry point loses its Zig
 caller and if an excuse is written for one that has a caller after all.
 
+**13 entry points are native rather than wrapped**: value math — a quaternion
+product, a matrix transform, a lerp — that the Zig side computes itself,
+because a cross-TU call cannot be inlined and costs more than the arithmetic
+inside it. Two implementations of one formula is an arrangement this package
+otherwise refuses, so each is a written obligation in `tools/zig_native.txt`:
+the Zig declaration that computes it, and the test that compares its answer
+with the entry point's. `ci/check-coverage.sh` fails if either goes missing,
+and fails the other way too if Zig starts calling the entry point after all.
+
 - **Shapes** — every kind Jolt can construct: the convex primitives (box,
   sphere, capsule, cylinder, triangle, tapered capsule, tapered cylinder,
   convex hull), mesh, height field, plane, empty, both compounds, and the

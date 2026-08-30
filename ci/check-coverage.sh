@@ -8,6 +8,10 @@
 #                               keyed by area so a name that is bound in one
 #                               place cannot vouch for it in another.
 #   tools/classify.sh           computes which exclusions upstream justifies.
+#   tools/zig_native.txt        entry points Zig does not call because it
+#                               computes the same answer, each with the
+#                               declaration that does and the test that proves
+#                               the two agree.
 #
 # INTERNAL is not something this file takes on trust: it is recomputed here and
 # rejected unless classify.sh proves it. GAP fails the build.
@@ -200,6 +204,31 @@ if [ -s "$work/evidence" ]; then
   fail "$(grep -c . "$work/evidence") unusable piece(s) of evidence"
 fi
 
+awk -F'\t' '/^#/ || !NF { next }
+  NF != 3 { printf "  %s: not NAME<TAB>src/FILE.zig:decl<TAB>test name\n", $1 > "/dev/stderr"; next }
+  $2 !~ /^src\/([A-Za-z0-9_]+\/)?[A-Za-z0-9_]+\.zig:[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/ {
+    printf "  %s: %s is not src/FILE.zig:decl\n", $1, $2 > "/dev/stderr"; next }
+  length($3) < 10 { printf "  %s: names no test\n", $1 > "/dev/stderr"; next }
+  { print $1 "\t" $2 "\t" $3 }' tools/zig_native.txt 2>"$work/native_shape" > "$work/native_rows"
+if [ -s "$work/native_shape" ]; then
+  cat "$work/native_shape" >&2
+  fail "$(grep -c . "$work/native_shape") malformed native line(s)"
+fi
+cut -f1 "$work/native_rows" | sort -u > "$work/native"
+cut -f1,2 "$work/native_rows" >> "$work/zigrefs"
+
+# The test a native line names has to exist, or the comparison it claims is
+# being made is not being made by anything.
+: > "$work/native_test_miss"
+while IFS=$'\t' read -r name ref test_name; do
+  grep -qrF "test \"$test_name\"" src --include='*_test.zig' ||
+    printf '  %s: no test named "%s"\n' "$name" "$test_name" >> "$work/native_test_miss"
+done < "$work/native_rows"
+if [ -s "$work/native_test_miss" ]; then
+  cat "$work/native_test_miss" >&2
+  fail "$(grep -c . "$work/native_test_miss") native line(s) naming no test"
+fi
+
 while IFS=$'\t' read -r name ref; do
   file=${ref%%:*}; decl=${ref#*:}
   [ -f "$file" ] || { printf '  %s: %s does not exist\n' "$name" "$file" >&2; continue; }
@@ -237,13 +266,19 @@ list_callable_names > "$work/entrypoints"
 # now also holds the methods declared on the ABI structs themselves, and a
 # method body calling an entry point IS use. Count every line in src/c/ except
 # the extern declarations.
+#
+# Comments are stripped first. A doc comment that NAMES an entry point used to
+# count as calling it, so prose could satisfy the rule below — the same defect
+# tools/coverage.sh strips comments to avoid, found the day this file learned
+# to tell a native implementation from a wrapper.
 {
   find src -name '*.zig' ! -path 'src/c/*' ! -name 'c.zig' \
        ! -name '*_test.zig' ! -name '*_sweep*.zig' -print0 |
-    xargs -0 grep -ho 'zjolt[A-Za-z0-9_]*'
+    xargs -0 sed -E 's://.*::' |
+    grep -o 'zjolt[A-Za-z0-9_]*'
   find src/c -name '*.zig' -print0 2>/dev/null |
     xargs -0 grep -h -v '^[[:space:]]*pub extern fn' 2>/dev/null |
-    grep -o 'zjolt[A-Za-z0-9_]*'
+    sed -E 's://.*::' | grep -o 'zjolt[A-Za-z0-9_]*'
 } | sort -u > "$work/wrapped"
 awk -F'\t' '/^#/ || !NF { next }
   NF != 2 { printf "  %s: not NAME<TAB>reason\n", $1 > "/dev/stderr"; next }
@@ -252,7 +287,8 @@ awk -F'\t' '/^#/ || !NF { next }
 if [ -s "$work/exc_shape" ]; then cat "$work/exc_shape" >&2; fail "$(grep -c . "$work/exc_shape") malformed exception line(s)"; fi
 
 comm -23 "$work/entrypoints" "$work/wrapped" > "$work/unwrapped"
-comm -23 "$work/unwrapped" "$work/excused" > "$work/stranded"
+comm -23 "$work/unwrapped" "$work/excused" > "$work/unexcused"
+comm -23 "$work/unexcused" "$work/native" > "$work/stranded"
 if [ -s "$work/stranded" ]; then
   sed 's/^/  /' "$work/stranded" >&2
   fail "$(grep -c . "$work/stranded") entry point(s) with no Zig caller"
@@ -261,6 +297,14 @@ comm -13 "$work/unwrapped" "$work/excused" > "$work/excess"
 if [ -s "$work/excess" ]; then
   sed 's/^/  /' "$work/excess" >&2
   fail "$(grep -c . "$work/excess") excused entry point(s) that Zig does call, or that no longer exist"
+fi
+# Both directions for the native list too: a name here that Zig DOES call is
+# not native, and one that is no longer an entry point is a line outliving
+# its reason.
+comm -13 "$work/unwrapped" "$work/native" > "$work/native_excess"
+if [ -s "$work/native_excess" ]; then
+  sed 's/^/  /' "$work/native_excess" >&2
+  fail "$(grep -c . "$work/native_excess") native entry point(s) that Zig does call, or that no longer exist"
 fi
 
 #-----------------------------------------------------------------------------
@@ -280,6 +324,8 @@ public=$coverage_names_public
 printf '%szjolt coverage%s\n' "$BOLD" "$OFF"
 printf '  %-30s %5d\n' 'entry points exported' "$(count_api_decls)"
 printf '  %-30s %5d\n' 'callable names checked' "$callable_names"
+printf '  %-30s %5d  %scomputed in Zig, proved equal%s\n' \
+  '  of them native' "$(grep -c . "$work/native")" "$DIM" "$OFF"
 printf '  %-30s %5d\n' 'public Jolt names, claimed areas' "$public"
 printf '  %-30s %5d  %sspelled out by an entry point%s\n' '  matched' "$spelled" "$DIM" "$OFF"
 awk -F'\t' '{ c[$3]++ } END { for (v in c) printf "    %-28s %5d\n", tolower(v), c[v] }' "$work/rows" | sort
