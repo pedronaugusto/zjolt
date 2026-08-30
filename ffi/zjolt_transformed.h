@@ -121,15 +121,9 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeCollectTransformedShapes(
 // that header's own comment was written to avoid. @see zjoltShapeGetTrianglesNext: identical protocol.
 //===----------------------------------------------------------------------===//
 
-#if defined(__cplusplus)
-#define ZJOLT_TRANSFORMED_ALIGNAS_16 alignas(16)
-#else
-#define ZJOLT_TRANSFORMED_ALIGNAS_16 _Alignas(16)
-#endif
-typedef struct ZJoltTransformedShapeTrianglesContext {
-  ZJOLT_TRANSFORMED_ALIGNAS_16 uint8_t data[4288];
+typedef struct ZJOLT_ALIGN16 ZJoltTransformedShapeTrianglesContext {
+  uint8_t data[4288];
 } ZJoltTransformedShapeTrianglesContext;
-#undef ZJOLT_TRANSFORMED_ALIGNAS_16
 
 /// Starts a triangle walk over `ts`, restricted to `box` (world space).
 /// `base_offset` shifts the returned vertices the same way

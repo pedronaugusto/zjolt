@@ -292,12 +292,25 @@ typedef struct ZJoltQuat {
   float x, y, z, w;
 } ZJoltQuat;
 
+//===----------------------------------------------------------------------===//
+// 16-byte alignment, spelled for the STRUCT and written between `struct` and
+// the tag, so one spelling serves all three compilers.
+//
+// It has to be the struct: Zig 0.16's translate-c drops `#pragma pack(pop)` on
+// non-MSVC targets, so under mingw a member declared `_Alignas(16)` reads back
+// as align 8 through `@cImport` while the compiled ABI is 16. Struct-level
+// alignment survives that on all four targets [measured 2026-08-30], and
+// `src/abi_check.zig` is the gate. C11's `_Alignas` cannot be attached to a
+// struct definition at all, which is what put the member spelling here.
+//===----------------------------------------------------------------------===//
 #if defined(__cplusplus)
 #define ZJOLT_ALIGN16 alignas(16)
 #elif defined(_MSC_VER)
 #define ZJOLT_ALIGN16 __declspec(align(16))
+#elif defined(__GNUC__) || defined(__clang__)
+#define ZJOLT_ALIGN16 __attribute__((aligned(16)))
 #else
-#define ZJOLT_ALIGN16 _Alignas(16)
+#error "zjolt needs a struct-level 16-byte alignment attribute for this compiler"
 #endif
 
 /// A 4x4 matrix in Jolt's own layout: four COLUMNS of four floats, so
@@ -306,8 +319,8 @@ typedef struct ZJoltQuat {
 /// padded to 4x4. 16-byte aligned, matching `JPH::Mat44` and `ZozzFloat4x4`,
 /// so one buffer serves both packages; a struct embedding this one inherits
 /// that alignment.
-typedef struct ZJoltMat44 {
-  ZJOLT_ALIGN16 float m[16];
+typedef struct ZJOLT_ALIGN16 ZJoltMat44 {
+  float m[16];
 } ZJoltMat44;
 
 /// Scalar type of a world-space position. `double` when the library was built
@@ -331,8 +344,8 @@ typedef struct ZJoltRVec3 {
 /// struct's size, and zjoltInit refuses it.
 ///
 /// 16-byte aligned, matching `ZJoltMat44`.
-typedef struct ZJoltRMat44 {
-  ZJOLT_ALIGN16 ZJoltReal m[16];
+typedef struct ZJOLT_ALIGN16 ZJoltRMat44 {
+  ZJoltReal m[16];
 } ZJoltRMat44;
 
 typedef struct ZJoltAABox {

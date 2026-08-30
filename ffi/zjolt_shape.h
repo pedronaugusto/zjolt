@@ -553,15 +553,9 @@ typedef enum ZJoltShapeSupportMode {
 /// into. Sized and aligned to match Jolt's own `ConvexShape::SupportBuffer`
 /// exactly. Must stay alive and untouched for as long as the returned
 /// handle is used; there is nothing to release.
-#if defined(__cplusplus)
-#define ZJOLT_SUPPORT_ALIGNAS_16 alignas(16)
-#else
-#define ZJOLT_SUPPORT_ALIGNAS_16 _Alignas(16)
-#endif
-typedef struct ZJoltShapeSupportBuffer {
-  ZJOLT_SUPPORT_ALIGNAS_16 uint8_t data[4160];
+typedef struct ZJOLT_ALIGN16 ZJoltShapeSupportBuffer {
+  uint8_t data[4160];
 } ZJoltShapeSupportBuffer;
-#undef ZJOLT_SUPPORT_ALIGNAS_16
 
 typedef struct ZJoltShapeSupportFunction ZJoltShapeSupportFunction;
 
@@ -805,15 +799,9 @@ ZJOLT_API void zjoltShapeMakeScaleValid(const ZJoltShape *shape,
 /// reused for a second walk until the first one reports 0 remaining. Sized
 /// and aligned to match Jolt's own `Shape::GetTrianglesContext` exactly,
 /// which zjolt_abi.cpp checks at build time.
-#if defined(__cplusplus)
-#define ZJOLT_ALIGNAS_16 alignas(16)
-#else
-#define ZJOLT_ALIGNAS_16 _Alignas(16)
-#endif
-typedef struct ZJoltShapeTrianglesContext {
-  ZJOLT_ALIGNAS_16 uint8_t data[4288];
+typedef struct ZJOLT_ALIGN16 ZJoltShapeTrianglesContext {
+  uint8_t data[4288];
 } ZJoltShapeTrianglesContext;
-#undef ZJOLT_ALIGNAS_16
 
 /// Fewest triangles zjoltShapeGetTrianglesNext accepts a request for. Jolt
 /// asserts on fewer rather than returning a short batch, so this ABI refuses
