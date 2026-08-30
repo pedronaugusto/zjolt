@@ -343,6 +343,24 @@ JPH::HeightFieldShape *AsMutableHeightField(ZJoltShape *shape) {
   return static_cast<JPH::HeightFieldShape *>(jolt);
 }
 
+/// The bounds Jolt asserts on for the material block, which differ from the
+/// height block's: no block-size alignment, and the end is strictly inside the
+/// sample grid because the quad grid is one smaller in each direction.
+ZJoltResult CheckMaterialBlock(const JPH::HeightFieldShape *hf, uint32_t x,
+                               uint32_t y, uint32_t size_x, uint32_t size_y,
+                               uint32_t stride) {
+  const uint32_t sample_count = hf->GetSampleCount();
+  if (x >= sample_count || y >= sample_count || x + size_x >= sample_count ||
+      y + size_y >= sample_count || stride < size_x) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "the requested block must fit within the quad grid, which is one "
+        "smaller than the sample grid in each direction, and stride must be "
+        "at least size_x");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
 /// The handle, cast to `T` if `shape` is exactly `sub_type` — null otherwise.
 ///
 /// Every convex-primitive dimension getter below opens with this: Jolt's
@@ -657,9 +675,9 @@ ZJoltResult zjoltShapeCreateHeightField(
     const float *samples, uint32_t sample_count, const ZJoltVec3 *offset,
     const ZJoltVec3 *scale, const uint8_t *material_indices,
     const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t block_size, uint32_t bits_per_sample, float min_height_value,
-    float max_height_value, float active_edge_cos_threshold_angle,
-    ZJoltShape **out) {
+    uint32_t materials_capacity, uint32_t block_size, uint32_t bits_per_sample,
+    float min_height_value, float max_height_value,
+    float active_edge_cos_threshold_angle, ZJoltShape **out) {
   ZJOLT_ENTER(out);
   if (!zjolt::Present(samples, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
@@ -688,6 +706,7 @@ ZJoltResult zjoltShapeCreateHeightField(
   settings.mMaxHeightValue = max_height_value;
   settings.mActiveEdgeCosThresholdAngle = active_edge_cos_threshold_angle;
 
+  settings.mMaterialsCapacity = materials_capacity;
   settings.mHeightSamples.assign(
       samples, samples + static_cast<size_t>(sample_count) * sample_count);
 
@@ -2287,6 +2306,67 @@ ZJoltResult zjoltShapeHeightFieldSetHeights(
   hf->SetHeights(x, y, size_x, size_y, clamped.data(),
                 static_cast<intptr_t>(size_x), allocator,
                 active_edge_cos_threshold_angle);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeHeightFieldGetMaterials(const ZJoltShape *shape,
+                                              uint32_t x, uint32_t y,
+                                              uint32_t size_x, uint32_t size_y,
+                                              uint8_t *out_materials,
+                                              uint32_t stride) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, out_materials)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  if (size_x == 0 || size_y == 0) return ZJOLT_RESULT_OK;
+
+  const JPH::HeightFieldShape *hf = AsHeightField(shape);
+  if (hf == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this shape is not a height field");
+  }
+
+  const ZJoltResult bounds =
+      CheckMaterialBlock(hf, x, y, size_x, size_y, stride);
+  if (bounds != ZJOLT_RESULT_OK) return bounds;
+
+  hf->GetMaterials(x, y, size_x, size_y, out_materials,
+                   static_cast<intptr_t>(stride));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltShapeHeightFieldSetMaterials(
+    ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
+    uint32_t size_y, const uint8_t *materials, uint32_t stride,
+    const ZJoltPhysicsMaterial *const *material_list, uint32_t num_materials) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(shape, materials)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (size_x == 0 || size_y == 0) return ZJOLT_RESULT_OK;
+
+  JPH::HeightFieldShape *hf = AsMutableHeightField(shape);
+  if (hf == nullptr) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "this shape is not a height field");
+  }
+
+  const ZJoltResult bounds =
+      CheckMaterialBlock(hf, x, y, size_x, size_y, stride);
+  if (bounds != ZJOLT_RESULT_OK) return bounds;
+
+  JPH::PhysicsMaterialList list;
+  const ZJoltResult list_ok =
+      BuildMaterialList(material_list, num_materials, list);
+  if (list_ok != ZJOLT_RESULT_OK) return list_ok;
+
+  JPH::TempAllocatorMalloc allocator;
+  if (!hf->SetMaterials(x, y, size_x, size_y, materials,
+                        static_cast<intptr_t>(stride),
+                        material_list != nullptr ? &list : nullptr,
+                        allocator)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "merging the given materials would take this height "
+                           "field past 256, the width of one material index");
+  }
   return ZJOLT_RESULT_OK;
 }
 

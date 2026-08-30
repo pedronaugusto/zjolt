@@ -459,6 +459,12 @@ pub const Shape = struct {
         bits_per_sample: u32 = 0,
         /// At most 256.
         materials: []const PhysicsMaterial = &.{},
+        /// Room reserved in the shape's material list for materials
+        /// `heightFieldSetMaterials` merges into it later. Below
+        /// `materials.len` it has no effect. Growing past what is reserved
+        /// reallocates the list, which a query running in parallel would be
+        /// reading — reserve here for a field repainted during simulation.
+        materials_capacity: u32 = 0,
         /// One index into `materials` per QUAD — `(sample_count - 1)^2` of
         /// them, not one per sample.
         quad_materials: []const u8 = &.{},
@@ -505,6 +511,7 @@ pub const Shape = struct {
             if (opts.quad_materials.len != 0) opts.quad_materials.ptr else null,
             if (opts.materials.len != 0) &handles else null,
             @intCast(opts.materials.len),
+            opts.materials_capacity,
             opts.block_size,
             opts.bits_per_sample,
             opts.min_height_value,
@@ -1437,6 +1444,65 @@ pub const Shape = struct {
             heights.ptr,
             size_x,
             active_edge_cos_threshold_angle,
+        ));
+    }
+
+    /// Reads a `size_x` by `size_y` block of QUAD material indices starting at
+    /// (x, y), x-major into `out_materials[row * size_x + col]`. The quad grid
+    /// is one smaller than the sample grid in each direction, so `x + size_x`
+    /// and `y + size_y` must both stay BELOW `heightFieldSampleCount`, or
+    /// `error.InvalidArgument`. Indices name `materialList`.
+    pub fn heightFieldMaterials(
+        self: Shape,
+        x: u32,
+        y: u32,
+        size_x: u32,
+        size_y: u32,
+        out_materials: []u8,
+    ) err.Error!void {
+        if (out_materials.len < @as(usize, size_x) * size_y)
+            return err.Error.InvalidArgument;
+        try err.check(c.zjoltShapeHeightFieldGetMaterials(
+            self.handle,
+            x,
+            y,
+            size_x,
+            size_y,
+            out_materials.ptr,
+            size_x,
+        ));
+    }
+
+    /// Repaints quad material indices in place. Same bounds as
+    /// `heightFieldMaterials`; an empty `material_list` indexes the shape's
+    /// own, a non-empty one is merged into it and the indices remapped
+    /// (`error.InvalidArgument` past 256 in all). A field holding one material
+    /// keeps no per-quad indices, so it gains only the list. NOT thread safe;
+    /// `notifyShapeChanged` after. @see `HeightFieldOptions.materials_capacity`.
+    pub fn heightFieldSetMaterials(
+        self: Shape,
+        x: u32,
+        y: u32,
+        size_x: u32,
+        size_y: u32,
+        materials: []const u8,
+        material_list: []const PhysicsMaterial,
+    ) err.Error!void {
+        if (materials.len < @as(usize, size_x) * size_y)
+            return err.Error.InvalidArgument;
+        var handles: [256]*const c.PhysicsMaterial = undefined;
+        if (material_list.len > handles.len) return err.Error.InvalidArgument;
+        for (material_list, 0..) |m, i| handles[i] = m.handle;
+        try err.check(c.zjoltShapeHeightFieldSetMaterials(
+            @constCast(self.handle),
+            x,
+            y,
+            size_x,
+            size_y,
+            materials.ptr,
+            size_x,
+            if (material_list.len != 0) &handles else null,
+            @intCast(material_list.len),
         ));
     }
 };

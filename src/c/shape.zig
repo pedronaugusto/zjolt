@@ -192,7 +192,7 @@ pub extern fn zjoltShapeCreatePlane(normal: *const Vec3, constant: f32, half_ext
 
 pub extern fn zjoltShapeCreateEmpty(center_of_mass: ?*const Vec3, out: **Shape) Result;
 
-pub extern fn zjoltShapeCreateHeightField(samples: [*]const f32, sample_count: u32, offset: ?*const Vec3, scale: ?*const Vec3, material_indices: ?[*]const u8, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, block_size: u32, bits_per_sample: u32, min_height_value: f32, max_height_value: f32, active_edge_cos_threshold_angle: f32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateHeightField(samples: [*]const f32, sample_count: u32, offset: ?*const Vec3, scale: ?*const Vec3, material_indices: ?[*]const u8, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, materials_capacity: u32, block_size: u32, bits_per_sample: u32, min_height_value: f32, max_height_value: f32, active_edge_cos_threshold_angle: f32, out: **Shape) Result;
 
 pub extern fn zjoltShapeCreateStaticCompound(children: [*]const CompoundChild, num_children: u32, out: **Shape) Result;
 
@@ -299,3 +299,7 @@ pub extern fn zjoltShapeHeightFieldGetSubShapeCoordinates(shape: *const Shape, s
 pub extern fn zjoltShapeHeightFieldGetHeights(shape: *const Shape, x: u32, y: u32, size_x: u32, size_y: u32, out_heights: [*]f32, stride: u32) Result;
 
 pub extern fn zjoltShapeHeightFieldSetHeights(shape: *Shape, x: u32, y: u32, size_x: u32, size_y: u32, heights: [*]const f32, stride: u32, active_edge_cos_threshold_angle: f32) Result;
+
+pub extern fn zjoltShapeHeightFieldGetMaterials(shape: *const Shape, x: u32, y: u32, size_x: u32, size_y: u32, out_materials: [*]u8, stride: u32) Result;
+
+pub extern fn zjoltShapeHeightFieldSetMaterials(shape: *Shape, x: u32, y: u32, size_x: u32, size_y: u32, materials: [*]const u8, stride: u32, material_list: ?[*]const *const PhysicsMaterial, num_materials: u32) Result;

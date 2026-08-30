@@ -148,14 +148,14 @@ ZJOLT_API ZJoltResult zjoltShapeCreateMesh(
 /// ZJOLT_HEIGHT_FIELD_NO_COLLISION punches a hole. `block_size` (0 for
 /// default 2) is [2, 8]; `bits_per_sample` (0 for default 8) is [1, 16].
 /// `material_indices`: one index per quad into `materials` (NULL, max 256).
-/// `min_height_value`/`max_height_value`: @see zjoltShapeHeightFieldSetHeights.
+/// `materials_capacity` and the height pair: @see zjoltShapeHeightFieldSet*.
 ZJOLT_API ZJoltResult zjoltShapeCreateHeightField(
     const float *samples, uint32_t sample_count, const ZJoltVec3 *offset,
     const ZJoltVec3 *scale, const uint8_t *material_indices,
     const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t block_size, uint32_t bits_per_sample, float min_height_value,
-    float max_height_value, float active_edge_cos_threshold_angle,
-    ZJoltShape **out);
+    uint32_t materials_capacity, uint32_t block_size, uint32_t bits_per_sample,
+    float min_height_value, float max_height_value,
+    float active_edge_cos_threshold_angle, ZJoltShape **out);
 
 /// The height sample that means "no collision here", punching a hole in a
 /// height field. Jolt's own FLT_MAX sentinel, republished so a host does not
@@ -925,6 +925,33 @@ ZJOLT_API ZJoltResult zjoltShapeHeightFieldSetHeights(
     ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
     uint32_t size_y, const float *heights, uint32_t stride,
     float active_edge_cos_threshold_angle);
+
+/// Reads back a `size_x` by `size_y` block of QUAD material indices starting
+/// at (x, y), x-major into `out_materials[row * stride + col]`; `stride` is in
+/// indices, at least `size_x`. Indices name zjoltShapeGetMaterialList. The
+/// quad grid is one smaller than the sample grid in each direction, so
+/// x + size_x and y + size_y must both stay BELOW the sample count.
+ZJOLT_API ZJoltResult zjoltShapeHeightFieldGetMaterials(
+    const ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
+    uint32_t size_y, uint8_t *out_materials, uint32_t stride);
+
+/// Repaints quad material indices in place, without rebuilding. Same bounds
+/// as zjoltShapeHeightFieldGetMaterials. `material_list`/`num_materials` is
+/// merged into the shape's own list and the indices remapped onto it; NULL
+/// and 0 index the existing list instead. NOT thread safe against a query or
+/// step; notify every body afterward.
+
+/// Jolt keeps no per-quad indices at all while a field has one material, so a
+/// call that would give such a field a second index writes only the list.
+
+/// Growing the merged list past what zjoltShapeCreateHeightField's
+/// `materials_capacity` reserved reallocates it under any parallel query, so
+/// reserve at create time for a field repainted during simulation.
+/// ZJOLT_RESULT_INVALID_ARGUMENT past 256 materials, one index's width.
+ZJOLT_API ZJoltResult zjoltShapeHeightFieldSetMaterials(
+    ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
+    uint32_t size_y, const uint8_t *materials, uint32_t stride,
+    const ZJoltPhysicsMaterial *const *material_list, uint32_t num_materials);
 
 #ifdef __cplusplus
 }  // extern "C"

@@ -2868,3 +2868,85 @@ test "a compound reports which child was hit" {
     try std.testing.expect(hit_left.sub_shape_id != zjolt.c.core.sub_shape_id_empty);
     try std.testing.expect(hit_left.sub_shape_id != hit_right.sub_shape_id);
 }
+
+test "a height field's quad materials are readable and repaintable in place, with a new material merged in" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const grass = try zjolt.PhysicsMaterial.init(.{ .debug_name = "grass" });
+    defer grass.release();
+    const rock = try zjolt.PhysicsMaterial.init(.{ .debug_name = "rock" });
+    defer rock.release();
+    const scorched = try zjolt.PhysicsMaterial.init(.{ .debug_name = "scorched" });
+    defer scorched.release();
+
+    const samples = [_]f32{0} ** 16;
+    var quad_materials = [_]u8{0} ** 9;
+    quad_materials[2 + 0 * 3] = 1;
+
+    // Room for the third material the repaint below merges in: growing the
+    // list past what is reserved reallocates it under any query in flight.
+    const field = try zjolt.Shape.initHeightField(&samples, 4, .{
+        .materials = &.{ grass, rock },
+        .quad_materials = &quad_materials,
+        .materials_capacity = 4,
+    });
+    defer field.release();
+
+    // The quad grid is one smaller than the sample grid in each direction, so
+    // the whole of it is 3 by 3 out of 4 samples, and it reads back x-major.
+    var read = [_]u8{0xFF} ** 9;
+    try field.heightFieldMaterials(0, 0, 3, 3, &read);
+    try std.testing.expectEqualSlices(u8, &quad_materials, &read);
+
+    // Repaint quad (0, 1) with a material the shape has never held. Index 0
+    // of the list passed, which is merged and remapped, not index 0 of the
+    // shape's own list.
+    const paint = [_]u8{0};
+    try field.heightFieldSetMaterials(0, 1, 1, 1, &paint, &.{scorched});
+
+    var after = [_]u8{0xFF} ** 9;
+    try field.heightFieldMaterials(0, 0, 3, 3, &after);
+    try std.testing.expectEqual(@as(u8, 2), after[0 + 1 * 3]);
+    try std.testing.expectEqual(@as(u8, 1), after[2 + 0 * 3]);
+    try std.testing.expectEqual(@as(u8, 0), after[0 + 0 * 3]);
+
+    var list: [8]?zjolt.PhysicsMaterial = undefined;
+    const materials = try field.materialList(&list);
+    try std.testing.expectEqual(@as(usize, 3), materials.len);
+    try std.testing.expect((materials[2] orelse
+        return error.TestUnexpectedResult).eql(scorched));
+
+    // And the simulation agrees with the read-back: a ray onto quad (0, 1)
+    // now reports the merged material.
+    const bodies = world.system.bodies();
+    _ = try bodies.createAndAdd(.{
+        .shape = field,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    const hit = (try world.system.queries().castRayClosest(
+        zjolt.rvec3(0.5, 10, 1.5),
+        zjolt.vec3(0, -20, 0),
+        null,
+        null,
+    )) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(
+        (field.material(hit.sub_shape_id) orelse
+            return error.TestUnexpectedResult).eql(scorched),
+    );
+
+    // A block that runs off the quad grid is refused rather than asserted on:
+    // 3 samples wide from x = 1 ends at the sample count, one past the last
+    // quad.
+    try std.testing.expectError(
+        error.InvalidArgument,
+        field.heightFieldMaterials(1, 0, 3, 1, &read),
+    );
+}

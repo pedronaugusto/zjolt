@@ -17,6 +17,10 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   no setter, so they could only ever return Jolt's default.
 - `zjoltBodySetNumVelocityStepsOverride` / `zjoltBodyGetNumVelocityStepsOverride`
   and the position-steps pair.
+- `zjoltShapeHeightFieldGetMaterials` and `zjoltShapeHeightFieldSetMaterials`.
+  A height field's quad materials could be set once at creation and never read
+  or changed, while `HeightFieldShape` supports both — a crater could be dug
+  into terrain but never scorched.
 - `zjoltPhysicsSystemGetConstraints`, the enumeration behind
   `zjoltPhysicsSystemGetNumConstraints`. `PhysicsSystem::GetConstraints` had
   no crossing at all, so the count was the only thing a caller could learn
@@ -28,6 +32,9 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 
 ### C ABI — changed
 
+- `zjoltShapeCreateHeightField` takes `materials_capacity`, Jolt's
+  `mMaterialsCapacity`. Without it the material list a repaint grows is
+  reallocated under any query running in parallel.
 - `zjoltPhysicsSystemGetNumActiveBodies`, `zjoltPhysicsSystemGetActiveBodies`
   and `zjoltPhysicsSystemGetActiveBodiesUnsafe` take a `ZJoltBodyType`. All
   three passed `JPH::EBodyType::RigidBody` unconditionally, so a system's soft
@@ -52,6 +59,8 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `setCollideKinematicVsNonDynamic`, `setEnhancedInternalEdgeRemoval`, and the
   two step-override pairs.
 - `VehicleConstraint` gained `setEngineDesc` and `setTransmissionDesc`.
+- `Shape.heightFieldMaterials` and `Shape.heightFieldSetMaterials`, and
+  `HeightFieldOptions.materials_capacity`.
 - `PhysicsSystem.numActiveBodies`, `countActiveBodies`, `getActiveBodies` and
   `getActiveBodiesUnsafe` take a `BodyType`, mirroring the C change.
 - `zjolt.constraintList` fills a caller's buffer with every constraint in a
