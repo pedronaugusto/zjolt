@@ -4,10 +4,10 @@
 //! external-hook bridge, and a `FixedSizeFreeList`-style batched free.
 //!
 //! Jolt frees with `free(block)`/`aligned_free(block)` — no size or alignment
-//! — but Zig's allocator interface needs both at free time. The gap closes by
-//! allocating extra and stashing length and alignment in a header just before
-//! the pointer handed to Jolt. `reallocate` reads that header too, matching
-//! blocks `allocate` produced, though Jolt already supplies the old size.
+//! — but Zig's allocator interface needs both. The gap closes by allocating
+//! extra and stashing length and alignment in a header just before the pointer
+//! handed to Jolt: `prefixSize(alignment)` bytes on EVERY Jolt allocation, 16
+//! at the default alignment, and what makes a free possible at all.
 //!
 //! Jolt's plain `allocate` takes no alignment yet places SIMD types in the
 //! memory it returns; that minimum is read from
@@ -97,6 +97,27 @@ fn reallocate(
     // aligned_allocate.
     const old_header = headerOf(old_payload).*;
     const alignment = old_header.alignment.toByteUnits();
+    const prefix = prefixSize(old_header.alignment);
+    const old_base = old_payload - prefix;
+
+    // Ask the backing allocator to resize in place before copying. Jolt
+    // reallocates the arrays behind its body list, its contact cache and every
+    // temporary collector, so the growth path is hot and every one of those
+    // arrays doubles; a copy that a page-level allocator could have avoided is
+    // the whole array moved for nothing. `rawRemap` preserves the bytes,
+    // header included, whether or not it moves the block.
+    if (std.math.add(usize, prefix, new_size)) |total| {
+        if (gpa.rawRemap(
+            old_base[0..old_header.total_len],
+            old_header.alignment,
+            total,
+            @returnAddress(),
+        )) |base| {
+            const payload = base + prefix;
+            headerOf(payload).* = .{ .total_len = total, .alignment = old_header.alignment };
+            return @ptrCast(payload);
+        }
+    } else |_| return null;
 
     const fresh = allocAligned(gpa, new_size, alignment) orelse return null;
     const copy = @min(old_size, new_size);
@@ -207,6 +228,37 @@ test "reallocate preserves contents in both directions" {
     const shrunk_bytes: [*]u8 = @ptrCast(shrunk);
     for (0..32) |i| try std.testing.expectEqual(@as(u8, @truncate(i)), shrunk_bytes[i]);
 
+    free(@ptrCast(&installed), shrunk);
+}
+
+test "reallocate grows in place when the backing allocator can, rather than copying" {
+    // A FixedBufferAllocator extends its LAST allocation and nothing else,
+    // which makes the two paths tell themselves apart by address: a remap
+    // returns the same pointer, and allocate-copy-free bumps the arena and
+    // returns a different one. Jolt grows the arrays behind its body list and
+    // its contact cache constantly, so the copy is the one worth not doing.
+    var buffer: [4096]u8 = undefined;
+    var fba = std.heap.FixedBufferAllocator.init(&buffer);
+    _ = bridge(fba.allocator());
+
+    const original = allocate(@ptrCast(&installed), 64) orelse {
+        return error.TestUnexpectedResult;
+    };
+    const bytes: [*]u8 = @ptrCast(original);
+    for (0..64) |i| bytes[i] = @truncate(i);
+
+    const grown = reallocate(@ptrCast(&installed), original, 64, 256) orelse {
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqual(original, grown);
+    const grown_bytes: [*]u8 = @ptrCast(grown);
+    for (0..64) |i| try std.testing.expectEqual(@as(u8, @truncate(i)), grown_bytes[i]);
+
+    // The header travelled with the block: a free reading a stale total_len
+    // would hand the wrong slice back, which the shrink below would trip.
+    const shrunk = reallocate(@ptrCast(&installed), grown, 256, 32) orelse {
+        return error.TestUnexpectedResult;
+    };
     free(@ptrCast(&installed), shrunk);
 }
 
