@@ -29,6 +29,7 @@
 #include <Jolt/Physics/Collision/Shape/SubShapeID.h>
 #include <Jolt/Physics/Collision/ShapeFilter.h>
 #include <Jolt/Physics/Collision/SimShapeFilter.h>
+#include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
@@ -312,6 +313,22 @@ inline JPH::Quat ToJoltRotation(const ZJoltQuat &q) {
   if (!std::isfinite(length_sq) || length_sq < 1.0e-12f)
     return JPH::Quat::sIdentity();
   return rotation.Normalized();
+}
+
+/// A constraint's configuration. Here rather than in zjolt_constraint.cpp
+/// with the other constraint tags, because zjolt_ragdoll.cpp converts one
+/// too: a ragdoll part's joint is any TwoBodyConstraintSettings, so both
+/// subsystems hand the same handle across and one conversion has to serve
+/// both.
+inline JPH::ConstraintSettings *ToJolt(ZJoltConstraintSettings *settings) {
+  return reinterpret_cast<JPH::ConstraintSettings *>(settings);
+}
+inline const JPH::ConstraintSettings *ToJolt(
+    const ZJoltConstraintSettings *settings) {
+  return reinterpret_cast<const JPH::ConstraintSettings *>(settings);
+}
+inline ZJoltConstraintSettings *ToC(JPH::ConstraintSettings *settings) {
+  return reinterpret_cast<ZJoltConstraintSettings *>(settings);
 }
 
 inline JPH::BodyID ToJolt(ZJoltBodyId id) { return JPH::BodyID(id); }

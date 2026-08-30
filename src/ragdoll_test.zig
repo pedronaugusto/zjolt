@@ -541,6 +541,356 @@ test "RagdollSettings' body-index/constraint-index maps agree with joint parenta
 }
 
 //=============================================================================
+// The joints holding the parts together
+//=============================================================================
+
+/// A weld (`FixedConstraint`) between two bodies standing exactly where
+/// `Chain`'s two parts stand, snapshotted as settings. The settings outlive
+/// the world they came from: Jolt records the two local-to-centre-of-mass
+/// frames, not the bodies.
+fn weldSettingsForChain() !zjolt.ConstraintSettings {
+    var mold = try World.init();
+    defer mold.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.3, 0.4, 0.3), .{});
+    defer shape.release();
+
+    const bodies = mold.system.bodies();
+    const root = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = Chain.root_position,
+    }, .dont_activate);
+    const child = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = Chain.child_position,
+    }, .dont_activate);
+
+    const weld = try zjolt.Constraint.initFixed(mold.system, root, child, .{
+        .point1 = Chain.joint_position,
+        .point2 = Chain.joint_position,
+    });
+    defer weld.release();
+    return weld.constraintSettings();
+}
+
+/// How far apart the two parts of a spawned `Chain` end up after `seconds`,
+/// and how low the child got, with the joint rewritten first. The one
+/// variable across the three arms below.
+const ChainOutcome = struct { separation: f32, child_y: f32 };
+
+fn runChain(
+    install: ?zjolt.ConstraintSettings,
+    remove: bool,
+    seconds: f32,
+) !ChainOutcome {
+    var world = try World.init();
+    defer world.deinit();
+
+    var chain = try Chain.build(.kinematic);
+    defer chain.deinit();
+
+    if (remove) {
+        try chain.settings.setPartConstraint(1, null);
+    } else if (install) |settings| {
+        try chain.settings.setPartConstraint(1, settings);
+    }
+    chain.settings.calculateBodyIndexToConstraintIndex();
+
+    var ragdoll = try chain.settings.createRagdoll(world.system, 1, 0);
+    defer ragdoll.release();
+    ragdoll.addToPhysicsSystem(.activate, true);
+
+    var id_buf: [2]zjolt.BodyId = undefined;
+    const ids = try ragdoll.getBodyIds(&id_buf);
+    try world.stepFor(seconds);
+
+    const bodies = world.system.bodies();
+    const root = bodies.getPosition(ids[0]);
+    const child = bodies.getPosition(ids[1]);
+    const dx: f32 = @floatCast(child.x - root.x);
+    const dy: f32 = @floatCast(child.y - root.y);
+    const dz: f32 = @floatCast(child.z - root.z);
+    return .{
+        .separation = @sqrt(dx * dx + dy * dy + dz * dz),
+        .child_y = @floatCast(child.y),
+    };
+}
+
+test "a part's joint is what holds it to its parent, and it takes any two-body kind or none" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // Arm 1: the swing-twist `PartDesc.to_parent` describes. A kinematic root
+    // does not fall, so the child only stays up if something holds it.
+    const hinged = try runChain(null, false, 1.5);
+    try std.testing.expect(hinged.child_y > 4.0);
+    try std.testing.expect(hinged.separation < 1.6);
+
+    // Arm 2: no joint at all. Same settings, same skeleton, same bodies —
+    // the one difference is the field, and the child falls to the floor.
+    const loose = try runChain(null, true, 1.5);
+    try std.testing.expect(loose.child_y < 3.0);
+
+    // Arm 3: a weld, which `RagdollConstraintDesc` cannot describe at all.
+    // It holds the child at exactly the offset it was built at, where the
+    // swing-twist's generous cone lets it swing.
+    const weld = try weldSettingsForChain();
+    defer weld.deinit();
+    const welded = try runChain(weld, false, 1.5);
+    try std.testing.expect(welded.child_y > 4.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), welded.separation, 0.05);
+}
+
+test "a part's joint reads back as the same object that was installed" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var chain = try Chain.build(.dynamic);
+    defer chain.deinit();
+
+    // The root has no parent, so no joint — not an error, just absent.
+    try std.testing.expect((try chain.settings.partConstraint(0)) == null);
+
+    const built = (try chain.settings.partConstraint(1)) orelse
+        return error.TestUnexpectedResult;
+    defer built.deinit();
+
+    const weld = try weldSettingsForChain();
+    defer weld.deinit();
+    try chain.settings.setPartConstraint(1, weld);
+
+    const read_back = (try chain.settings.partConstraint(1)) orelse
+        return error.TestUnexpectedResult;
+    defer read_back.deinit();
+    try std.testing.expectEqual(weld.handle, read_back.handle);
+    // And the swing-twist it replaced is gone from the part, not merely
+    // shadowed: the two handles are different objects.
+    try std.testing.expect(built.handle != read_back.handle);
+
+    try chain.settings.setPartConstraint(1, null);
+    try std.testing.expect((try chain.settings.partConstraint(1)) == null);
+
+    // Past the end of the part list is an error, not a silent no-op.
+    try std.testing.expectError(
+        error.InvalidArgument,
+        chain.settings.setPartConstraint(2, weld),
+    );
+    try std.testing.expectError(
+        error.InvalidArgument,
+        chain.settings.partConstraint(2),
+    );
+}
+
+test "additional constraints join parts that are not parent and child, and read back" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var chain = try Chain.build(.dynamic);
+    defer chain.deinit();
+    try std.testing.expectEqual(@as(u32, 0), chain.settings.additionalConstraintCount());
+
+    const weld = try weldSettingsForChain();
+    defer weld.deinit();
+    try chain.settings.addAdditionalConstraint(0, 1, weld);
+    try std.testing.expectEqual(@as(u32, 1), chain.settings.additionalConstraintCount());
+
+    const entry = try chain.settings.additionalConstraint(0);
+    const settings = entry.settings orelse return error.TestUnexpectedResult;
+    defer settings.deinit();
+    try std.testing.expectEqual(@as(u32, 0), entry.part_index1);
+    try std.testing.expectEqual(@as(u32, 1), entry.part_index2);
+    try std.testing.expectEqual(weld.handle, settings.handle);
+
+    try std.testing.expectError(
+        error.InvalidArgument,
+        chain.settings.additionalConstraint(1),
+    );
+    try std.testing.expectError(
+        error.InvalidArgument,
+        chain.settings.addAdditionalConstraint(0, 2, weld),
+    );
+
+    // The extra constraint reaches the solver: a spawned ragdoll has two
+    // constraints where the part list alone accounts for one.
+    var world = try World.init();
+    defer world.deinit();
+    var ragdoll = try chain.settings.createRagdoll(world.system, 1, 0);
+    defer ragdoll.release();
+    try std.testing.expect(ragdoll.getConstraint(0) != null);
+    try std.testing.expect(ragdoll.getConstraint(1) != null);
+    try std.testing.expect(ragdoll.getConstraint(2) == null);
+}
+
+test "a constraint kind that is not two-body is refused rather than badly cast" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const chassis_shape = try zjolt.Shape.initBox(zjolt.vec3(0.75, 0.25, 1.75), .{});
+    defer chassis_shape.release();
+    const chassis = try world.system.bodies().createAndAdd(.{
+        .shape = chassis_shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 2, 0),
+    }, .dont_activate);
+
+    // A vehicle constraint is the one kind of Jolt constraint that derives
+    // from Constraint without going through TwoBodyConstraint, which is what
+    // makes it the honest negative arm here.
+    var wheels = [_]zjolt.VehicleWheelDesc{
+        zjolt.defaultVehicleWheelDesc(),
+        zjolt.defaultVehicleWheelDesc(),
+    };
+    wheels[0].position = zjolt.vec3(-0.7, -0.25, 1.4);
+    wheels[1].position = zjolt.vec3(0.7, -0.25, 1.4);
+    var axle = zjolt.defaultVehicleDifferentialDesc();
+    axle.left_wheel = 0;
+    axle.right_wheel = 1;
+    const differentials = [_]zjolt.VehicleDifferentialDesc{axle};
+
+    const vehicle = try zjolt.VehicleConstraint.init(world.system, chassis, .{
+        .wheels = &wheels,
+        .differentials = &differentials,
+        .collision_tester = zjolt.defaultVehicleCollisionTesterDesc(),
+    });
+    defer vehicle.deinit();
+
+    const as_constraint = vehicle.asConstraint() orelse
+        return error.TestUnexpectedResult;
+    const vehicle_settings = try as_constraint.constraintSettings();
+    defer vehicle_settings.deinit();
+
+    var chain = try Chain.build(.dynamic);
+    defer chain.deinit();
+    try std.testing.expectError(
+        error.InvalidArgument,
+        chain.settings.setPartConstraint(1, vehicle_settings),
+    );
+    try std.testing.expectError(
+        error.InvalidArgument,
+        chain.settings.addAdditionalConstraint(0, 1, vehicle_settings),
+    );
+    // And refusing left the part's own joint alone.
+    const still_there = (try chain.settings.partConstraint(1)) orelse
+        return error.TestUnexpectedResult;
+    still_there.deinit();
+}
+
+//=============================================================================
+// Moving a whole ragdoll at once
+//=============================================================================
+
+/// How far a spawned `Chain` travelled along +x in `seconds`, with `launch`
+/// given the ragdoll first. The arms below differ only in `launch`.
+fn launchedDistanceX(
+    launch: ?*const fn (zjolt.Ragdoll) anyerror!void,
+    seconds: f32,
+) !f32 {
+    var world = try World.init();
+    defer world.deinit();
+
+    var chain = try Chain.build(.dynamic);
+    defer chain.deinit();
+
+    var ragdoll = try chain.settings.createRagdoll(world.system, 1, 0);
+    defer ragdoll.release();
+    ragdoll.addToPhysicsSystem(.activate, true);
+
+    var id_buf: [2]zjolt.BodyId = undefined;
+    const ids = try ragdoll.getBodyIds(&id_buf);
+    const before: f32 = @floatCast(world.system.bodies().getPosition(ids[0]).x);
+
+    if (launch) |f| try f(ragdoll);
+    try world.stepFor(seconds);
+
+    const after: f32 = @floatCast(world.system.bodies().getPosition(ids[0]).x);
+    return after - before;
+}
+
+fn setLinear(ragdoll: zjolt.Ragdoll) anyerror!void {
+    try ragdoll.setLinearVelocity(zjolt.vec3(6, 0, 0), true);
+}
+
+fn addLinear(ragdoll: zjolt.Ragdoll) anyerror!void {
+    try ragdoll.addLinearVelocity(zjolt.vec3(6, 0, 0), true);
+}
+
+fn setLinearAndAngular(ragdoll: zjolt.Ragdoll) anyerror!void {
+    try ragdoll.setLinearAndAngularVelocity(zjolt.vec3(6, 0, 0), zjolt.vec3(0, 0, 0), true);
+}
+
+fn addTheImpulse(ragdoll: zjolt.Ragdoll) anyerror!void {
+    // The root box is 0.6 x 0.8 x 0.6 at Jolt's default density, so a few
+    // hundred kilograms; 2000 N.s is several metres per second on each part.
+    try ragdoll.addImpulse(zjolt.vec3(2000, 0, 0), true);
+}
+
+test "a ragdoll is launched as one thing by velocity or by impulse" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // The control: nothing but gravity, which is along -y, so +x stays put.
+    const drifted = try launchedDistanceX(null, 0.5);
+    try std.testing.expect(@abs(drifted) < 0.1);
+
+    inline for (.{ setLinear, addLinear, setLinearAndAngular, addTheImpulse }) |launch| {
+        const travelled = try launchedDistanceX(&launch, 0.5);
+        try std.testing.expect(travelled > 0.5);
+    }
+}
+
+//=============================================================================
+// Joint matrices in and out of a pose
+//=============================================================================
+
+test "a pose's joint matrices round-trip, and a short buffer is refused" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var skeleton = try zjolt.Skeleton.init();
+    defer skeleton.release();
+    const root = try skeleton.addJoint("root", null);
+    _ = try skeleton.addJoint("child", root);
+
+    const pose = try zjolt.SkeletonPose.init();
+    defer pose.deinit();
+    try pose.setSkeleton(skeleton);
+
+    const rotations = [_]zjolt.Quat{ zjolt.quat_identity, zjolt.quat_identity };
+    const translations = [_]zjolt.Vec3{ zjolt.vec3(0, 0, 0), zjolt.vec3(0, 1, 0) };
+    try pose.setJoints(&rotations, &translations);
+    try pose.calculateJointMatrices();
+
+    var matrices: [32]f32 = undefined;
+    const read = try pose.getJointMatrices(&matrices);
+    try std.testing.expectEqual(@as(usize, 32), read.len);
+    // Column-major: the translation is column 3. The child sits one metre
+    // above the root in MODEL space, which is what these matrices are in.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), read[13], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), read[16 + 13], 1e-5);
+
+    // Written straight back in, without going through local joint states,
+    // and then derived back out of them.
+    var moved = matrices;
+    moved[16 + 13] = 2.5;
+    try pose.setJointMatrices(&moved);
+    try pose.calculateJointStates();
+
+    var out_rotations: [2]zjolt.Quat = undefined;
+    var out_translations: [2]zjolt.Vec3 = undefined;
+    try pose.getJoints(&out_rotations, &out_translations);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.5), out_translations[1].y, 1e-4);
+
+    var short: [16]f32 = undefined;
+    try std.testing.expectError(error.BufferTooSmall, pose.getJointMatrices(&short));
+    try std.testing.expectError(error.InvalidArgument, pose.setJointMatrices(&short));
+}
+
+//=============================================================================
 // SkeletalAnimation
 //=============================================================================
 

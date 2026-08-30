@@ -15,6 +15,7 @@ const core = @import("core.zig");
 pub const BodyDesc = body.BodyDesc;
 pub const zjoltBodyDescInit = body.zjoltBodyDescInit;
 pub const Constraint = constraint.Constraint;
+pub const ConstraintSettings = constraint.ConstraintSettings;
 pub const SwingType = constraint.SwingType;
 pub const Activation = core.Activation;
 pub const BodyId = core.BodyId;
@@ -93,6 +94,10 @@ pub extern fn zjoltSkeletonPoseSetJoints(pose: *SkeletonPose, rotations: ?[*]con
 pub extern fn zjoltSkeletonPoseGetJoints(pose: *const SkeletonPose, out_rotations: ?[*]Quat, out_translations: ?[*]Vec3, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltSkeletonPoseCalculateJointMatrices(pose: *SkeletonPose) Result;
+
+pub extern fn zjoltSkeletonPoseGetJointMatrices(pose: *const SkeletonPose, out_matrices: ?[*]f32, capacity: u32, out_count: *u32) Result;
+
+pub extern fn zjoltSkeletonPoseSetJointMatrices(pose: *SkeletonPose, matrices: [*]const f32, count: u32) Result;
 
 pub extern fn zjoltSkeletonPoseCalculateJointStates(pose: *SkeletonPose) Result;
 
@@ -195,6 +200,16 @@ pub extern fn zjoltRagdollSettingsBuild(settings: *RagdollSettings, skeleton: *c
 
 pub extern fn zjoltRagdollSettingsGetSkeleton(settings: *const RagdollSettings) ?*const Skeleton;
 
+pub extern fn zjoltRagdollSettingsSetPartConstraint(settings: *RagdollSettings, part_index: u32, constraint_settings: ?*ConstraintSettings) Result;
+
+pub extern fn zjoltRagdollSettingsGetPartConstraint(settings: *const RagdollSettings, part_index: u32, out: *?*ConstraintSettings) Result;
+
+pub extern fn zjoltRagdollSettingsAddAdditionalConstraint(settings: *RagdollSettings, part_index1: u32, part_index2: u32, constraint_settings: *ConstraintSettings) Result;
+
+pub extern fn zjoltRagdollSettingsGetNumAdditionalConstraints(settings: *const RagdollSettings) u32;
+
+pub extern fn zjoltRagdollSettingsGetAdditionalConstraint(settings: *const RagdollSettings, index: u32, out_part_index1: ?*u32, out_part_index2: ?*u32, out_constraint: ?*?*ConstraintSettings) Result;
+
 pub extern fn zjoltRagdollSettingsCalculateConstraintPriorities(settings: *RagdollSettings, base_priority: u32) Result;
 
 pub extern fn zjoltRagdollSettingsStabilize(settings: *RagdollSettings) bool;
@@ -243,6 +258,14 @@ pub extern fn zjoltRagdollGetRootTransform(ragdoll: *const Ragdoll, out_position
 pub extern fn zjoltRagdollSetGroupId(ragdoll: *Ragdoll, group_id: u32, lock_bodies: bool) void;
 
 pub extern fn zjoltRagdollActivate(ragdoll: *Ragdoll, lock_bodies: bool) void;
+
+pub extern fn zjoltRagdollSetLinearAndAngularVelocity(ragdoll: *Ragdoll, linear_velocity: *const Vec3, angular_velocity: *const Vec3, lock_bodies: bool) Result;
+
+pub extern fn zjoltRagdollSetLinearVelocity(ragdoll: *Ragdoll, linear_velocity: *const Vec3, lock_bodies: bool) Result;
+
+pub extern fn zjoltRagdollAddLinearVelocity(ragdoll: *Ragdoll, linear_velocity: *const Vec3, lock_bodies: bool) Result;
+
+pub extern fn zjoltRagdollAddImpulse(ragdoll: *Ragdoll, impulse: *const Vec3, lock_bodies: bool) Result;
 
 pub extern fn zjoltRagdollIsActive(ragdoll: *const Ragdoll, lock_bodies: bool) bool;
 

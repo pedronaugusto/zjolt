@@ -149,6 +149,22 @@ ZJOLT_API ZJoltResult zjoltSkeletonPoseGetJoints(const ZJoltSkeletonPose *pose,
                                                  uint32_t capacity,
                                                  uint32_t *out_count);
 
+/// The joint matrices zjoltSkeletonPoseCalculateJointMatrices computes: one
+/// MODEL-space transform per joint, sixteen floats each, column-major —
+/// column c's row r is `out_matrices[16 * joint + 4 * c + r]`, the layout
+/// zjoltHairSetPose uses. Two-call protocol: `*out_count` receives the joint
+/// count and a NULL array is a size query, so `capacity` counts JOINTS.
+ZJOLT_API ZJoltResult zjoltSkeletonPoseGetJointMatrices(
+    const ZJoltSkeletonPose *pose, float *out_matrices, uint32_t capacity,
+    uint32_t *out_count);
+
+/// The same array, written. `count` must equal the joint count exactly. This
+/// is the way in for a pose produced outside Jolt — a skinning solver, an
+/// animation runtime — without going through per-joint local transforms;
+/// zjoltSkeletonPoseCalculateJointStates then derives those from these.
+ZJOLT_API ZJoltResult zjoltSkeletonPoseSetJointMatrices(
+    ZJoltSkeletonPose *pose, const float *matrices, uint32_t count);
+
 /// Converts the per-joint LOCAL rotations/translations from
 /// zjoltSkeletonPoseSetJoints into the flattened form zjoltRagdollSetPose,
 /// GetPose, and DriveToPoseUsingKinematics consume — call before any of
@@ -492,6 +508,40 @@ ZJOLT_API ZJoltResult zjoltRagdollSettingsBuild(ZJoltRagdollSettings *settings,
 ZJOLT_API const ZJoltSkeleton *zjoltRagdollSettingsGetSkeleton(
     const ZJoltRagdollSettings *settings);
 
+/// Replaces part `part_index`'s joint to its parent with any two-body
+/// constraint, not just the swing-twist ZJoltRagdollConstraintDesc describes;
+/// NULL removes it, which is what the root part has. Refuses a kind that is
+/// not two-body: Jolt's field takes TwoBodyConstraintSettings and no other.
+/// Call after zjoltRagdollSettingsBuild, which sizes the part list; a
+/// reference is taken and the caller keeps its own.
+ZJOLT_API ZJoltResult zjoltRagdollSettingsSetPartConstraint(
+    ZJoltRagdollSettings *settings, uint32_t part_index,
+    ZJoltConstraintSettings *constraint);
+
+/// Part `part_index`'s joint to its parent, with a reference taken — release
+/// it. `*out` is NULL for a part with no joint, which is not an error.
+ZJOLT_API ZJoltResult zjoltRagdollSettingsGetPartConstraint(
+    const ZJoltRagdollSettings *settings, uint32_t part_index,
+    ZJoltConstraintSettings **out);
+
+/// A constraint between two parts that are NOT parent and child — Jolt's
+/// RagdollSettings::mAdditionalConstraints. The two indices are part indices,
+/// the same ones zjoltRagdollSettingsSetPartConstraint takes. Same two-body
+/// requirement, and a reference is taken.
+ZJOLT_API ZJoltResult zjoltRagdollSettingsAddAdditionalConstraint(
+    ZJoltRagdollSettings *settings, uint32_t part_index1, uint32_t part_index2,
+    ZJoltConstraintSettings *constraint);
+
+ZJOLT_API uint32_t zjoltRagdollSettingsGetNumAdditionalConstraints(
+    const ZJoltRagdollSettings *settings);
+
+/// One of them, by index. `out_constraint` receives a reference — release it.
+/// Any of the three out pointers may be NULL.
+ZJOLT_API ZJoltResult zjoltRagdollSettingsGetAdditionalConstraint(
+    const ZJoltRagdollSettings *settings, uint32_t index,
+    uint32_t *out_part_index1, uint32_t *out_part_index2,
+    ZJoltConstraintSettings **out_constraint);
+
 /// Gives each part's constraint a solver priority, counting UP toward the
 /// root, so a shoulder under load stops fighting the wrist hanging off
 /// it. Call after zjoltRagdollSettingsBuild. `base_priority` is the
@@ -660,6 +710,24 @@ ZJOLT_API void zjoltRagdollSetGroupId(ZJoltRagdoll *ragdoll, uint32_t group_id,
                                       bool lock_bodies);
 
 ZJOLT_API void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies);
+
+/// Every body of the ragdoll at once, which is what makes a ragdoll launch,
+/// carry a dead runner's momentum, or take a hit as one thing rather than as
+/// a list of parts a caller has to walk. Jolt's Ragdoll::SetLinearVelocity
+/// and its three siblings; NULL vector is ZJOLT_RESULT_INVALID_ARGUMENT.
+ZJOLT_API ZJoltResult zjoltRagdollSetLinearAndAngularVelocity(
+    ZJoltRagdoll *ragdoll, const ZJoltVec3 *linear_velocity,
+    const ZJoltVec3 *angular_velocity, bool lock_bodies);
+ZJOLT_API ZJoltResult zjoltRagdollSetLinearVelocity(
+    ZJoltRagdoll *ragdoll, const ZJoltVec3 *linear_velocity, bool lock_bodies);
+ZJOLT_API ZJoltResult zjoltRagdollAddLinearVelocity(
+    ZJoltRagdoll *ragdoll, const ZJoltVec3 *linear_velocity, bool lock_bodies);
+
+/// Adds `impulse` at the centre of mass of EVERY body — the SAME impulse
+/// once per body, not one impulse shared out across the ragdoll, so a heavier
+/// part gains less velocity than a lighter one. Jolt's own AddImpulse.
+ZJOLT_API ZJoltResult zjoltRagdollAddImpulse(
+    ZJoltRagdoll *ragdoll, const ZJoltVec3 *impulse, bool lock_bodies);
 ZJOLT_API bool zjoltRagdollIsActive(const ZJoltRagdoll *ragdoll,
                                     bool lock_bodies);
 

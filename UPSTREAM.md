@@ -45,7 +45,7 @@ groups are vendored and compiled only under a build option, or not at all:
 | `Jolt/ObjectStream/*.cpp` (eight of nine — `SerializableObject.cpp` is unconditional) | Jolt's reflective, human-readable object-stream format (upstream's `ENABLE_OBJECT_STREAM`), live under `JPH_OBJECT_STREAM` (`-Dobject_stream`, on by default). `zjoltSceneSaveObjectStream`/`RestoreObjectStream` (`zjolt_scene.h`) and their `RagdollSettings` counterparts (`zjolt_ragdoll.h`) read and write it; every other save and restore in this ABI still goes through `StreamIn`/`StreamOut` and this ABI's own packed, checksummed containers. |
 
 Vehicles, ragdolls and soft bodies are compiled and bound: `zjolt_vehicle.h`,
-`zjolt_ragdoll.h` and `zjolt_softbody.h` carry 125, 95 and 64 entry points.
+`zjolt_ragdoll.h` and `zjolt_softbody.h` carry 125, 106 and 64 entry points.
 
 ## Toolchain floor
 

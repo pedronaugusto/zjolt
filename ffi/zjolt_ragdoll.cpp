@@ -170,6 +170,22 @@ JPH::ESwingType ToJoltSwingType(int32_t type) {
                                           : JPH::ESwingType::Cone;
 }
 
+/// `settings` as the two-body kind Jolt's ragdoll fields take, or NULL.
+/// Jolt's own RTTI, not dynamic_cast: zjolt builds with -fno-rtti and
+/// ConstraintSettings carries JPH_DECLARE_SERIALIZABLE_VIRTUAL. A vehicle's
+/// settings are a ConstraintSettings but not a TwoBodyConstraintSettings, and
+/// assigning one would be a bad cast nothing reports. Unqualified
+/// GetRTTIOfType: a hidden friend found only by ADL, @see zjolt_reflect.cpp.
+JPH::TwoBodyConstraintSettings *AsTwoBody(ZJoltConstraintSettings *settings) {
+  if (settings == nullptr) return nullptr;
+  JPH::ConstraintSettings *base = zjolt::ToJolt(settings);
+  if (!base->GetRTTI()->IsKindOf(
+          GetRTTIOfType(static_cast<JPH::TwoBodyConstraintSettings *>(nullptr)))) {
+    return nullptr;
+  }
+  return static_cast<JPH::TwoBodyConstraintSettings *>(base);
+}
+
 /// Builds a swing-twist constraint settings object on the heap — must outlive
 /// this call, unlike the parts' BodyCreationSettings above, since
 /// RagdollSettings::Part::mToParent keeps a reference to it. Never crosses the
@@ -523,6 +539,49 @@ ZJoltResult zjoltSkeletonPoseCalculateJointMatrices(ZJoltSkeletonPose *pose) {
         "the pose's skeleton has joints that are not correctly ordered");
   }
   p->CalculateJointMatrices();
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSkeletonPoseGetJointMatrices(const ZJoltSkeletonPose *pose,
+                                              float *out_matrices,
+                                              uint32_t capacity,
+                                              uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(pose, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::SkeletonPose::Mat44Vector &matrices =
+      zjolt::ToJolt(pose)->GetJointMatrices();
+  const uint32_t count = static_cast<uint32_t>(matrices.size());
+  *out_count = count;
+  if (out_matrices == nullptr) return ZJOLT_RESULT_OK;
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  for (uint32_t i = 0; i < count; ++i) {
+    matrices[i].StoreFloat4x4(
+        reinterpret_cast<JPH::Float4 *>(out_matrices + 16 * i));
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSkeletonPoseSetJointMatrices(ZJoltSkeletonPose *pose,
+                                              const float *matrices,
+                                              uint32_t count) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(pose, matrices)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::SkeletonPose::Mat44Vector &out = zjolt::ToJolt(pose)->GetJointMatrices();
+  if (count != static_cast<uint32_t>(out.size())) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "count must equal the pose's joint count");
+  }
+
+  for (uint32_t i = 0; i < count; ++i) {
+    const float *m = matrices + 16 * i;
+    out[i] = JPH::Mat44(JPH::Vec4(m[0], m[1], m[2], m[3]),
+                        JPH::Vec4(m[4], m[5], m[6], m[7]),
+                        JPH::Vec4(m[8], m[9], m[10], m[11]),
+                        JPH::Vec4(m[12], m[13], m[14], m[15]));
+  }
   return ZJOLT_RESULT_OK;
 }
 
@@ -1281,6 +1340,117 @@ ZJoltResult zjoltRagdollSettingsBuild(ZJoltRagdollSettings *settings,
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltRagdollSettingsSetPartConstraint(
+    ZJoltRagdollSettings *settings, uint32_t part_index,
+    ZJoltConstraintSettings *constraint) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::RagdollSettings *s = zjolt::ToJolt(settings);
+  if (part_index >= s->mParts.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "part_index is past the last part; call "
+                           "zjoltRagdollSettingsBuild first");
+  }
+
+  if (constraint == nullptr) {
+    s->mParts[part_index].mToParent = nullptr;
+    return ZJOLT_RESULT_OK;
+  }
+
+  JPH::TwoBodyConstraintSettings *two_body = AsTwoBody(constraint);
+  if (two_body == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a ragdoll part's joint must be a two-body constraint's settings");
+  }
+  s->mParts[part_index].mToParent = two_body;
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRagdollSettingsGetPartConstraint(
+    const ZJoltRagdollSettings *settings, uint32_t part_index,
+    ZJoltConstraintSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(settings, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::RagdollSettings *s = zjolt::ToJolt(settings);
+  if (part_index >= s->mParts.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "part_index is past the last part");
+  }
+
+  JPH::TwoBodyConstraintSettings *held = s->mParts[part_index].mToParent;
+  if (held != nullptr) held->AddRef();
+  *out = zjolt::ToC(static_cast<JPH::ConstraintSettings *>(held));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRagdollSettingsAddAdditionalConstraint(
+    ZJoltRagdollSettings *settings, uint32_t part_index1, uint32_t part_index2,
+    ZJoltConstraintSettings *constraint) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings, constraint)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  JPH::RagdollSettings *s = zjolt::ToJolt(settings);
+  const size_t parts = s->mParts.size();
+  if (part_index1 >= parts || part_index2 >= parts ||
+      part_index1 == part_index2) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "both part indices must name a part of this "
+                           "ragdoll, and they must differ");
+  }
+
+  JPH::TwoBodyConstraintSettings *two_body = AsTwoBody(constraint);
+  if (two_body == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "an additional constraint must be a two-body constraint's settings");
+  }
+  s->mAdditionalConstraints.emplace_back(static_cast<int>(part_index1),
+                                         static_cast<int>(part_index2),
+                                         two_body);
+  return ZJOLT_RESULT_OK;
+}
+
+uint32_t zjoltRagdollSettingsGetNumAdditionalConstraints(
+    const ZJoltRagdollSettings *settings) {
+  if (settings == nullptr) return 0;
+  return static_cast<uint32_t>(
+      zjolt::ToJolt(settings)->mAdditionalConstraints.size());
+}
+
+ZJoltResult zjoltRagdollSettingsGetAdditionalConstraint(
+    const ZJoltRagdollSettings *settings, uint32_t index,
+    uint32_t *out_part_index1, uint32_t *out_part_index2,
+    ZJoltConstraintSettings **out_constraint) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::RagdollSettings *s = zjolt::ToJolt(settings);
+  if (index >= s->mAdditionalConstraints.size()) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "index is past the last additional constraint");
+  }
+
+  const JPH::RagdollSettings::AdditionalConstraint &ac =
+      s->mAdditionalConstraints[index];
+  if (out_part_index1 != nullptr) {
+    *out_part_index1 = static_cast<uint32_t>(ac.mBodyIdx[0]);
+  }
+  if (out_part_index2 != nullptr) {
+    *out_part_index2 = static_cast<uint32_t>(ac.mBodyIdx[1]);
+  }
+  if (out_constraint != nullptr) {
+    JPH::TwoBodyConstraintSettings *held = ac.mConstraint;
+    if (held != nullptr) held->AddRef();
+    *out_constraint = zjolt::ToC(static_cast<JPH::ConstraintSettings *>(held));
+  }
+  return ZJOLT_RESULT_OK;
+}
+
 const ZJoltSkeleton *zjoltRagdollSettingsGetSkeleton(
     const ZJoltRagdollSettings *settings) {
   if (settings == nullptr) return nullptr;
@@ -1604,6 +1774,58 @@ void zjoltRagdollActivate(ZJoltRagdoll *ragdoll, bool lock_bodies) {
   JPH::Ragdoll *impl = Impl(ragdoll);
   if (impl == nullptr) return;
   impl->Activate(lock_bodies);
+}
+
+ZJoltResult zjoltRagdollSetLinearAndAngularVelocity(
+    ZJoltRagdoll *ragdoll, const ZJoltVec3 *linear_velocity,
+    const ZJoltVec3 *angular_velocity, bool lock_bodies) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(ragdoll, linear_velocity, angular_velocity)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  impl->SetLinearAndAngularVelocity(zjolt::ToJolt(*linear_velocity),
+                                    zjolt::ToJolt(*angular_velocity),
+                                    lock_bodies);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRagdollSetLinearVelocity(ZJoltRagdoll *ragdoll,
+                                          const ZJoltVec3 *linear_velocity,
+                                          bool lock_bodies) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(ragdoll, linear_velocity)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  impl->SetLinearVelocity(zjolt::ToJolt(*linear_velocity), lock_bodies);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRagdollAddLinearVelocity(ZJoltRagdoll *ragdoll,
+                                          const ZJoltVec3 *linear_velocity,
+                                          bool lock_bodies) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(ragdoll, linear_velocity)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  impl->AddLinearVelocity(zjolt::ToJolt(*linear_velocity), lock_bodies);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltRagdollAddImpulse(ZJoltRagdoll *ragdoll,
+                                   const ZJoltVec3 *impulse,
+                                   bool lock_bodies) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(ragdoll, impulse)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::Ragdoll *impl = Impl(ragdoll);
+  if (impl == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  impl->AddImpulse(zjolt::ToJolt(*impulse), lock_bodies);
+  return ZJOLT_RESULT_OK;
 }
 
 bool zjoltRagdollIsActive(const ZJoltRagdoll *ragdoll, bool lock_bodies) {

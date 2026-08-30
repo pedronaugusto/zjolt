@@ -60,16 +60,6 @@ inline ZJoltPathConstraintPath *ToC(JPH::PathConstraintPath *path) {
   return reinterpret_cast<ZJoltPathConstraintPath *>(path);
 }
 
-inline JPH::ConstraintSettings *ToJolt(ZJoltConstraintSettings *settings) {
-  return reinterpret_cast<JPH::ConstraintSettings *>(settings);
-}
-inline const JPH::ConstraintSettings *ToJolt(const ZJoltConstraintSettings *settings) {
-  return reinterpret_cast<const JPH::ConstraintSettings *>(settings);
-}
-inline ZJoltConstraintSettings *ToC(JPH::ConstraintSettings *settings) {
-  return reinterpret_cast<ZJoltConstraintSettings *>(settings);
-}
-
 /// `ZJoltStateRecorder` names a live `JPH::StateRecorder&` Jolt hands the
 /// shim during a step, not an object either side owns — nothing here
 /// constructs or destroys one, only converts the reference for the length of

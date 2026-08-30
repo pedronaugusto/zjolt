@@ -187,6 +187,33 @@ pub const SkeletonPose = struct {
         try err.check(c.zjoltSkeletonPoseCalculateJointMatrices(self.handle));
     }
 
+    /// The joint matrices `calculateJointMatrices` computes: one MODEL-space
+    /// transform per joint, sixteen floats each, column-major — column c's
+    /// row r is `out[16 * joint + 4 * c + r]`. `out` holds
+    /// `16 * jointCount()` floats, or `error.BufferTooSmall`.
+    pub fn getJointMatrices(self: SkeletonPose, out: []f32) err.Error![]f32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltSkeletonPoseGetJointMatrices(
+            self.handle,
+            out.ptr,
+            @intCast(out.len / 16),
+            &count,
+        ));
+        return out[0 .. 16 * count];
+    }
+
+    /// The same array, written. `matrices` holds exactly `16 * jointCount()`
+    /// floats. The way in for a pose produced outside Jolt — a skinning
+    /// solver, an animation runtime — without per-joint local transforms;
+    /// `calculateJointStates` then derives those from these.
+    pub fn setJointMatrices(self: SkeletonPose, matrices: []const f32) err.Error!void {
+        try err.check(c.zjoltSkeletonPoseSetJointMatrices(
+            self.handle,
+            matrices.ptr,
+            @intCast(matrices.len / 16),
+        ));
+    }
+
     /// The reverse conversion: what `Ragdoll.getPose` leaves the caller
     /// needing before `getJoints` returns anything meaningful.
     pub fn calculateJointStates(self: SkeletonPose) err.Error!void {
@@ -626,6 +653,13 @@ fn bodyDescToC(desc: body_mod.BodyDesc) c.BodyDesc {
     return out;
 }
 
+/// One of `RagdollSettings.addAdditionalConstraint`'s entries, read back.
+pub const AdditionalConstraint = struct {
+    part_index1: u32,
+    part_index2: u32,
+    settings: ?constraint_mod.ConstraintSettings,
+};
+
 pub const RagdollSettings = struct {
     handle: *c.RagdollSettings,
 
@@ -707,6 +741,82 @@ pub const RagdollSettings = struct {
             c_parts.ptr,
             @intCast(c_parts.len),
         ));
+    }
+
+    /// Replaces part `part_index`'s joint to its parent with ANY two-body
+    /// constraint, not just the swing-twist `PartDesc.to_parent` describes.
+    /// `null` removes it, which is what the root part has.
+    /// `error.InvalidArgument` for a settings object that is not a two-body
+    /// kind. A reference is taken; the caller keeps its own. Call after
+    /// `build`, which is what sizes the part list.
+    pub fn setPartConstraint(
+        self: RagdollSettings,
+        part_index: u32,
+        constraint_settings: ?constraint_mod.ConstraintSettings,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollSettingsSetPartConstraint(
+            self.handle,
+            part_index,
+            if (constraint_settings) |cs| cs.handle else null,
+        ));
+    }
+
+    /// Part `part_index`'s joint to its parent, with a reference taken —
+    /// `deinit` it. `null` for a part with no joint, which is not an error.
+    pub fn partConstraint(
+        self: RagdollSettings,
+        part_index: u32,
+    ) err.Error!?constraint_mod.ConstraintSettings {
+        var handle: ?*c.ConstraintSettings = null;
+        try err.check(c.zjoltRagdollSettingsGetPartConstraint(
+            self.handle,
+            part_index,
+            &handle,
+        ));
+        return if (handle) |h| .{ .handle = h } else null;
+    }
+
+    /// A constraint between two parts that are NOT parent and child — Jolt's
+    /// `mAdditionalConstraints`. Same two-body requirement as
+    /// `setPartConstraint`, and a reference is taken.
+    pub fn addAdditionalConstraint(
+        self: RagdollSettings,
+        part_index1: u32,
+        part_index2: u32,
+        constraint_settings: constraint_mod.ConstraintSettings,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollSettingsAddAdditionalConstraint(
+            self.handle,
+            part_index1,
+            part_index2,
+            constraint_settings.handle,
+        ));
+    }
+
+    pub fn additionalConstraintCount(self: RagdollSettings) u32 {
+        return c.zjoltRagdollSettingsGetNumAdditionalConstraints(self.handle);
+    }
+
+    /// One of them. `.settings` carries a reference — `deinit` it.
+    pub fn additionalConstraint(
+        self: RagdollSettings,
+        index: u32,
+    ) err.Error!AdditionalConstraint {
+        var part1: u32 = 0;
+        var part2: u32 = 0;
+        var handle: ?*c.ConstraintSettings = null;
+        try err.check(c.zjoltRagdollSettingsGetAdditionalConstraint(
+            self.handle,
+            index,
+            &part1,
+            &part2,
+            &handle,
+        ));
+        return .{
+            .part_index1 = part1,
+            .part_index2 = part2,
+            .settings = if (handle) |h| .{ .handle = h } else null,
+        };
     }
 
     /// The skeleton `build` was given. Borrowed — the settings' own reference
@@ -973,6 +1083,50 @@ pub const Ragdoll = struct {
 
     pub fn activate(self: Ragdoll, lock_bodies: bool) void {
         c.zjoltRagdollActivate(self.handle, lock_bodies);
+    }
+
+    /// Every body of the ragdoll at once — what makes it launch, carry a
+    /// runner's momentum into the fall, or take a hit as one thing rather
+    /// than as a list of parts the caller walks.
+    pub fn setLinearAndAngularVelocity(
+        self: Ragdoll,
+        linear: math.Vec3,
+        angular: math.Vec3,
+        lock_bodies: bool,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollSetLinearAndAngularVelocity(
+            self.handle,
+            &linear,
+            &angular,
+            lock_bodies,
+        ));
+    }
+
+    pub fn setLinearVelocity(
+        self: Ragdoll,
+        linear: math.Vec3,
+        lock_bodies: bool,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollSetLinearVelocity(self.handle, &linear, lock_bodies));
+    }
+
+    pub fn addLinearVelocity(
+        self: Ragdoll,
+        linear: math.Vec3,
+        lock_bodies: bool,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollAddLinearVelocity(self.handle, &linear, lock_bodies));
+    }
+
+    /// Adds `impulse` at the centre of mass of EVERY body — the SAME
+    /// impulse once per body, not one shared across the ragdoll, so a
+    /// heavier part gains less velocity. Jolt's own AddImpulse.
+    pub fn addImpulse(
+        self: Ragdoll,
+        impulse: math.Vec3,
+        lock_bodies: bool,
+    ) err.Error!void {
+        try err.check(c.zjoltRagdollAddImpulse(self.handle, &impulse, lock_bodies));
     }
 
     pub fn isActive(self: Ragdoll, lock_bodies: bool) bool {

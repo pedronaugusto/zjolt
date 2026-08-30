@@ -29,6 +29,20 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `zjoltVehicleConstraintSetTransmissionDesc`: the writable half of the two
   getters. Without them `zjoltVehicleConstraintEngineClampRPM` had no reachable
   purpose.
+- `zjoltRagdollSettingsSetPartConstraint` / `GetPartConstraint`,
+  `zjoltRagdollSettingsAddAdditionalConstraint`,
+  `zjoltRagdollSettingsGetNumAdditionalConstraints` and
+  `GetAdditionalConstraint`. A ragdoll part's joint could only ever be the
+  swing-twist `ZJoltRagdollConstraintDesc` describes, and
+  `RagdollSettings::mAdditionalConstraints` — the field that joins two parts
+  that are not parent and child — had no crossing at all.
+- `zjoltRagdollSetLinearAndAngularVelocity`, `zjoltRagdollSetLinearVelocity`,
+  `zjoltRagdollAddLinearVelocity` and `zjoltRagdollAddImpulse`. Moving a whole
+  ragdoll meant walking its body ids and calling the body interface per part.
+- `zjoltSkeletonPoseGetJointMatrices` and `zjoltSkeletonPoseSetJointMatrices`.
+  The model-space matrices were computed and consumed inside the ABI and never
+  readable, so a pose produced outside Jolt had no way in and a pose Jolt
+  computed had no way out.
 
 ### C ABI — changed
 
@@ -65,6 +79,14 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `getActiveBodiesUnsafe` take a `BodyType`, mirroring the C change.
 - `zjolt.constraintList` fills a caller's buffer with every constraint in a
   system, each holding a reference of its own.
+- `RagdollSettings.setPartConstraint`, `partConstraint`,
+  `addAdditionalConstraint`, `additionalConstraintCount` and
+  `additionalConstraint`, the last returning a `RagdollAdditionalConstraint`.
+  Settings that are not a two-body kind are refused with
+  `error.InvalidArgument` rather than cast.
+- `Ragdoll.setLinearAndAngularVelocity`, `setLinearVelocity`,
+  `addLinearVelocity` and `addImpulse`.
+- `SkeletonPose.getJointMatrices` and `setJointMatrices`.
 - `layersFromInstance` builds the same three layer tables from a live value
   rather than from a type, so a layer scheme read from data at run time is
   expressible. `layersFromType` is unchanged; both now reject a type missing

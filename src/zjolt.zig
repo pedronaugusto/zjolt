@@ -452,6 +452,7 @@ pub const SkeletonMapper = ragdoll_mod.SkeletonMapper;
 pub const RagdollSettings = ragdoll_mod.RagdollSettings;
 pub const RagdollPartDesc = ragdoll_mod.RagdollPartDesc;
 pub const RagdollConstraintDesc = ragdoll_mod.RagdollConstraintDesc;
+pub const RagdollAdditionalConstraint = ragdoll_mod.AdditionalConstraint;
 pub const Ragdoll = ragdoll_mod.Ragdoll;
 /// Hair, and the compute backend it runs on. There is no renderer here: the
 /// backend is either Jolt's CPU fallback, which this package compiles, or a
