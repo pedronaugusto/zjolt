@@ -316,6 +316,16 @@ inline JPH::Quat ToJoltRotation(const ZJoltQuat &q) {
 
 inline JPH::BodyID ToJolt(ZJoltBodyId id) { return JPH::BodyID(id); }
 
+inline JPH::EBodyType ToJolt(ZJoltBodyType type) {
+  return type == ZJOLT_BODY_TYPE_SOFT_BODY ? JPH::EBodyType::SoftBody
+                                           : JPH::EBodyType::RigidBody;
+}
+
+inline ZJoltBodyType ToC(JPH::EBodyType type) {
+  return type == JPH::EBodyType::SoftBody ? ZJOLT_BODY_TYPE_SOFT_BODY
+                                          : ZJOLT_BODY_TYPE_RIGID_BODY;
+}
+
 inline ZJoltBodyId ToC(const JPH::BodyID &id) {
   return static_cast<ZJoltBodyId>(id.GetIndexAndSequenceNumber());
 }

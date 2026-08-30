@@ -288,7 +288,7 @@ pub extern fn zjoltPhysicsSystemOptimizeBroadPhase(system: *PhysicsSystem) void;
 
 pub extern fn zjoltPhysicsSystemGetNumBodies(system: *const PhysicsSystem) u32;
 
-pub extern fn zjoltPhysicsSystemGetNumActiveBodies(system: *const PhysicsSystem) u32;
+pub extern fn zjoltPhysicsSystemGetNumActiveBodies(system: *const PhysicsSystem, body_type: body.BodyType) u32;
 
 pub extern fn zjoltPhysicsSystemSetContactListener(system: *PhysicsSystem, listener: ?*const ContactListener) Result;
 
@@ -352,7 +352,7 @@ pub extern fn zjoltReportNarrowPhaseStats() Result;
 
 pub extern fn zjoltPhysicsSystemTryGetBodyNoLock(system: *const PhysicsSystem, body_id: BodyId) ?*const body.Body;
 
-pub extern fn zjoltPhysicsSystemGetActiveBodiesUnsafe(system: *const PhysicsSystem, out_ids: *?[*]const BodyId, out_count: *u32) void;
+pub extern fn zjoltPhysicsSystemGetActiveBodiesUnsafe(system: *const PhysicsSystem, body_type: body.BodyType, out_ids: *?[*]const BodyId, out_count: *u32) void;
 
 pub extern fn zjoltPhysicsSystemStep(system: *PhysicsSystem, delta_time: f32, collision_steps: i32, job_system: *JobSystem, out_error: ?*UpdateError) Result;
 

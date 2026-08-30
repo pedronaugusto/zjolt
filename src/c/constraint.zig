@@ -305,6 +305,8 @@ pub extern fn zjoltConstraintIsAdded(system: *const PhysicsSystem, constraint: *
 
 pub extern fn zjoltPhysicsSystemGetNumConstraints(system: *const PhysicsSystem) u32;
 
+pub extern fn zjoltPhysicsSystemGetConstraints(system: *const PhysicsSystem, out_constraints: ?[*]*Constraint, capacity: u32, out_count: *u32) Result;
+
 pub extern fn zjoltConstraintGetSubType(constraint: *const Constraint) ConstraintSubType;
 
 pub extern fn zjoltConstraintSetEnabled(constraint: *Constraint, enabled: bool) void;

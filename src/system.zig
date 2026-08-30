@@ -894,8 +894,10 @@ pub const PhysicsSystem = struct {
         return c.zjoltPhysicsSystemGetNumBodies(self.handle);
     }
 
-    pub fn numActiveBodies(self: PhysicsSystem) u32 {
-        return c.zjoltPhysicsSystemGetNumActiveBodies(self.handle);
+    /// How many bodies of `body_type` are awake. Jolt keeps one active list
+    /// per body type, so a soft body is never counted among the rigid ones.
+    pub fn numActiveBodies(self: PhysicsSystem, body_type: body_mod.BodyType) u32 {
+        return c.zjoltPhysicsSystemGetNumActiveBodies(self.handle, body_type);
     }
 
     /// The ceiling this system was created with, which cannot grow.
@@ -1081,10 +1083,13 @@ pub const PhysicsSystem = struct {
     /// copy every frame. Not thread safe, and invalidated by the next call that
     /// adds, removes, activates or deactivates a body — read what you need
     /// before doing anything else.
-    pub fn getActiveBodiesUnsafe(self: PhysicsSystem) []const body_mod.BodyId {
+    pub fn getActiveBodiesUnsafe(
+        self: PhysicsSystem,
+        body_type: body_mod.BodyType,
+    ) []const body_mod.BodyId {
         var ids: ?[*]const body_mod.BodyId = null;
         var count: u32 = 0;
-        c.zjoltPhysicsSystemGetActiveBodiesUnsafe(self.handle, &ids, &count);
+        c.zjoltPhysicsSystemGetActiveBodiesUnsafe(self.handle, body_type, &ids, &count);
         const ptr = ids orelse return &.{};
         return ptr[0..count];
     }
@@ -1123,21 +1128,26 @@ pub const PhysicsSystem = struct {
     // right for occasional use, wrong for a renderer's every frame. These are the frame-loop path: two crossings and one lock per batch, not 2N.
     //-------------------------------------------------------------------------
 
-    pub fn countActiveBodies(self: PhysicsSystem) err.Error!u32 {
+    pub fn countActiveBodies(
+        self: PhysicsSystem,
+        body_type: body_mod.BodyType,
+    ) err.Error!u32 {
         var count: u32 = 0;
-        try err.check(c.zjoltPhysicsSystemGetActiveBodies(self.handle, null, 0, &count));
+        try err.check(c.zjoltPhysicsSystemGetActiveBodies(self.handle, body_type, null, 0, &count));
         return count;
     }
 
-    /// Ids of the bodies that are awake — the set whose transforms can have
-    /// changed since the last step.
+    /// Ids of the bodies of `body_type` that are awake — the set whose
+    /// transforms can have changed since the last step.
     pub fn getActiveBodies(
         self: PhysicsSystem,
+        body_type: body_mod.BodyType,
         buffer: []body_mod.BodyId,
     ) err.Error![]body_mod.BodyId {
         var count: u32 = 0;
         try err.check(c.zjoltPhysicsSystemGetActiveBodies(
             self.handle,
+            body_type,
             buffer.ptr,
             @intCast(buffer.len),
             &count,

@@ -575,6 +575,16 @@ ZJOLT_API bool zjoltConstraintIsAdded(const ZJoltPhysicsSystem *system,
 ZJOLT_API uint32_t zjoltPhysicsSystemGetNumConstraints(
     const ZJoltPhysicsSystem *system);
 
+/// Every constraint currently in `system`, in Jolt's own order. Two-call
+/// protocol: `*out_count` always receives the true number, so a capacity of 0
+/// with `out_constraints` NULL is a size query.
+/// Each one written carries a reference of its own, as a
+/// zjoltConstraintCreate* does — release every one: Jolt's list is a copy of
+/// refs that dies with the call, and its only other owner is the system.
+ZJOLT_API ZJoltResult zjoltPhysicsSystemGetConstraints(
+    const ZJoltPhysicsSystem *system, ZJoltConstraint **out_constraints,
+    uint32_t capacity, uint32_t *out_count);
+
 //===----------------------------------------------------------------------===//
 // Common state
 //===----------------------------------------------------------------------===//

@@ -1400,3 +1400,74 @@ fn expectVec3(expected: zjolt.Vec3, actual: zjolt.Vec3, tolerance: f32) !void {
     try std.testing.expectApproxEqAbs(expected.y, actual.y, tolerance);
     try std.testing.expectApproxEqAbs(expected.z, actual.z, tolerance);
 }
+
+//=============================================================================
+// Enumerating what a system holds
+//=============================================================================
+
+test "the system's constraint list names every constraint added to it, each with a reference of its own" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.3, .{});
+    defer shape.release();
+    const bodies = world.system.bodies();
+    const first = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(3, 10, 0),
+    }, .activate);
+    const second = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(-3, 10, 0),
+    }, .activate);
+
+    var left = try zjolt.Constraint.initDistance(world.system, zjolt.world_body, first, .{
+        .point1 = zjolt.rvec3(0, 10, 0),
+        .point2 = zjolt.rvec3(3, 10, 0),
+    });
+    defer left.release();
+    try left.addTo(world.system);
+    var right = try zjolt.Constraint.initDistance(world.system, zjolt.world_body, second, .{
+        .point1 = zjolt.rvec3(0, 10, 0),
+        .point2 = zjolt.rvec3(-3, 10, 0),
+    });
+    defer right.release();
+    try right.addTo(world.system);
+
+    try std.testing.expectEqual(@as(u32, 2), zjolt.constraintCount(world.system));
+
+    // A buffer that cannot hold them says so rather than truncating quietly,
+    // and what it did write still holds a reference.
+    var one: [1]zjolt.Constraint = undefined;
+    const before = left.refCount();
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        zjolt.constraintList(world.system, &one),
+    );
+    try std.testing.expectEqual(before + 1, one[0].refCount());
+    one[0].release();
+
+    var buffer: [4]zjolt.Constraint = undefined;
+    const listed = try zjolt.constraintList(world.system, &buffer);
+    try std.testing.expectEqual(@as(usize, 2), listed.len);
+
+    // Every constraint in the system is one of the two created here, and both
+    // are present. Order is Jolt's, so it is not assumed.
+    var saw_left = false;
+    var saw_right = false;
+    for (listed) |held| {
+        if (held.handle == left.handle) saw_left = true;
+        if (held.handle == right.handle) saw_right = true;
+        held.release();
+    }
+    try std.testing.expect(saw_left and saw_right);
+
+    // The references the list took are gone again, and the two the test owns
+    // are the only ones left besides the system's.
+    try std.testing.expectEqual(before, left.refCount());
+}

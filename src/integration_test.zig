@@ -678,7 +678,7 @@ test "a dynamic body falls under gravity and comes to rest on the floor" {
     // It should have gone to sleep by now, which is what makes the active-body
     // list a useful thing to read back.
     try std.testing.expect(!bodies.isActive(ball));
-    try std.testing.expectEqual(@as(u32, 0), try world.system.countActiveBodies());
+    try std.testing.expectEqual(@as(u32, 0), try world.system.countActiveBodies(.rigid_body));
 }
 
 test "the transform matrices place the body, its centre of mass, and its inertia" {
@@ -1999,11 +1999,11 @@ test "bulk read-back matches the per-body accessors" {
 
     // Everything is awake and moving, so the active list holds all of them
     // plus nothing else. The floor is static and never appears.
-    const active_count = try world.system.countActiveBodies();
+    const active_count = try world.system.countActiveBodies(.rigid_body);
     try std.testing.expectEqual(@as(u32, 16), active_count);
 
     var active: [32]zjolt.BodyId = undefined;
-    const awake = try world.system.getActiveBodies(&active);
+    const awake = try world.system.getActiveBodies(.rigid_body, &active);
     try std.testing.expectEqual(@as(usize, 16), awake.len);
 
     const all_count = try world.system.countBodies();

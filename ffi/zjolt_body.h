@@ -673,14 +673,14 @@ ZJOLT_API void zjoltBodyNotifyShapeChanged(
 // two do every body in two crossings and one lock acquisition instead.
 //===----------------------------------------------------------------------===//
 
-/// Ids of the bodies that are awake, which is the set whose transforms can
-/// have changed since the last step.
-///
+/// Ids of the bodies of `body_type` that are awake — the set whose transforms
+/// can have changed since the last step. Jolt keeps one active list per body
+/// type, so asking for rigid bodies never reports a soft one.
 /// Two-call protocol: `*out_count` always receives the true number, so a
 /// capacity of 0 with `out_ids` NULL is a size query.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemGetActiveBodies(
-    const ZJoltPhysicsSystem *system, ZJoltBodyId *out_ids, uint32_t capacity,
-    uint32_t *out_count);
+    const ZJoltPhysicsSystem *system, ZJoltBodyType body_type,
+    ZJoltBodyId *out_ids, uint32_t capacity, uint32_t *out_count);
 
 /// Every body in the system, awake or not, in no particular order.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemGetBodies(

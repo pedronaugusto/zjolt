@@ -426,7 +426,7 @@ test "tryGetBodyNoLock and getActiveBodiesUnsafe agree with the locked accessors
     const unlocked_pos = unlocked.position();
     try std.testing.expectEqual(floatY(locked_pos), floatY(unlocked_pos));
 
-    const active = rig.system.getActiveBodiesUnsafe();
+    const active = rig.system.getActiveBodiesUnsafe(.rigid_body);
     try std.testing.expectEqual(@as(usize, 1), active.len);
     try std.testing.expectEqual(ball, active[0]);
 }
@@ -804,4 +804,67 @@ test "a layer scheme held in fields is installed and consulted, through the same
     const y = system.bodies().getPosition(ball).y;
     try std.testing.expect(y > 0.4 and y < 0.7);
     try std.testing.expect(layers.asked > 0);
+}
+
+test "the active-body queries answer about the body type asked for, not about rigid bodies alone" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const system = try zjolt.PhysicsSystem.init(.{
+        .layers = zjolt.layersFromType(Layers),
+        .max_bodies = 8,
+    });
+    defer system.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+    const rigid = try system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    // One triangle is enough: this test is about which list a body lands in,
+    // not about how it deforms.
+    const settings = try zjolt.SoftBodySharedSettings.create();
+    defer settings.release();
+    try settings.addVertices(&.{
+        .{ .position = .{ .x = 0, .y = 0, .z = 0 }, .velocity = zjolt.vec3_zero, .inv_mass = 1 },
+        .{ .position = .{ .x = 1, .y = 0, .z = 0 }, .velocity = zjolt.vec3_zero, .inv_mass = 1 },
+        .{ .position = .{ .x = 0, .y = 0, .z = 1 }, .velocity = zjolt.vec3_zero, .inv_mass = 1 },
+    });
+    try settings.addFaces(&.{.{ .vertex = .{ 0, 1, 2 }, .material_index = 0 }});
+    try settings.addEdges(&.{
+        .{ .vertex = .{ 0, 1 }, .compliance = 0 },
+        .{ .vertex = .{ 1, 2 }, .compliance = 0 },
+        .{ .vertex = .{ 2, 0 }, .compliance = 0 },
+    });
+    settings.calculateEdgeLengths();
+    settings.optimize();
+    const soft = try zjolt.createAndAddSoftBody(system, .{
+        .shared_settings = settings,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(20, 5, 0),
+    }, .activate);
+
+    // Jolt keeps one active list per body type. Asking for one never reports
+    // the other, and the soft body was unreachable through these three
+    // entry points while the type was hardcoded.
+    try std.testing.expectEqual(@as(u32, 1), system.numActiveBodies(.rigid_body));
+    try std.testing.expectEqual(@as(u32, 1), system.numActiveBodies(.soft_body));
+
+    var buffer: [8]zjolt.BodyId = undefined;
+    const active_rigid = try system.getActiveBodies(.rigid_body, &buffer);
+    try std.testing.expectEqualSlices(zjolt.BodyId, &.{rigid}, active_rigid);
+
+    var soft_buffer: [8]zjolt.BodyId = undefined;
+    const active_soft = try system.getActiveBodies(.soft_body, &soft_buffer);
+    try std.testing.expectEqualSlices(zjolt.BodyId, &.{soft}, active_soft);
+
+    try std.testing.expectEqual(@as(u32, 1), try system.countActiveBodies(.soft_body));
+    try std.testing.expectEqualSlices(
+        zjolt.BodyId,
+        &.{soft},
+        system.getActiveBodiesUnsafe(.soft_body),
+    );
 }

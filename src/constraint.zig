@@ -1592,6 +1592,36 @@ pub fn count(system: system_mod.PhysicsSystem) u32 {
     return c.zjoltPhysicsSystemGetNumConstraints(system.handle);
 }
 
+/// Every constraint in `system`, written into `buffer` in Jolt's own order.
+///
+/// Each one carries a reference of its own, as a `Constraint.init*` does —
+/// `release` every element of the returned slice. `error.BufferTooSmall` when
+/// `buffer` is shorter than `count`; what fitted is still written, and holds a
+/// reference, so ask `count` first.
+pub fn list(
+    system: system_mod.PhysicsSystem,
+    buffer: []Constraint,
+) err.Error![]Constraint {
+    // The C entry point writes raw handles; a `Constraint` is one of those
+    // and nothing else, so the caller's buffer IS the output array. Asserted
+    // rather than assumed, because a second field added to `Constraint` would
+    // otherwise turn this into a silent out-of-bounds write.
+    comptime {
+        std.debug.assert(@sizeOf(Constraint) == @sizeOf(*c.Constraint));
+        std.debug.assert(@alignOf(Constraint) == @alignOf(*c.Constraint));
+        std.debug.assert(@offsetOf(Constraint, "handle") == 0);
+    }
+
+    var written: u32 = 0;
+    try err.check(c.zjoltPhysicsSystemGetConstraints(
+        system.handle,
+        @ptrCast(buffer.ptr),
+        @intCast(buffer.len),
+        &written,
+    ));
+    return buffer[0..written];
+}
+
 //=============================================================================
 // The behavioural tests
 //

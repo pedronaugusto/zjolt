@@ -102,7 +102,7 @@ pub const SimulationStats = extern struct {
     is_large_island: bool,
 };
 
-pub extern fn zjoltPhysicsSystemGetActiveBodies(system: *const PhysicsSystem, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltPhysicsSystemGetActiveBodies(system: *const PhysicsSystem, body_type: BodyType, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltPhysicsSystemGetBodies(system: *const PhysicsSystem, out_ids: ?[*]BodyId, capacity: u32, out_count: *u32) Result;
 

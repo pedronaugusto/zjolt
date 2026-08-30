@@ -494,6 +494,7 @@ pub const SixDofAxis = constraint_mod.SixDofAxis;
 pub const PathRotationConstraintType = constraint_mod.PathRotationConstraintType;
 pub const world_body = constraint_mod.world_body;
 pub const constraintCount = constraint_mod.count;
+pub const constraintList = constraint_mod.list;
 pub const FixedConstraintDesc = constraint_mod.FixedDesc;
 pub const PointConstraintDesc = constraint_mod.PointDesc;
 pub const HingeConstraintDesc = constraint_mod.HingeDesc;

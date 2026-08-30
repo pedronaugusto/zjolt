@@ -948,10 +948,10 @@ uint32_t zjoltPhysicsSystemGetNumBodies(const ZJoltPhysicsSystem *system) {
   return system->system.GetNumBodies();
 }
 
-uint32_t zjoltPhysicsSystemGetNumActiveBodies(
-    const ZJoltPhysicsSystem *system) {
+uint32_t zjoltPhysicsSystemGetNumActiveBodies(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyType body_type) {
   if (system == nullptr) return 0;
-  return system->system.GetNumActiveBodies(JPH::EBodyType::RigidBody);
+  return system->system.GetNumActiveBodies(zjolt::ToJolt(body_type));
 }
 
 //===----------------------------------------------------------------------===//
@@ -1186,6 +1186,7 @@ ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltPhysicsSystemGetActiveBodies(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyType body_type,
                                               ZJoltBodyId *out_ids,
                                               uint32_t capacity,
                                               uint32_t *out_count) {
@@ -1193,7 +1194,7 @@ ZJoltResult zjoltPhysicsSystemGetActiveBodies(const ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyIDVector ids;
-  system->system.GetActiveBodies(JPH::EBodyType::RigidBody, ids);
+  system->system.GetActiveBodies(zjolt::ToJolt(body_type), ids);
   return CopyBodyIds(ids, out_ids, capacity, out_count);
 }
 
@@ -1277,16 +1278,16 @@ const ZJoltBody *zjoltPhysicsSystemTryGetBodyNoLock(
 }
 
 void zjoltPhysicsSystemGetActiveBodiesUnsafe(const ZJoltPhysicsSystem *system,
+                                             ZJoltBodyType body_type,
                                              const ZJoltBodyId **out_ids,
                                              uint32_t *out_count) {
   if (out_ids != nullptr) *out_ids = nullptr;
   if (out_count != nullptr) *out_count = 0;
   if (system == nullptr) return;
 
-  const JPH::BodyID *ids =
-      system->system.GetActiveBodiesUnsafe(JPH::EBodyType::RigidBody);
-  const uint32_t count =
-      system->system.GetNumActiveBodies(JPH::EBodyType::RigidBody);
+  const JPH::EBodyType type = zjolt::ToJolt(body_type);
+  const JPH::BodyID *ids = system->system.GetActiveBodiesUnsafe(type);
+  const uint32_t count = system->system.GetNumActiveBodies(type);
   if (out_ids != nullptr) *out_ids = reinterpret_cast<const ZJoltBodyId *>(ids);
   if (out_count != nullptr) *out_count = count;
 }

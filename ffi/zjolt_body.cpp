@@ -21,11 +21,6 @@ JPH::EActivation ToJoltActivation(int32_t activation) {
              : JPH::EActivation::Activate;
 }
 
-ZJoltBodyType ToCBodyType(JPH::EBodyType type) {
-  return type == JPH::EBodyType::SoftBody ? ZJOLT_BODY_TYPE_SOFT_BODY
-                                          : ZJOLT_BODY_TYPE_RIGID_BODY;
-}
-
 JPH::BodyInterface *Interface(ZJoltPhysicsSystem *system) {
   if (system == nullptr) return nullptr;
   return &system->system.GetBodyInterface();
@@ -269,7 +264,7 @@ ZJoltBodyType zjoltBodyGetBodyType(const ZJoltPhysicsSystem *system,
                                    ZJoltBodyId body) {
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return ZJOLT_BODY_TYPE_RIGID_BODY;
-  return ToCBodyType(iface->GetBodyType(zjolt::ToJolt(body)));
+  return zjolt::ToC(iface->GetBodyType(zjolt::ToJolt(body)));
 }
 
 uint8_t zjoltBodyIdGetSequenceNumber(ZJoltBodyId id) {

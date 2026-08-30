@@ -34,7 +34,7 @@ cross-check makes any drift between the header and the Zig side a build
 failure, and there are no compatibility aliases anywhere, so there is exactly
 one spelling of everything.
 
-Working today: every Jolt subsystem, across **1426 C entry points** — shapes,
+Working today: every Jolt subsystem, across **1427 C entry points** — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,
 ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 [Scope](#scope) for what that covers and what is deliberately left out.
@@ -147,7 +147,7 @@ difference that matters is not spelling:
 
 |  | joltc | zjolt |
 |---|---|---|
-| entry points returning an error code | none | 754 |
+| entry points returning an error code | none | 755 |
 | entry points returning `void` | the large majority | 381 |
 | build-configuration handshake | none | `zjoltAbiLayout` + config id |
 | public headers | one | 25, one per subsystem, behind one umbrella |
@@ -255,7 +255,7 @@ So there is a second path for exactly that:
 
 ```zig
 var ids: [1024]zjolt.BodyId = undefined;
-const awake = try system.getActiveBodies(&ids);          // what moved
+const awake = try system.getActiveBodies(.rigid_body, &ids);  // what moved
 _ = try system.getTransforms(awake, &positions, &rotations);
 ```
 
@@ -602,7 +602,7 @@ measurement said so.
 
 ## Scope
 
-Every Jolt subsystem is bound: **1426 C entry points** across **25 headers**,
+Every Jolt subsystem is bound: **1427 C entry points** across **25 headers**,
 each one mirrored by a Zig wrapper that a reflective cross-check pairs at build
 time. Not one entry point is stranded — `tools/zig_surface_exceptions.txt` is
 empty, and `ci/check-coverage.sh` fails both if an entry point loses its Zig

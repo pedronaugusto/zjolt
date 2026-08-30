@@ -17,12 +17,21 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   no setter, so they could only ever return Jolt's default.
 - `zjoltBodySetNumVelocityStepsOverride` / `zjoltBodyGetNumVelocityStepsOverride`
   and the position-steps pair.
+- `zjoltPhysicsSystemGetConstraints`, the enumeration behind
+  `zjoltPhysicsSystemGetNumConstraints`. `PhysicsSystem::GetConstraints` had
+  no crossing at all, so the count was the only thing a caller could learn
+  about a system's joints.
 - `zjoltVehicleConstraintSetEngineDesc` and
   `zjoltVehicleConstraintSetTransmissionDesc`: the writable half of the two
   getters. Without them `zjoltVehicleConstraintEngineClampRPM` had no reachable
   purpose.
 
 ### C ABI — changed
+
+- `zjoltPhysicsSystemGetNumActiveBodies`, `zjoltPhysicsSystemGetActiveBodies`
+  and `zjoltPhysicsSystemGetActiveBodiesUnsafe` take a `ZJoltBodyType`. All
+  three passed `JPH::EBodyType::RigidBody` unconditionally, so a system's soft
+  bodies were unreachable through every active-body query this ABI had.
 
 - `ZJoltBodyDesc` gained six fields, in Jolt's own order:
   `apply_gyroscopic_force`, `collide_kinematic_vs_non_dynamic`,
@@ -43,6 +52,10 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `setCollideKinematicVsNonDynamic`, `setEnhancedInternalEdgeRemoval`, and the
   two step-override pairs.
 - `VehicleConstraint` gained `setEngineDesc` and `setTransmissionDesc`.
+- `PhysicsSystem.numActiveBodies`, `countActiveBodies`, `getActiveBodies` and
+  `getActiveBodiesUnsafe` take a `BodyType`, mirroring the C change.
+- `zjolt.constraintList` fills a caller's buffer with every constraint in a
+  system, each holding a reference of its own.
 - `layersFromInstance` builds the same three layer tables from a live value
   rather than from a type, so a layer scheme read from data at run time is
   expressible. `layersFromType` is unchanged; both now reject a type missing

@@ -906,6 +906,28 @@ uint32_t zjoltPhysicsSystemGetNumConstraints(const ZJoltPhysicsSystem *system) {
   return static_cast<uint32_t>(system->system.GetConstraints().size());
 }
 
+ZJoltResult zjoltPhysicsSystemGetConstraints(const ZJoltPhysicsSystem *system,
+                                             ZJoltConstraint **out_constraints,
+                                             uint32_t capacity,
+                                             uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(system, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::Constraints constraints = system->system.GetConstraints();
+  const uint32_t count = static_cast<uint32_t>(constraints.size());
+  *out_count = count;
+  if (out_constraints == nullptr) return ZJOLT_RESULT_OK;
+
+  const uint32_t to_copy = count < capacity ? count : capacity;
+  for (uint32_t i = 0; i < to_copy; ++i) {
+    JPH::Constraint *held = constraints[i].GetPtr();
+    held->AddRef();
+    out_constraints[i] = zjolt::ToC(held);
+  }
+  if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+  return ZJOLT_RESULT_OK;
+}
+
 //===----------------------------------------------------------------------===//
 // Common state
 //===----------------------------------------------------------------------===//

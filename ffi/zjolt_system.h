@@ -8,6 +8,7 @@
 #ifndef ZJOLT_SYSTEM_H_
 #define ZJOLT_SYSTEM_H_
 
+#include "zjolt_body.h"
 #include "zjolt_core.h"
 #include "zjolt_query.h"
 #include "zjolt_softbody.h"
@@ -305,8 +306,12 @@ ZJOLT_API void zjoltPhysicsSystemOptimizeBroadPhase(ZJoltPhysicsSystem *system);
 
 ZJOLT_API uint32_t zjoltPhysicsSystemGetNumBodies(
     const ZJoltPhysicsSystem *system);
+
+/// How many bodies of `body_type` are awake. @see
+/// zjoltPhysicsSystemGetActiveBodies in zjolt_body.h for why the type is a
+/// parameter rather than an assumption.
 ZJOLT_API uint32_t zjoltPhysicsSystemGetNumActiveBodies(
-    const ZJoltPhysicsSystem *system);
+    const ZJoltPhysicsSystem *system, ZJoltBodyType body_type);
 
 /// NULL clears the listener. The struct is copied, so it need not outlive the
 /// call — but its `user` pointer must outlive the system.
@@ -537,8 +542,8 @@ ZJOLT_API const ZJoltBody *zjoltPhysicsSystemTryGetBodyNoLock(
 /// activate/deactivate on `system` — read `*out_count` entries before
 /// anything else. Both cleared if `system` is NULL.
 ZJOLT_API void zjoltPhysicsSystemGetActiveBodiesUnsafe(
-    const ZJoltPhysicsSystem *system, const ZJoltBodyId **out_ids,
-    uint32_t *out_count);
+    const ZJoltPhysicsSystem *system, ZJoltBodyType body_type,
+    const ZJoltBodyId **out_ids, uint32_t *out_count);
 
 //===----------------------------------------------------------------------===//
 // Simulation settings
