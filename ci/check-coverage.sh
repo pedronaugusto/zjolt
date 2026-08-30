@@ -287,7 +287,10 @@ fi
 # Scope section; keep the wording or update the two patterns below with it.
 #-----------------------------------------------------------------------------
 # Counted exactly as ci/measurements.sh counts them, so the two never disagree.
-entry_point_decls=$(grep -rhc '^ZJOLT_API' ffi/*.h | paste -sd+ - | bc)
+# Summed with awk, not bc: bc is absent from a default Git-for-Windows
+# install, and this line failing left the comparison below reading an empty
+# string as the tree's count and passing.
+entry_point_decls=$(grep -rhc '^ZJOLT_API' ffi/*.h | awk '{ n += $1 } END { print n + 0 }')
 headers=$(grep -c '^#include "zjolt_' ffi/zjolt.h)
 readme_entry_points=$(grep -oE '\*\*[0-9]+ C entry points\*\*' README.md | grep -oE '[0-9]+' | sort -u)
 readme_headers=$(grep -oE '\*\*[0-9]+ headers\*\*' README.md | grep -oE '[0-9]+' | sort -u)

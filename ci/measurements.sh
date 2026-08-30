@@ -24,7 +24,8 @@ section() { printf '\n%s\n%s\n' "$1" "$(printf '%*s' "${#1}" '' | tr ' ' -)"; }
 section "C ABI"
 
 # One ZJOLT_API per entry point, and the macro appears nowhere else.
-entry_points=$(grep -rhc '^ZJOLT_API' ffi/*.h | paste -sd+ - | bc)
+# awk rather than bc, which a default Git-for-Windows install does not have.
+entry_points=$(grep -rhc '^ZJOLT_API' ffi/*.h | awk '{ n += $1 } END { print n + 0 }')
 printf 'entry points (ZJOLT_API in ffi/*.h)   %s\n' "$entry_points"
 
 # The Zig mirror of the same set. abi_check.zig fails the build if these ever
