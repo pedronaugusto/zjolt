@@ -17,6 +17,7 @@ const std = @import("std");
 const c = @import("c/state.zig");
 const err = @import("error.zig");
 const body_mod = @import("body.zig");
+const character_mod = @import("character.zig");
 const stream_mod = @import("stream.zig");
 
 /// Which parts to write. `all` is what rollback wants; anything less leaves
@@ -86,6 +87,41 @@ pub fn stateFilter(comptime T: type, context: *T) StateFilter {
     };
 }
 
+/// The character controllers a whole-system save or restore covers.
+///
+/// `JPH::PhysicsSystem::SaveState` saves neither kind, so a save is handed
+/// every character the system holds and is `error.StateIncomplete` otherwise.
+/// Order is part of the payload: a restore passes the same characters in the
+/// same order, or is `error.BadFormat`.
+pub const Characters = struct {
+    characters: []const character_mod.Character = &.{},
+    rigid: []const character_mod.RigidCharacter = &.{},
+
+    /// A `Character` is one handle and nothing else, so a slice of them
+    /// already IS the array of handles the C ABI takes. Asserted rather than
+    /// assumed: a second field, or a reordered one, would silently reinterpret
+    /// the array as pointers.
+    fn assertHandleShaped(comptime T: type, comptime Handle: type) void {
+        comptime {
+            std.debug.assert(@sizeOf(T) == @sizeOf(Handle));
+            std.debug.assert(@alignOf(T) == @alignOf(Handle));
+            std.debug.assert(std.meta.fields(T).len == 1);
+            std.debug.assert(@offsetOf(T, "handle") == 0);
+        }
+    }
+
+    fn toC(self: Characters) c.StateCharacters {
+        assertHandleShaped(character_mod.Character, *c.Character);
+        assertHandleShaped(character_mod.RigidCharacter, *c.RigidCharacter);
+        return .{
+            .characters = @ptrCast(self.characters.ptr),
+            .count = @intCast(self.characters.len),
+            .rigid_characters = @ptrCast(self.rigid.ptr),
+            .rigid_count = @intCast(self.rigid.len),
+        };
+    }
+};
+
 /// The first payload byte at which two saves written by `State.save` or
 /// `State.saveAlloc` differ.
 pub const Divergence = struct {
@@ -132,6 +168,9 @@ pub const State = struct {
         /// overlap is then the caller's problem, exactly as it is in Jolt's
         /// own documentation for `StateRecorder::SetIsLastPart`.
         filter: ?*const StateFilter = null,
+        /// Every character controller the system holds. @see `Characters`:
+        /// leaving one out is `error.StateIncomplete`, not a quieter save.
+        characters: Characters = .{},
     };
 
     /// What a restore does with what it is given.
@@ -145,16 +184,21 @@ pub const State = struct {
         /// Jolt the whole set has arrived and it may run the bookkeeping a
         /// restore only needs to do once. An ordinary restore wants `true`.
         is_last_part: bool = true,
+        /// The same characters, in the same order, the save was given.
+        /// `error.BadFormat` otherwise. @see `Characters`.
+        characters: Characters = .{},
     };
 
     /// Bytes `save` would write. Not stable across steps — a world that
     /// gained contacts needs more — so ask each time rather than caching it.
     pub fn size(self: State, options: SaveOptions) err.Error!usize {
         var needed: usize = 0;
+        const characters = options.characters.toC();
         try err.check(c.zjoltPhysicsSystemSaveState(
             self.handle,
             options.state,
             options.filter,
+            &characters,
             null,
             0,
             &needed,
@@ -169,10 +213,12 @@ pub const State = struct {
     /// because it is meant to run between steps where nothing is moving.
     pub fn save(self: State, buffer: []u8, options: SaveOptions) err.Error![]u8 {
         var written: usize = 0;
+        const characters = options.characters.toC();
         try err.check(c.zjoltPhysicsSystemSaveState(
             self.handle,
             options.state,
             options.filter,
+            &characters,
             buffer.ptr,
             buffer.len,
             &written,
@@ -199,10 +245,12 @@ pub const State = struct {
     /// — but the magic tag, build identity, and body-set digest `restoreStream`
     /// checks still are. `error.IoError` if `stream` fails.
     pub fn saveStream(self: State, stream: stream_mod.Stream, options: SaveOptions) err.Error!void {
+        const characters = options.characters.toC();
         try err.check(c.zjoltPhysicsSystemSaveStateStream(
             self.handle,
             options.state,
             options.filter,
+            &characters,
             &stream,
         ));
     }
@@ -214,11 +262,13 @@ pub const State = struct {
     /// started reading) — skipped entirely for a save-side `StateFilter`
     /// (`SaveOptions.filter`).
     pub fn restore(self: State, data: []const u8, options: RestoreOptions) err.Error!void {
+        const characters = options.characters.toC();
         try err.check(c.zjoltPhysicsSystemRestoreState(
             self.handle,
             data.ptr,
             data.len,
             options.filter,
+            &characters,
             options.is_last_part,
         ));
     }
@@ -229,10 +279,12 @@ pub const State = struct {
     /// written them) — a truncated or corrupted stream is caught only as far as
     /// `error.IoError`/`error.BadFormat` reach.
     pub fn restoreStream(self: State, stream: stream_mod.Stream, options: RestoreOptions) err.Error!void {
+        const characters = options.characters.toC();
         try err.check(c.zjoltPhysicsSystemRestoreStateStream(
             self.handle,
             &stream,
             options.filter,
+            &characters,
             options.is_last_part,
         ));
     }

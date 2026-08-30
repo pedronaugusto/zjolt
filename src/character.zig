@@ -13,6 +13,8 @@ const math = @import("math.zig");
 const body_mod = @import("body.zig");
 const query_mod = @import("query.zig");
 const shape_mod = @import("shape.zig");
+const state_c = @import("c/state.zig");
+const stream_mod = @import("stream.zig");
 const system_mod = @import("system.zig");
 const transformed_mod = @import("transformed.zig");
 
@@ -147,6 +149,44 @@ pub const Character = struct {
 
     pub fn deinit(self: Character) void {
         c.zjoltCharacterDestroy(self.handle);
+    }
+
+    /// Bytes `saveState` would write. Not stable — a character that gained
+    /// contacts needs more — so ask each time rather than caching it.
+    pub fn stateSize(self: Character) err.Error!usize {
+        return characterStateSize(state_c.zjoltCharacterSaveState, self.handle);
+    }
+
+    /// `CharacterVirtual::SaveState` — position, rotation, velocity, ground
+    /// state and the active contact list, into `buffer`, returning the part
+    /// that was used. `error.BufferTooSmall` if it does not fit; ask
+    /// `stateSize` first.
+    pub fn saveState(self: Character, buffer: []u8) err.Error![]u8 {
+        return characterSaveState(state_c.zjoltCharacterSaveState, self.handle, buffer);
+    }
+
+    /// `saveState` into memory from `allocator`. The caller owns the slice.
+    pub fn saveStateAlloc(
+        self: Character,
+        allocator: std.mem.Allocator,
+    ) (err.Error || std.mem.Allocator.Error)![]u8 {
+        return characterSaveStateAlloc(state_c.zjoltCharacterSaveState, self.handle, allocator);
+    }
+
+    /// `saveState`, through `stream` instead of a resident buffer.
+    pub fn saveStateStream(self: Character, stream: stream_mod.Stream) err.Error!void {
+        try err.check(state_c.zjoltCharacterSaveStateStream(self.handle, &stream));
+    }
+
+    /// `CharacterVirtual::RestoreState`. `error.BadFormat` for a buffer that
+    /// is not one `saveState` wrote, truncated, or damaged.
+    pub fn restoreState(self: Character, data: []const u8) err.Error!void {
+        try err.check(state_c.zjoltCharacterRestoreState(self.handle, data.ptr, data.len));
+    }
+
+    /// `restoreState`, reading through `stream`.
+    pub fn restoreStateStream(self: Character, stream: stream_mod.Stream) err.Error!void {
+        try err.check(state_c.zjoltCharacterRestoreStateStream(self.handle, &stream));
     }
 
     /// Moves the character by its current velocity for `delta_time`, resolving
@@ -1150,6 +1190,41 @@ pub fn CharacterVsCharacterCollider(comptime T: type) type {
 }
 
 //=============================================================================
+// Saving one character's state
+//
+// `CharacterVirtual::SaveState` and `CharacterBase::SaveState`. Both kinds get
+// the same six calls from one implementation each, parameterised by the C
+// entry point, rather than two hand-written copies that can drift.
+//
+// A rollback of the whole simulation wants `PhysicsSystem.state()` with its
+// `characters` option instead: that keeps world and characters in one payload
+// that cannot be half-restored. These are for replicating ONE character.
+//=============================================================================
+
+fn characterStateSize(comptime saveFn: anytype, handle: anytype) err.Error!usize {
+    var needed: usize = 0;
+    try err.check(saveFn(handle, null, 0, &needed));
+    return needed;
+}
+
+fn characterSaveState(comptime saveFn: anytype, handle: anytype, buffer: []u8) err.Error![]u8 {
+    var written: usize = 0;
+    try err.check(saveFn(handle, buffer.ptr, buffer.len, &written));
+    return buffer[0..written];
+}
+
+fn characterSaveStateAlloc(
+    comptime saveFn: anytype,
+    handle: anytype,
+    allocator: std.mem.Allocator,
+) (err.Error || std.mem.Allocator.Error)![]u8 {
+    const needed = try characterStateSize(saveFn, handle);
+    const buffer = try allocator.alloc(u8, needed);
+    errdefer allocator.free(buffer);
+    return try characterSaveState(saveFn, handle, buffer);
+}
+
+//=============================================================================
 // RigidCharacter
 //
 // The other character base: a real dynamic rigid body the host drives by setting its velocity every frame, same as Character above, but collision response, sleeping, and pushes from other dynamics fall out of the solver.
@@ -1158,6 +1233,46 @@ pub fn CharacterVsCharacterCollider(comptime T: type) type {
 
 pub const RigidCharacter = struct {
     handle: *c.RigidCharacter,
+
+    /// Bytes `saveState` would write.
+    pub fn stateSize(self: RigidCharacter) err.Error!usize {
+        return characterStateSize(state_c.zjoltRigidCharacterSaveState, self.handle);
+    }
+
+    /// `CharacterBase::SaveState` — ground state, ground body, ground
+    /// position, normal and velocity. Its POSITION and VELOCITY live in its
+    /// body and are saved by `PhysicsSystem.state()` like any other body's;
+    /// this is the part that is not.
+    pub fn saveState(self: RigidCharacter, buffer: []u8) err.Error![]u8 {
+        return characterSaveState(state_c.zjoltRigidCharacterSaveState, self.handle, buffer);
+    }
+
+    /// `saveState` into memory from `allocator`. The caller owns the slice.
+    pub fn saveStateAlloc(
+        self: RigidCharacter,
+        allocator: std.mem.Allocator,
+    ) (err.Error || std.mem.Allocator.Error)![]u8 {
+        return characterSaveStateAlloc(
+            state_c.zjoltRigidCharacterSaveState,
+            self.handle,
+            allocator,
+        );
+    }
+
+    /// `saveState`, through `stream` instead of a resident buffer.
+    pub fn saveStateStream(self: RigidCharacter, stream: stream_mod.Stream) err.Error!void {
+        try err.check(state_c.zjoltRigidCharacterSaveStateStream(self.handle, &stream));
+    }
+
+    /// `CharacterBase::RestoreState`.
+    pub fn restoreState(self: RigidCharacter, data: []const u8) err.Error!void {
+        try err.check(state_c.zjoltRigidCharacterRestoreState(self.handle, data.ptr, data.len));
+    }
+
+    /// `restoreState`, reading through `stream`.
+    pub fn restoreStateStream(self: RigidCharacter, stream: stream_mod.Stream) err.Error!void {
+        try err.check(state_c.zjoltRigidCharacterRestoreStateStream(self.handle, &stream));
+    }
 
     pub const Options = struct {
         /// Required. Its centre should sit at the character's centre; wrap a
@@ -1616,6 +1731,49 @@ pub const CharacterBase = union(enum) {
     pub fn setSupportingVolume(self: CharacterBase, volume: SupportingVolume) err.Error!void {
         switch (self) {
             inline else => |char| try char.setSupportingVolume(volume),
+        }
+    }
+
+    /// @see `Character.stateSize`. The two kinds save DIFFERENT amounts —
+    /// a virtual character carries its own position and contacts, a rigid one
+    /// only what `CharacterBase` holds — so a buffer saved through one kind is
+    /// refused by the other's restore on the container tag.
+    pub fn stateSize(self: CharacterBase) err.Error!usize {
+        return switch (self) {
+            inline else => |char| char.stateSize(),
+        };
+    }
+
+    pub fn saveState(self: CharacterBase, buffer: []u8) err.Error![]u8 {
+        return switch (self) {
+            inline else => |char| char.saveState(buffer),
+        };
+    }
+
+    pub fn saveStateAlloc(
+        self: CharacterBase,
+        allocator: std.mem.Allocator,
+    ) (err.Error || std.mem.Allocator.Error)![]u8 {
+        return switch (self) {
+            inline else => |char| char.saveStateAlloc(allocator),
+        };
+    }
+
+    pub fn saveStateStream(self: CharacterBase, stream: stream_mod.Stream) err.Error!void {
+        switch (self) {
+            inline else => |char| try char.saveStateStream(stream),
+        }
+    }
+
+    pub fn restoreState(self: CharacterBase, data: []const u8) err.Error!void {
+        switch (self) {
+            inline else => |char| try char.restoreState(data),
+        }
+    }
+
+    pub fn restoreStateStream(self: CharacterBase, stream: stream_mod.Stream) err.Error!void {
+        switch (self) {
+            inline else => |char| try char.restoreStateStream(stream),
         }
     }
 };

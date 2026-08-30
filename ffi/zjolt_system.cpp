@@ -821,6 +821,11 @@ void zjoltPhysicsSystemDestroy(ZJoltPhysicsSystem *system) {
   // those before anything else touches the broad phase.
   zjolt::AbortPendingBatches(system);
 
+  // A character outliving its system is already a misuse; this keeps it from
+  // becoming a write through a freed pointer when the character is destroyed
+  // afterwards.
+  zjolt::ForgetCharacters(system);
+
   // Detach the listeners before the system tears its bodies down, so a
   // deactivation raised during destruction cannot reach a host callback that
   // is about to be freed.

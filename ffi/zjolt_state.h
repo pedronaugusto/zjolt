@@ -10,6 +10,7 @@
 #ifndef ZJOLT_STATE_H_
 #define ZJOLT_STATE_H_
 
+#include "zjolt_character.h"
 #include "zjolt_constraint.h"
 #include "zjolt_core.h"
 
@@ -49,35 +50,112 @@ typedef struct ZJoltStateFilter {
   void *user;
 } ZJoltStateFilter;
 
-/// Writes state into `buffer`. `buffer` NULL sizes into `*out_size`; a
-/// short `capacity` returns ZJOLT_RESULT_BUFFER_TOO_SMALL with the size
-/// still written. `filter` NULL saves everything `state` names. Not
-/// callable during a step.
+//===----------------------------------------------------------------------===//
+// Characters
+//
+// A JPH::PhysicsSystem does not save its characters: CharacterVirtual.h:266
+// says so outright for the virtual kind, and the rigid kind's CharacterBase
+// ground state is not in its body's state either. A whole-system save is
+// handed the characters it must cover, and refuses with
+// ZJOLT_RESULT_STATE_INCOMPLETE when the set is not every character the
+// system holds — the alternative being a snapshot that restores the world
+// without the player in it, and reports success.
+//===----------------------------------------------------------------------===//
+
+/// The characters a whole-system save or restore covers. NULL means none,
+/// which only a system holding no characters accepts.
+///
+/// The order is part of the payload: a restore must pass the same characters
+/// in the same order the save did. Both arrays are borrowed for the call.
+typedef struct ZJoltStateCharacters {
+  /// Virtual characters (zjoltCharacterCreate). May be NULL when `count` is 0.
+  ZJoltCharacter *const *characters;
+  uint32_t count;
+  /// Rigid characters (zjoltRigidCharacterCreate). May be NULL when
+  /// `rigid_count` is 0.
+  ZJoltRigidCharacter *const *rigid_characters;
+  uint32_t rigid_count;
+} ZJoltStateCharacters;
+
+/// Writes state into `buffer`, which NULL sizes into `*out_size`; a short
+/// `capacity` returns ZJOLT_RESULT_BUFFER_TOO_SMALL with the size still
+/// written. `filter` NULL saves everything `state` names. `characters` folds
+/// the characters into the same payload, and is ZJOLT_RESULT_STATE_INCOMPLETE
+/// unless it names every one `system` holds, each once — a PARTIAL save (@see
+/// ZJoltStateFilter) exempted. Not callable during a step.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveState(
     const ZJoltPhysicsSystem *system, uint32_t state,
-    const ZJoltStateFilter *filter, void *buffer, size_t capacity,
-    size_t *out_size);
+    const ZJoltStateFilter *filter, const ZJoltStateCharacters *characters,
+    void *buffer, size_t capacity, size_t *out_size);
 
 /// As zjoltPhysicsSystemSaveState, writing through `stream`. Omits length
 /// and CRC-32. ZJOLT_RESULT_IO_ERROR if `stream` fails.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemSaveStateStream(
     const ZJoltPhysicsSystem *system, uint32_t state,
-    const ZJoltStateFilter *filter, const ZJoltStream *stream);
+    const ZJoltStateFilter *filter, const ZJoltStateCharacters *characters,
+    const ZJoltStream *stream);
 
 /// Restores saved state. `filter`'s should_restore_contact runs if
 /// non-NULL. `is_last_part` false for every part but the last of a
-/// partial sequence, true otherwise. ZJOLT_RESULT_BAD_FORMAT for a
-/// malformed, mismatched, or unrecognized buffer; a failure partway
-/// through can leave the system PARTLY RESTORED.
+/// partial sequence, true otherwise. `characters` must name the same
+/// characters, in the same order, as the save did.
+/// ZJOLT_RESULT_BAD_FORMAT for a malformed, mismatched, or unrecognized
+/// buffer; a failure partway through can leave the system PARTLY RESTORED.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreState(
     ZJoltPhysicsSystem *system, const void *data, size_t size,
-    const ZJoltStateFilter *filter, bool is_last_part);
+    const ZJoltStateFilter *filter, const ZJoltStateCharacters *characters,
+    bool is_last_part);
 
 /// As zjoltPhysicsSystemRestoreState, reading through `stream`.
 /// ZJOLT_RESULT_IO_ERROR or ZJOLT_RESULT_BAD_FORMAT on a bad stream.
 ZJOLT_API ZJoltResult zjoltPhysicsSystemRestoreStateStream(
     ZJoltPhysicsSystem *system, const ZJoltStream *stream,
-    const ZJoltStateFilter *filter, bool is_last_part);
+    const ZJoltStateFilter *filter, const ZJoltStateCharacters *characters,
+    bool is_last_part);
+
+/// One virtual character's state, on its own — CharacterVirtual::SaveState.
+/// Same buffer protocol as zjoltPhysicsSystemSaveState: NULL `buffer` sizes
+/// into `*out_size`. For replicating ONE character; a rollback of the whole
+/// simulation wants zjoltPhysicsSystemSaveState's `characters` instead, which
+/// keeps system and characters in one payload that cannot be half-restored.
+ZJOLT_API ZJoltResult zjoltCharacterSaveState(const ZJoltCharacter *character,
+                                              void *buffer, size_t capacity,
+                                              size_t *out_size);
+
+/// As zjoltCharacterSaveState, writing through `stream`.
+ZJOLT_API ZJoltResult zjoltCharacterSaveStateStream(
+    const ZJoltCharacter *character, const ZJoltStream *stream);
+
+/// Puts back what zjoltCharacterSaveState wrote —
+/// CharacterVirtual::RestoreState. ZJOLT_RESULT_BAD_FORMAT for a buffer that
+/// is not one of those, truncated, or damaged.
+ZJOLT_API ZJoltResult zjoltCharacterRestoreState(ZJoltCharacter *character,
+                                                 const void *data,
+                                                 size_t size);
+
+/// As zjoltCharacterRestoreState, reading through `stream`.
+ZJOLT_API ZJoltResult zjoltCharacterRestoreStateStream(
+    ZJoltCharacter *character, const ZJoltStream *stream);
+
+/// One rigid character's CharacterBase state — ground state, ground body,
+/// ground position/normal/velocity. Its POSITION and VELOCITY live in its
+/// body and are saved by zjoltPhysicsSystemSaveState like any other body's;
+/// this is the part that is not.
+ZJOLT_API ZJoltResult zjoltRigidCharacterSaveState(
+    const ZJoltRigidCharacter *character, void *buffer, size_t capacity,
+    size_t *out_size);
+
+/// As zjoltRigidCharacterSaveState, writing through `stream`.
+ZJOLT_API ZJoltResult zjoltRigidCharacterSaveStateStream(
+    const ZJoltRigidCharacter *character, const ZJoltStream *stream);
+
+/// Puts back what zjoltRigidCharacterSaveState wrote.
+ZJOLT_API ZJoltResult zjoltRigidCharacterRestoreState(
+    ZJoltRigidCharacter *character, const void *data, size_t size);
+
+/// As zjoltRigidCharacterRestoreState, reading through `stream`.
+ZJOLT_API ZJoltResult zjoltRigidCharacterRestoreStateStream(
+    ZJoltRigidCharacter *character, const ZJoltStream *stream);
 
 /// Reports the first payload byte where `state_a` and `state_b` differ.
 /// A length mismatch diverges at the shorter length. Compares payload

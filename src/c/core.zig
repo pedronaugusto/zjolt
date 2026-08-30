@@ -39,7 +39,7 @@ pub const sub_shape_id_empty: SubShapeId = 0xffff_ffff;
 
 pub const version_major: u32 = 0;
 
-pub const version_minor: u32 = 1;
+pub const version_minor: u32 = 2;
 
 pub const version_patch: u32 = 0;
 
@@ -75,6 +75,10 @@ pub const Result = enum(c_int) {
     body_not_found = 9,
     unsupported = 10,
     io_error = 11,
+    /// A save would have written less than the caller asked for — today, a
+    /// whole-system state save made while the system holds characters that
+    /// the save was not given.
+    state_incomplete = 12,
 };
 
 /// A host-supplied byte stream. @see ffi/zjolt_core.h's ZJoltStream for what

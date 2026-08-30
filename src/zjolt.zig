@@ -831,9 +831,31 @@ test "version reporting is wired up" {
     try std.testing.expectEqual(@as(u8, 6), jolt.minor);
 }
 
-test "result names are never empty" {
-    inline for (@typeInfo(core.Result).@"enum".fields) |field| {
+test "every result has its own name, and none falls through" {
+    // `len > 0` was the whole of this check, and `zjoltResultName`'s switch
+    // ends in `return "unknown result"` — so a result the switch forgot read
+    // as named. Two of twelve had been forgotten. Naming the fallthrough, and
+    // requiring the names to be distinct, is what makes the check say what it
+    // claims to.
+    const fields = @typeInfo(core.Result).@"enum".fields;
+    var seen: [fields.len][]const u8 = undefined;
+    inline for (fields, 0..) |field, i| {
         const name = resultName(@enumFromInt(field.value));
         try std.testing.expect(name.len > 0);
+        try std.testing.expect(!std.mem.eql(u8, name, "unknown result"));
+        for (seen[0..i]) |earlier| {
+            try std.testing.expect(!std.mem.eql(u8, name, earlier));
+        }
+        seen[i] = name;
     }
+}
+
+test "the published package version is the header's version" {
+    // build.zig.zon is what a consumer fetches by; ZJOLT_VERSION_* is what
+    // zjoltInit's handshake compares. Two numbers, one fact — build.zig hands
+    // the .zon's own string through, so nothing here is a third copy.
+    const v = version();
+    var buf: [32]u8 = undefined;
+    const printed = try std.fmt.bufPrint(&buf, "{f}", .{v});
+    try std.testing.expectEqualStrings(options.package_version, printed);
 }

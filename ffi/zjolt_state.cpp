@@ -28,12 +28,13 @@ namespace {
 //===----------------------------------------------------------------------===//
 
 /// The shared container from zjolt_internal.h, with this subsystem's own tag
-/// and twenty bytes of its own after the common header: the state mask at 28,
-/// the body count at 32, the body-set digest at 36, and eight reserved.
+/// and twenty-eight bytes of its own after the common header: the state mask,
+/// the body count, the body-set digest, the partial flag, the character-set
+/// digest and the two character counts, at the offsets just below.
 constexpr zjolt::ContainerFormat kContainer = {
     /*magic=*/{'Z', 'J', 'S', 'T'},
-    /*version=*/1,
-    /*extra_size=*/20,
+    /*version=*/2,
+    /*extra_size=*/28,
     /*too_short=*/"too short to be a saved simulation state",
     /*wrong_magic=*/"not a state saved by zjoltPhysicsSystemSaveState",
     /*bad_checksum=*/"the state payload failed its checksum",
@@ -52,6 +53,147 @@ constexpr size_t kBodyDigestOffset = 8;
 /// and refuse a good partial restore. A save predating this field reads it as 0
 /// (not partial), which is exactly what it was.
 constexpr size_t kIsPartialOffset = 12;
+/// Identifies WHICH characters this save covers, and how many of each kind —
+/// the character counterpart of the body-set digest, checked the same way.
+constexpr size_t kCharacterDigestOffset = 16;
+constexpr size_t kCharacterCountOffset = 20;
+constexpr size_t kRigidCharacterCountOffset = 24;
+
+/// Folds one more 32-bit value into an FNV-1a hash.
+uint32_t FoldLE32(uint32_t hash, uint32_t value) {
+  for (int byte = 0; byte < 4; ++byte) {
+    hash ^= static_cast<uint8_t>(value >> (byte * 8));
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
+/// Identifies WHICH characters a save covers, and in what ORDER — the payload
+/// is a flat concatenation, so a reordered array reads one character's bytes
+/// into another. Virtual characters fold their CharacterID, rigid ones their
+/// body id, which is the only stable identity JPH::Character has.
+uint32_t CharacterSetDigest(const ZJoltStateCharacters *characters) {
+  uint32_t hash = 2166136261u;  // FNV-1a offset basis
+  if (characters == nullptr) return hash;
+  for (uint32_t i = 0; i < characters->count; ++i) {
+    hash = FoldLE32(hash, characters->characters[i]->impl->GetID().GetValue());
+  }
+  for (uint32_t i = 0; i < characters->rigid_count; ++i) {
+    hash = FoldLE32(hash, characters->rigid_characters[i]
+                              ->impl->GetBodyID()
+                              .GetIndexAndSequenceNumber());
+  }
+  return hash;
+}
+
+uint32_t CharacterCount(const ZJoltStateCharacters *characters) {
+  return characters == nullptr ? 0u : characters->count;
+}
+
+uint32_t RigidCharacterCount(const ZJoltStateCharacters *characters) {
+  return characters == nullptr ? 0u : characters->rigid_count;
+}
+
+/// True if `handle` appears in the first `count` entries of `list`.
+template <typename T>
+bool Contains(T *const *list, uint32_t count, const T *handle) {
+  for (uint32_t i = 0; i < count; ++i) {
+    if (list[i] == handle) return true;
+  }
+  return false;
+}
+
+/// Refuses a save whose `characters` is not exactly what `system` holds:
+/// same count, every entry owned by this system, no repeats. Complete rather
+/// than merely valid, because Jolt saves neither character kind with the
+/// system and an omission restores a world without its player.
+ZJoltResult RequireEveryCharacter(const ZJoltPhysicsSystem *system,
+                                  const ZJoltStateCharacters *characters) {
+  const uint32_t count = CharacterCount(characters);
+  const uint32_t rigid_count = RigidCharacterCount(characters);
+  const size_t live = system->characters.size() + system->rigid_characters.size();
+  if (live == 0 && count == 0 && rigid_count == 0) return ZJOLT_RESULT_OK;
+
+  if (static_cast<size_t>(count) + rigid_count != live) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_STATE_INCOMPLETE,
+        "this system holds character controllers that the save was not given; "
+        "JPH::PhysicsSystem::SaveState does not carry a character, so pass "
+        "every one of them in ZJoltStateCharacters (or save them separately "
+        "with zjoltCharacterSaveState)");
+  }
+
+  for (uint32_t i = 0; i < count; ++i) {
+    ZJoltCharacter *character = characters->characters[i];
+    if (character == nullptr || character->owner != system) {
+      return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                             "a character in ZJoltStateCharacters is null or "
+                             "belongs to a different physics system");
+    }
+    if (Contains(characters->characters, i, character)) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a character appears twice in ZJoltStateCharacters, so the set "
+          "cannot be every character this system holds");
+    }
+  }
+  for (uint32_t i = 0; i < rigid_count; ++i) {
+    ZJoltRigidCharacter *character = characters->rigid_characters[i];
+    if (character == nullptr || character->owner != system) {
+      return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                             "a rigid character in ZJoltStateCharacters is "
+                             "null or belongs to a different physics system");
+    }
+    if (Contains(characters->rigid_characters, i, character)) {
+      return zjolt::SetError(
+          ZJOLT_RESULT_INVALID_ARGUMENT,
+          "a rigid character appears twice in ZJoltStateCharacters, so the "
+          "set cannot be every character this system holds");
+    }
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+/// Every character's own state, appended to the system's in array order.
+void SaveCharacters(const ZJoltStateCharacters *characters,
+                    JPH::StateRecorder &recorder) {
+  if (characters == nullptr) return;
+  for (uint32_t i = 0; i < characters->count; ++i) {
+    characters->characters[i]->impl->SaveState(recorder);
+  }
+  for (uint32_t i = 0; i < characters->rigid_count; ++i) {
+    characters->rigid_characters[i]->impl->SaveState(recorder);
+  }
+}
+
+void RestoreCharacters(const ZJoltStateCharacters *characters,
+                       JPH::StateRecorder &recorder) {
+  if (characters == nullptr) return;
+  for (uint32_t i = 0; i < characters->count; ++i) {
+    characters->characters[i]->impl->RestoreState(recorder);
+  }
+  for (uint32_t i = 0; i < characters->rigid_count; ++i) {
+    characters->rigid_characters[i]->impl->RestoreState(recorder);
+  }
+}
+
+/// Refuses a restore whose `characters` is not the set, in the order, that
+/// the save wrote — the payload is a flat concatenation with no per-character
+/// framing, so a mismatch reads one character's bytes into another.
+ZJoltResult RequireSameCharacters(const ZJoltStateCharacters *characters,
+                                  uint32_t saved_count,
+                                  uint32_t saved_rigid_count,
+                                  uint32_t saved_digest) {
+  if (CharacterCount(characters) != saved_count ||
+      RigidCharacterCount(characters) != saved_rigid_count ||
+      CharacterSetDigest(characters) != saved_digest) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_BAD_FORMAT,
+        "the characters given to the restore are not the ones the save "
+        "covered, or are in a different order");
+  }
+  return ZJOLT_RESULT_OK;
+}
 
 /// Identifies WHICH bodies the world holds, not how many.
 ///
@@ -168,6 +310,7 @@ extern "C" {
 ZJoltResult zjoltPhysicsSystemSaveState(const ZJoltPhysicsSystem *system,
                                         uint32_t state,
                                         const ZJoltStateFilter *filter,
+                                        const ZJoltStateCharacters *characters,
                                         void *buffer, size_t capacity,
                                         size_t *out_size) {
   ZJOLT_ENTER(out_size);
@@ -182,6 +325,12 @@ ZJoltResult zjoltPhysicsSystemSaveState(const ZJoltPhysicsSystem *system,
         "state carries bits outside ZJOLT_STATE_RECORDER_STATE_ALL");
   }
 
+  const bool is_partial = IsPartialSave(filter);
+  if (!is_partial) {
+    const ZJoltResult complete = RequireEveryCharacter(system, characters);
+    if (complete != ZJOLT_RESULT_OK) return complete;
+  }
+
   uint8_t *bytes = static_cast<uint8_t *>(buffer);
 
   // A buffer that cannot even hold the header is counted, not written into.
@@ -194,7 +343,6 @@ ZJoltResult zjoltPhysicsSystemSaveState(const ZJoltPhysicsSystem *system,
   cursor.out = count_only ? nullptr : bytes + kHeaderSize;
   cursor.capacity = count_only ? 0 : capacity - kHeaderSize;
   zjolt::HostStream stream(zjolt::StreamOverMemory(&cursor));
-  const bool is_partial = IsPartialSave(filter);
   if (filter != nullptr) {
     StateFilterAdapter adapter(*filter);
     system->system.SaveState(stream, static_cast<JPH::EStateRecorderState>(state),
@@ -202,6 +350,7 @@ ZJoltResult zjoltPhysicsSystemSaveState(const ZJoltPhysicsSystem *system,
   } else {
     system->system.SaveState(stream, static_cast<JPH::EStateRecorderState>(state));
   }
+  SaveCharacters(characters, stream);
 
   const size_t payload_size = cursor.written;
   *out_size = kHeaderSize + payload_size;
@@ -222,6 +371,11 @@ ZJoltResult zjoltPhysicsSystemSaveState(const ZJoltPhysicsSystem *system,
   zjolt::WriteLE32(extra + kBodyCountOffset, body_count);
   zjolt::WriteLE32(extra + kBodyDigestOffset, body_digest);
   extra[kIsPartialOffset] = is_partial ? 1 : 0;
+  zjolt::WriteLE32(extra + kCharacterDigestOffset,
+                   CharacterSetDigest(characters));
+  zjolt::WriteLE32(extra + kCharacterCountOffset, CharacterCount(characters));
+  zjolt::WriteLE32(extra + kRigidCharacterCountOffset,
+                   RigidCharacterCount(characters));
   zjolt::WriteContainerHeader(kContainer, bytes, payload_size, extra);
   return ZJOLT_RESULT_OK;
 }
@@ -229,6 +383,7 @@ ZJoltResult zjoltPhysicsSystemSaveState(const ZJoltPhysicsSystem *system,
 ZJoltResult zjoltPhysicsSystemRestoreState(ZJoltPhysicsSystem *system,
                                            const void *data, size_t size,
                                            const ZJoltStateFilter *filter,
+                                           const ZJoltStateCharacters *characters,
                                            bool is_last_part) {
   ZJOLT_ENTER();
   if (!zjolt::Present(system, data)) return ZJOLT_RESULT_INVALID_ARGUMENT;
@@ -246,6 +401,11 @@ ZJoltResult zjoltPhysicsSystemRestoreState(ZJoltPhysicsSystem *system,
   // this check; disjoint parts are the host's job, as with SetIsLastPart.
   const uint32_t state = zjolt::ReadLE32(contents.extra + kStateMaskOffset);
   const bool is_partial = contents.extra[kIsPartialOffset] != 0;
+  const ZJoltResult same_characters = RequireSameCharacters(
+      characters, zjolt::ReadLE32(contents.extra + kCharacterCountOffset),
+      zjolt::ReadLE32(contents.extra + kRigidCharacterCountOffset),
+      zjolt::ReadLE32(contents.extra + kCharacterDigestOffset));
+  if (same_characters != ZJOLT_RESULT_OK) return same_characters;
   if (!is_partial && (state & ZJOLT_STATE_RECORDER_STATE_BODIES) != 0) {
     uint32_t body_count = 0;
     const uint32_t body_digest = BodySetDigest(system->system, &body_count);
@@ -276,6 +436,7 @@ ZJoltResult zjoltPhysicsSystemRestoreState(ZJoltPhysicsSystem *system,
     return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
                            "Jolt refused the saved state");
   }
+  RestoreCharacters(characters, stream);
   if (stream.IsEOF()) {
     return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
                            "the state data ended before the state did");
@@ -400,13 +561,20 @@ namespace {
 
 constexpr uint8_t kStreamMagic[4] = {'Z', 'S', 'S', 'T'};
 constexpr uint8_t kBodyStreamMagic[4] = {'Z', 'S', 'B', 'S'};
+constexpr uint8_t kCharacterStreamMagic[4] = {'Z', 'S', 'C', 'V'};
+constexpr uint8_t kRigidCharacterStreamMagic[4] = {'Z', 'S', 'C', 'R'};
+
+/// The whole-system stream form's own fields, mirroring the container's:
+/// state mask, body count, body digest, partial flag, character digest and
+/// the two character counts.
+constexpr size_t kStreamExtraSize = 25;
 
 }  // namespace
 
-ZJoltResult zjoltPhysicsSystemSaveStateStream(const ZJoltPhysicsSystem *system,
-                                              uint32_t state,
-                                              const ZJoltStateFilter *filter,
-                                              const ZJoltStream *stream) {
+ZJoltResult zjoltPhysicsSystemSaveStateStream(
+    const ZJoltPhysicsSystem *system, uint32_t state,
+    const ZJoltStateFilter *filter, const ZJoltStateCharacters *characters,
+    const ZJoltStream *stream) {
   ZJOLT_ENTER();
   if (!zjolt::Present(system, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (!zjolt::StreamCanWrite(stream)) {
@@ -419,17 +587,25 @@ ZJoltResult zjoltPhysicsSystemSaveStateStream(const ZJoltPhysicsSystem *system,
         "state carries bits outside ZJOLT_STATE_RECORDER_STATE_ALL");
   }
 
+  const bool is_partial = IsPartialSave(filter);
+  if (!is_partial) {
+    const ZJoltResult complete = RequireEveryCharacter(system, characters);
+    if (complete != ZJOLT_RESULT_OK) return complete;
+  }
+
   zjolt::HostStream host(*stream);
   zjolt::WriteStreamHeader(host, kStreamMagic);
 
   uint32_t body_count = 0;
   const uint32_t body_digest = BodySetDigest(system->system, &body_count);
-  const bool is_partial = IsPartialSave(filter);
-  uint8_t extra[13];
+  uint8_t extra[kStreamExtraSize];
   zjolt::WriteLE32(extra + 0, state);
   zjolt::WriteLE32(extra + 4, body_count);
   zjolt::WriteLE32(extra + 8, body_digest);
   extra[12] = is_partial ? 1 : 0;
+  zjolt::WriteLE32(extra + 13, CharacterSetDigest(characters));
+  zjolt::WriteLE32(extra + 17, CharacterCount(characters));
+  zjolt::WriteLE32(extra + 21, RigidCharacterCount(characters));
   host.WriteBytes(extra, sizeof(extra));
 
   if (filter != nullptr) {
@@ -439,6 +615,7 @@ ZJoltResult zjoltPhysicsSystemSaveStateStream(const ZJoltPhysicsSystem *system,
   } else {
     system->system.SaveState(host, static_cast<JPH::EStateRecorderState>(state));
   }
+  SaveCharacters(characters, host);
 
   if (host.IsFailed()) {
     return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
@@ -447,10 +624,10 @@ ZJoltResult zjoltPhysicsSystemSaveStateStream(const ZJoltPhysicsSystem *system,
   return ZJOLT_RESULT_OK;
 }
 
-ZJoltResult zjoltPhysicsSystemRestoreStateStream(ZJoltPhysicsSystem *system,
-                                                 const ZJoltStream *stream,
-                                                 const ZJoltStateFilter *filter,
-                                                 bool is_last_part) {
+ZJoltResult zjoltPhysicsSystemRestoreStateStream(
+    ZJoltPhysicsSystem *system, const ZJoltStream *stream,
+    const ZJoltStateFilter *filter, const ZJoltStateCharacters *characters,
+    bool is_last_part) {
   ZJOLT_ENTER();
   if (!zjolt::Present(system, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (!zjolt::StreamCanRead(stream)) {
@@ -464,7 +641,7 @@ ZJoltResult zjoltPhysicsSystemRestoreStateStream(ZJoltPhysicsSystem *system,
       host, kStreamMagic, "not a state saved by zjoltPhysicsSystemSaveStateStream");
   if (header != ZJOLT_RESULT_OK) return header;
 
-  uint8_t extra[13];
+  uint8_t extra[kStreamExtraSize];
   host.ReadBytes(extra, sizeof(extra));
   if (host.IsFailed()) {
     return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
@@ -476,6 +653,10 @@ ZJoltResult zjoltPhysicsSystemRestoreStateStream(ZJoltPhysicsSystem *system,
   }
   const uint32_t state = zjolt::ReadLE32(extra + 0);
   const bool is_partial = extra[12] != 0;
+  const ZJoltResult same_characters = RequireSameCharacters(
+      characters, zjolt::ReadLE32(extra + 17), zjolt::ReadLE32(extra + 21),
+      zjolt::ReadLE32(extra + 13));
+  if (same_characters != ZJOLT_RESULT_OK) return same_characters;
 
   // The same check zjoltPhysicsSystemRestoreState makes, kept here because it
   // is cheap without a resident blob -- @see the file comment above.
@@ -504,6 +685,7 @@ ZJoltResult zjoltPhysicsSystemRestoreStateStream(ZJoltPhysicsSystem *system,
     return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
                            "Jolt refused the saved state");
   }
+  RestoreCharacters(characters, host);
   if (host.IsFailed()) {
     return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
                            "the stream failed while reading the state");
@@ -591,6 +773,202 @@ ZJoltResult zjoltPhysicsSystemRestoreBodyStateLockedStream(
                            "the stream ended before the body state did");
   }
   return ZJOLT_RESULT_OK;
+}
+
+}  // extern "C"
+
+//===----------------------------------------------------------------------===//
+// One character at a time
+//
+// CharacterVirtual::SaveState and CharacterBase::SaveState, for replicating
+// one character without the world around it. Both kinds share one shape of
+// implementation, differing only in the container tag and which Jolt object
+// the recorder is pointed at.
+//===----------------------------------------------------------------------===//
+
+namespace {
+
+constexpr zjolt::ContainerFormat kCharacterContainer = {
+    /*magic=*/{'Z', 'J', 'C', 'V'},
+    /*version=*/1,
+    /*extra_size=*/0,
+    /*too_short=*/"too short to be a saved character state",
+    /*wrong_magic=*/"not a character state saved by zjoltCharacterSaveState",
+    /*bad_checksum=*/"the character state payload failed its checksum",
+};
+
+constexpr zjolt::ContainerFormat kRigidCharacterContainer = {
+    /*magic=*/{'Z', 'J', 'C', 'R'},
+    /*version=*/1,
+    /*extra_size=*/0,
+    /*too_short=*/"too short to be a saved rigid character state",
+    /*wrong_magic=*/
+    "not a rigid character state saved by zjoltRigidCharacterSaveState",
+    /*bad_checksum=*/"the rigid character state payload failed its checksum",
+};
+
+/// The buffer save both character kinds run: frame, size, write, checksum.
+template <typename T>
+ZJoltResult SaveOneCharacter(const zjolt::ContainerFormat &format, const T &impl,
+                             void *buffer, size_t capacity, size_t *out_size) {
+  const size_t header_size = format.HeaderSize();
+  uint8_t *bytes = static_cast<uint8_t *>(buffer);
+  const bool count_only = bytes == nullptr || capacity < header_size;
+
+  zjolt::MemoryCursor cursor;
+  cursor.out = count_only ? nullptr : bytes + header_size;
+  cursor.capacity = count_only ? 0 : capacity - header_size;
+  zjolt::HostStream stream(zjolt::StreamOverMemory(&cursor));
+  impl.SaveState(stream);
+
+  const size_t payload_size = cursor.written;
+  *out_size = header_size + payload_size;
+  if (bytes == nullptr) return ZJOLT_RESULT_OK;
+  if (count_only || capacity < *out_size || stream.IsFailed())
+    return ZJOLT_RESULT_BUFFER_TOO_SMALL;
+
+  zjolt::WriteContainerHeader(format, bytes, payload_size, nullptr);
+  return ZJOLT_RESULT_OK;
+}
+
+template <typename T>
+ZJoltResult RestoreOneCharacter(const zjolt::ContainerFormat &format, T &impl,
+                                const void *data, size_t size) {
+  zjolt::ContainerContents contents;
+  const ZJoltResult framed = zjolt::ReadContainer(format, data, size, &contents);
+  if (framed != ZJOLT_RESULT_OK) return framed;
+
+  zjolt::MemoryCursor cursor;
+  cursor.in = contents.payload;
+  cursor.size = contents.payload_size;
+  zjolt::HostStream stream(zjolt::StreamOverMemory(&cursor));
+  impl.RestoreState(stream);
+  if (stream.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the character state data ended before the state did");
+  }
+  if (!zjolt::MemoryCursorConsumedAll(cursor)) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "trailing bytes after the character state");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+template <typename T>
+ZJoltResult SaveOneCharacterStream(const uint8_t magic[4], const T &impl,
+                                   const ZJoltStream *stream) {
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+  zjolt::HostStream host(*stream);
+  zjolt::WriteStreamHeader(host, magic);
+  impl.SaveState(host);
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while writing the character state");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+template <typename T>
+ZJoltResult RestoreOneCharacterStream(const uint8_t magic[4],
+                                      const char *wrong_magic, T &impl,
+                                      const ZJoltStream *stream) {
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "stream needs read, is_eof and is_failed to restore through");
+  }
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(host, magic, wrong_magic);
+  if (header != ZJOLT_RESULT_OK) return header;
+  impl.RestoreState(host);
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while reading the character state");
+  }
+  if (host.IsEOF()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the stream ended before the character state did");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+}  // namespace
+
+extern "C" {
+
+ZJoltResult zjoltCharacterSaveState(const ZJoltCharacter *character,
+                                    void *buffer, size_t capacity,
+                                    size_t *out_size) {
+  ZJOLT_ENTER(out_size);
+  if (!zjolt::Present(character, out_size)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  return SaveOneCharacter(kCharacterContainer, *character->impl, buffer,
+                          capacity, out_size);
+}
+
+ZJoltResult zjoltCharacterRestoreState(ZJoltCharacter *character,
+                                       const void *data, size_t size) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(character, data)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return RestoreOneCharacter(kCharacterContainer, *character->impl, data, size);
+}
+
+ZJoltResult zjoltCharacterSaveStateStream(const ZJoltCharacter *character,
+                                          const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(character, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return SaveOneCharacterStream(kCharacterStreamMagic, *character->impl, stream);
+}
+
+ZJoltResult zjoltCharacterRestoreStateStream(ZJoltCharacter *character,
+                                             const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(character, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return RestoreOneCharacterStream(
+      kCharacterStreamMagic,
+      "not a character state saved by zjoltCharacterSaveStateStream",
+      *character->impl, stream);
+}
+
+ZJoltResult zjoltRigidCharacterSaveState(const ZJoltRigidCharacter *character,
+                                         void *buffer, size_t capacity,
+                                         size_t *out_size) {
+  ZJOLT_ENTER(out_size);
+  if (!zjolt::Present(character, out_size)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  return SaveOneCharacter(kRigidCharacterContainer, *character->impl, buffer,
+                          capacity, out_size);
+}
+
+ZJoltResult zjoltRigidCharacterRestoreState(ZJoltRigidCharacter *character,
+                                            const void *data, size_t size) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(character, data)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return RestoreOneCharacter(kRigidCharacterContainer, *character->impl, data,
+                             size);
+}
+
+ZJoltResult zjoltRigidCharacterSaveStateStream(
+    const ZJoltRigidCharacter *character, const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(character, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return SaveOneCharacterStream(kRigidCharacterStreamMagic, *character->impl,
+                                stream);
+}
+
+ZJoltResult zjoltRigidCharacterRestoreStateStream(
+    ZJoltRigidCharacter *character, const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(character, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  return RestoreOneCharacterStream(
+      kRigidCharacterStreamMagic,
+      "not a rigid character state saved by zjoltRigidCharacterSaveStateStream",
+      *character->impl, stream);
 }
 
 }  // extern "C"

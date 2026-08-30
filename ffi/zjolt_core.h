@@ -41,11 +41,13 @@ extern "C" {
 // corruption (mirrors Jolt's own JPH_VERSION_ID trick).
 //===----------------------------------------------------------------------===//
 
-// Unreleased. These stay 0.0.0 until the surface is complete and a version is
-// actually cut; they are not decoration, they are folded into ZJOLT_CONFIG_ID
-// below, so a consumer built against a different header is refused at init.
+// The binding's own version, and the one build.zig.zon publishes — a Zig test
+// compares them, so the two cannot drift. Not decoration: they are folded into
+// ZJOLT_CONFIG_ID below, so a consumer built against a different header is
+// refused at init rather than reading a different set of types than the
+// library writes.
 #define ZJOLT_VERSION_MAJOR 0
-#define ZJOLT_VERSION_MINOR 1
+#define ZJOLT_VERSION_MINOR 2
 #define ZJOLT_VERSION_PATCH 0
 
 /// Defined by the build when world positions are doubles. Must match the
@@ -124,6 +126,11 @@ typedef enum ZJoltResult {
   /// restore. Distinct from ZJOLT_RESULT_BAD_FORMAT, which is about the
   /// shape of what was read rather than whether the transport delivered it.
   ZJOLT_RESULT_IO_ERROR = 11,
+  /// A save would have written LESS than the caller asked for, and writing
+  /// it anyway would produce a snapshot that silently restores wrong. Today
+  /// this is a whole-system state save made while the system holds character
+  /// controllers that the save was not handed — see ZJoltStateCharacters.
+  ZJOLT_RESULT_STATE_INCOMPLETE = 12,
 } ZJoltResult;
 
 /// Static, never-NULL description of a result code. Borrowed; do not free.

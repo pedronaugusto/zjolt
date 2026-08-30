@@ -12,21 +12,28 @@
 #include "zjolt_transformed.h"
 
 #include <Jolt/Geometry/RayAABox.h>
-#include <Jolt/Physics/Character/Character.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
 #include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/Shape/Shape.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
 #include <Jolt/Physics/Collision/TransformedShape.h>
 
-/// RigidCharacter — Jolt's Character, a rigid-body-backed character. Defined
-/// at global scope, ahead of the anonymous namespace below, because its
-/// Impl() overloads need a complete type to dereference.
-struct ZJoltRigidCharacter {
-  JPH::Ref<JPH::Character> impl;
-};
-
 namespace {
+
+/// Drops `handle` from `list`, which may be null when the system that held
+/// the list is already gone. Order does not matter, so the last element takes
+/// the removed one's place rather than shifting the tail.
+template <typename T>
+void Unregister(JPH::Array<T *> *list, T *handle) {
+  if (list == nullptr) return;
+  for (size_t i = 0; i < list->size(); ++i) {
+    if ((*list)[i] == handle) {
+      (*list)[i] = list->back();
+      list->pop_back();
+      return;
+    }
+  }
+}
 
 ZJoltGroundState ToCGroundState(JPH::CharacterBase::EGroundState state) {
   switch (state) {
@@ -699,6 +706,7 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
 
   handle->impl = character;
   handle->owner = system;
+  system->characters.push_back(handle);
   zjolt::HandleCreated();
   *out = handle;
   return ZJOLT_RESULT_OK;
@@ -706,6 +714,8 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
 
 void zjoltCharacterDestroy(ZJoltCharacter *character) {
   if (character == nullptr) return;
+  Unregister(character->owner == nullptr ? nullptr : &character->owner->characters,
+             character);
   // Dropping the Ref runs CharacterVirtual's destructor, which removes the
   // inner body from the system if there was one.
   character->impl = nullptr;
@@ -1537,6 +1547,8 @@ ZJoltResult zjoltRigidCharacterCreate(ZJoltPhysicsSystem *system,
   }
 
   handle->impl = character;
+  handle->owner = system;
+  system->rigid_characters.push_back(handle);
   zjolt::HandleCreated();
   *out = handle;
   return ZJOLT_RESULT_OK;
@@ -1544,6 +1556,9 @@ ZJoltResult zjoltRigidCharacterCreate(ZJoltPhysicsSystem *system,
 
 void zjoltRigidCharacterDestroy(ZJoltRigidCharacter *character) {
   if (character == nullptr) return;
+  Unregister(character->owner == nullptr ? nullptr
+                                         : &character->owner->rigid_characters,
+             character);
   // Dropping the Ref runs Character's destructor, which destroys the body.
   character->impl = nullptr;
   zjolt::Delete(character);
@@ -1904,3 +1919,16 @@ ZJoltResult zjoltRigidCharacterCheckCollision(
 }
 
 }  // extern "C"
+
+namespace zjolt {
+
+void ForgetCharacters(ZJoltPhysicsSystem *system) {
+  for (ZJoltCharacter *character : system->characters) character->owner = nullptr;
+  for (ZJoltRigidCharacter *character : system->rigid_characters) {
+    character->owner = nullptr;
+  }
+  system->characters.clear();
+  system->rigid_characters.clear();
+}
+
+}  // namespace zjolt

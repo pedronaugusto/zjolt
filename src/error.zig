@@ -30,6 +30,10 @@ pub const Error = error{
     /// A host-supplied stream reported failure — a write it could not
     /// complete, or a read from a stream already in an error state.
     IoError,
+    /// A save would have written less than was asked of it: a whole-system
+    /// state save made while the system holds character controllers the save
+    /// was not handed. @see `State.SaveOptions.characters`.
+    StateIncomplete,
 };
 
 /// Turns a C result into a Zig error, or void on success.
@@ -52,6 +56,7 @@ pub fn check(result: c.Result) Error!void {
         .body_not_found => Error.BodyNotFound,
         .unsupported => Error.Unsupported,
         .io_error => Error.IoError,
+        .state_incomplete => Error.StateIncomplete,
     };
 }
 

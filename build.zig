@@ -428,6 +428,12 @@ pub fn build(b: *std.Build) void {
     inline for (std.meta.fields(@TypeOf(options))) |field| {
         options_step.addOption(field.type, field.name, @field(options, field.name));
     }
+    // The version build.zig.zon publishes, handed to the Zig side so a test
+    // can compare it against ffi/zjolt_core.h's ZJOLT_VERSION_*. Two numbers
+    // naming one fact drift the moment one of them is edited alone; this is
+    // the gate that stops that, and the .zon stays the only place the string
+    // is written.
+    options_step.addOption([]const u8, "package_version", @import("build.zig.zon").version);
     const options_module = options_step.createModule();
 
     const lib = b.addLibrary(.{

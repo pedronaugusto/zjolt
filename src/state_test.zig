@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const zjolt = @import("zjolt.zig");
+const character_mod = @import("character.zig");
 const state_mod = @import("state.zig");
 const stream_mod = @import("stream.zig");
 const fixture = @import("integration_test.zig");
@@ -450,4 +451,289 @@ test "a RewindableBuffer round-trips a save/restore through one buffer object, n
     try std.testing.expectApproxEqAbs(reference.x, restored.x, 1e-4);
     try std.testing.expectApproxEqAbs(reference.y, restored.y, 1e-4);
     try std.testing.expectApproxEqAbs(reference.z, restored.z, 1e-4);
+}
+
+//=============================================================================
+// Characters
+//
+// JPH::PhysicsSystem::SaveState does not save a character — CharacterVirtual.h
+// says so — so a save that is not handed them writes a snapshot of the world
+// without its player and reports success. These are the tests that the refusal
+// fires, and that a character handed in really does come back.
+//=============================================================================
+
+/// Walks `character` forward for `seconds`, applying gravity while airborne,
+/// the same shape of loop `character_test.zig` uses.
+fn walkCharacter(character: zjolt.Character, seconds: f32) !void {
+    const dt: f32 = 1.0 / 60.0;
+    const settings = zjolt.defaultCharacterUpdateSettings();
+    var elapsed: f32 = 0;
+    while (elapsed < seconds) : (elapsed += dt) {
+        var velocity = character.getLinearVelocity();
+        if (character.groundState() == .on_ground) {
+            velocity.y = 0;
+        } else {
+            velocity.y += zjolt.gravity_earth.y * dt;
+        }
+        velocity.x = 1.5;
+        character.setLinearVelocity(velocity);
+        try character.update(dt, zjolt.gravity_earth, &settings, null);
+    }
+}
+
+test "a save that omits a live character is refused, not written" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const state = world.system.state();
+    // The same system, with no character in it, saves fine — so what the
+    // refusal below reacts to is the character, not the world.
+    const before = try state.saveAlloc(std.testing.allocator, .{});
+    std.testing.allocator.free(before);
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 0.9, 0),
+    });
+    defer character.deinit();
+
+    try std.testing.expectError(error.StateIncomplete, state.size(.{}));
+    try std.testing.expectError(
+        error.StateIncomplete,
+        state.saveAlloc(std.testing.allocator, .{}),
+    );
+
+    // And the message says which mistake it is, rather than leaving the
+    // caller to guess at a bare error code.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        zjolt.lastError(),
+        "character controllers that the save was not given",
+    ) != null);
+
+    // Handing it in is what makes the same save legal.
+    const saved = try state.saveAlloc(
+        std.testing.allocator,
+        .{ .characters = .{ .characters = &.{character} } },
+    );
+    std.testing.allocator.free(saved);
+}
+
+test "a character handed to the save has its position and ground state restored" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(-2, 0.9, 0),
+    });
+    defer character.deinit();
+
+    try walkCharacter(character, 0.5);
+
+    const state = world.system.state();
+    const characters: state_mod.Characters = .{ .characters = &.{character} };
+    const saved = try state.saveAlloc(std.testing.allocator, .{ .characters = characters });
+    defer std.testing.allocator.free(saved);
+
+    const reference_position = character.getPosition();
+    const reference_velocity = character.getLinearVelocity();
+    const reference_ground = character.groundState();
+
+    try walkCharacter(character, 1.0);
+    // It really did move on, so the restore below has something to undo.
+    try std.testing.expect(@abs(character.getPosition().x - reference_position.x) > 0.5);
+
+    try state.restore(saved, .{ .characters = characters });
+
+    const position = character.getPosition();
+    try std.testing.expectApproxEqAbs(reference_position.x, position.x, 1e-4);
+    try std.testing.expectApproxEqAbs(reference_position.y, position.y, 1e-4);
+    try std.testing.expectApproxEqAbs(reference_position.z, position.z, 1e-4);
+    const velocity = character.getLinearVelocity();
+    try std.testing.expectApproxEqAbs(reference_velocity.x, velocity.x, 1e-4);
+    try std.testing.expectApproxEqAbs(reference_velocity.y, velocity.y, 1e-4);
+    try std.testing.expectEqual(reference_ground, character.groundState());
+}
+
+test "a rigid character counts toward the same completeness check" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const rigid = try zjolt.RigidCharacter.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(3, 3, 0),
+        .layer = Layers.moving,
+    });
+    defer rigid.deinit();
+    rigid.addToPhysicsSystem(.activate);
+    defer rigid.removeFromPhysicsSystem();
+
+    try world.stepFor(1.5);
+    rigid.postSimulation(0.05);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, rigid.groundState());
+
+    const state = world.system.state();
+    try std.testing.expectError(error.StateIncomplete, state.size(.{}));
+
+    const characters: state_mod.Characters = .{ .rigid = &.{rigid} };
+    const saved = try state.saveAlloc(std.testing.allocator, .{ .characters = characters });
+    defer std.testing.allocator.free(saved);
+    try state.restore(saved, .{ .characters = characters });
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, rigid.groundState());
+}
+
+test "a restore given a different character set than the save is refused" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const a = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(-2, 0.9, 0),
+    });
+    defer a.deinit();
+    const b = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(2, 0.9, 0),
+    });
+    defer b.deinit();
+
+    const state = world.system.state();
+    const saved = try state.saveAlloc(
+        std.testing.allocator,
+        .{ .characters = .{ .characters = &.{ a, b } } },
+    );
+    defer std.testing.allocator.free(saved);
+
+    // Same characters, opposite order: the payload is a flat concatenation,
+    // so this would read a's bytes into b.
+    try std.testing.expectError(error.BadFormat, state.restore(saved, .{
+        .characters = .{ .characters = &.{ b, a } },
+    }));
+    // And none at all.
+    try std.testing.expectError(error.BadFormat, state.restore(saved, .{}));
+
+    // The right set in the right order still works.
+    try state.restore(saved, .{ .characters = .{ .characters = &.{ a, b } } });
+}
+
+test "the same character twice is refused rather than counted as two" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const a = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(-2, 0.9, 0),
+    });
+    defer a.deinit();
+    const b = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(2, 0.9, 0),
+    });
+    defer b.deinit();
+
+    const state = world.system.state();
+    try std.testing.expectError(error.InvalidArgument, state.size(.{
+        .characters = .{ .characters = &.{ a, a } },
+    }));
+
+    // Both, once each, is the set the system actually holds.
+    const saved = try state.saveAlloc(
+        std.testing.allocator,
+        .{ .characters = .{ .characters = &.{ a, b } } },
+    );
+    std.testing.allocator.free(saved);
+}
+
+test "one character saves and restores on its own, without the world" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(-2, 0.9, 0),
+    });
+    defer character.deinit();
+
+    try walkCharacter(character, 0.5);
+    const reference = character.getPosition();
+
+    const saved = try character.saveStateAlloc(std.testing.allocator);
+    defer std.testing.allocator.free(saved);
+    try std.testing.expectEqual(saved.len, try character.stateSize());
+
+    try walkCharacter(character, 1.0);
+    try std.testing.expect(@abs(character.getPosition().x - reference.x) > 0.5);
+
+    try character.restoreState(saved);
+    try std.testing.expectApproxEqAbs(reference.x, character.getPosition().x, 1e-4);
+
+    // A whole-system save handed to a character restore is refused on the
+    // container tag rather than parsed as a character.
+    const world_state = try world.system.state().saveAlloc(
+        std.testing.allocator,
+        .{ .characters = .{ .characters = &.{character} } },
+    );
+    defer std.testing.allocator.free(world_state);
+    try std.testing.expectError(error.BadFormat, character.restoreState(world_state));
+}
+
+test "a character's state also round-trips through a host stream" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(-2, 0.9, 0),
+    });
+    defer character.deinit();
+
+    try walkCharacter(character, 0.5);
+    const reference = character.getPosition();
+
+    var buffer: [8192]u8 = undefined;
+    var recorder: stream_mod.RewindableBuffer = .{ .buffer = &buffer };
+    try character.saveStateStream(stream_mod.hostStream(stream_mod.RewindableBuffer, &recorder));
+
+    try walkCharacter(character, 1.0);
+    try std.testing.expect(@abs(character.getPosition().x - reference.x) > 0.5);
+
+    recorder.rewind();
+    try character.restoreStateStream(stream_mod.hostStream(stream_mod.RewindableBuffer, &recorder));
+    try std.testing.expectApproxEqAbs(reference.x, character.getPosition().x, 1e-4);
 }

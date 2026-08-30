@@ -17,6 +17,7 @@
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Character/Character.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayer.h>
 #include <Jolt/Physics/Collision/CollisionGroup.h>
@@ -1313,6 +1314,10 @@ struct ZJoltUnassignedBody {
   ZJoltPhysicsSystem *owner = nullptr;
 };
 
+/// Defined below; a system holds the characters created against it.
+struct ZJoltCharacter;
+struct ZJoltRigidCharacter;
+
 /// One world.
 ///
 /// The layer adapters live here, by value, because PhysicsSystem::Init stores
@@ -1355,6 +1360,13 @@ struct ZJoltPhysicsSystem {
   /// having put them in the tree, so destroying the system has to unwind them.
   /// Defined in zjolt_batch.cpp.
   JPH::Array<ZJoltBodyAddBatch *> pending_batches;
+
+  /// Every character created against this system and not yet destroyed,
+  /// borrowed. Neither kind is saved by JPH::PhysicsSystem::SaveState, so
+  /// zjoltPhysicsSystemSaveState reads these lists to refuse a save it was
+  /// not handed them for. Maintained in zjolt_character.cpp.
+  JPH::Array<ZJoltCharacter *> characters;
+  JPH::Array<ZJoltRigidCharacter *> rigid_characters;
 
   /// Whether Update has ever run on this system.
   ///
@@ -1415,10 +1427,30 @@ inline JPH::Plane SupportingVolumeFor(const JPH::Shape *shape,
 
 }  // namespace zjolt
 
-/// A character controller, plus the system it queries against.
+/// A character controller, plus the system it queries against. `owner` is
+/// null once that system has been destroyed.
 struct ZJoltCharacter {
   JPH::Ref<JPH::CharacterVirtual> impl;
   ZJoltPhysicsSystem *owner;
 };
+
+/// Jolt's rigid-body-backed character, plus the system its body lives in.
+/// Beside ZJoltCharacter rather than inside zjolt_character.cpp because
+/// zjolt_state.cpp saves and restores both kinds.
+struct ZJoltRigidCharacter {
+  JPH::Ref<JPH::Character> impl;
+  ZJoltPhysicsSystem *owner;
+};
+
+namespace zjolt {
+
+/// Clears `system` out of every character still registered against it, and
+/// empties both registries. Called by zjoltPhysicsSystemDestroy; defined in
+/// zjolt_character.cpp. A character that outlives its system is already a
+/// misuse, and this is what keeps it from becoming a write through a freed
+/// pointer when the character is destroyed afterwards.
+void ForgetCharacters(ZJoltPhysicsSystem *system);
+
+}  // namespace zjolt
 
 #endif  // ZJOLT_INTERNAL_H_

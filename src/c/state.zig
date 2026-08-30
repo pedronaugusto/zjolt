@@ -7,13 +7,16 @@
 
 const std = @import("std");
 const core = @import("core.zig");
+const character = @import("character.zig");
 const constraint = @import("constraint.zig");
 
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
 pub const Body = core.Body;
 pub const BodyId = core.BodyId;
+pub const Character = core.Character;
 pub const Constraint = constraint.Constraint;
+pub const RigidCharacter = character.RigidCharacter;
 pub const PhysicsSystem = core.PhysicsSystem;
 pub const Result = core.Result;
 
@@ -51,13 +54,42 @@ pub const StateFilter = extern struct {
     user: ?*anyopaque = null,
 };
 
-pub extern fn zjoltPhysicsSystemSaveState(system: *const PhysicsSystem, state: StateRecorderState, filter: ?*const StateFilter, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
+/// The character controllers a whole-system save or restore covers.
+///
+/// Neither character kind is saved by `JPH::PhysicsSystem::SaveState`, so a
+/// save is handed every one the system holds and refuses otherwise. The order
+/// is part of the payload: a restore passes the same characters in the same
+/// order the save did.
+pub const StateCharacters = extern struct {
+    characters: ?[*]const *Character = null,
+    count: u32 = 0,
+    rigid_characters: ?[*]const *RigidCharacter = null,
+    rigid_count: u32 = 0,
+};
 
-pub extern fn zjoltPhysicsSystemSaveStateStream(system: *const PhysicsSystem, state: StateRecorderState, filter: ?*const StateFilter, stream: *const core.Stream) Result;
+pub extern fn zjoltPhysicsSystemSaveState(system: *const PhysicsSystem, state: StateRecorderState, filter: ?*const StateFilter, characters: ?*const StateCharacters, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
 
-pub extern fn zjoltPhysicsSystemRestoreState(system: *PhysicsSystem, data: [*]const u8, size: usize, filter: ?*const StateFilter, is_last_part: bool) Result;
+pub extern fn zjoltPhysicsSystemSaveStateStream(system: *const PhysicsSystem, state: StateRecorderState, filter: ?*const StateFilter, characters: ?*const StateCharacters, stream: *const core.Stream) Result;
 
-pub extern fn zjoltPhysicsSystemRestoreStateStream(system: *PhysicsSystem, stream: *const core.Stream, filter: ?*const StateFilter, is_last_part: bool) Result;
+pub extern fn zjoltPhysicsSystemRestoreState(system: *PhysicsSystem, data: [*]const u8, size: usize, filter: ?*const StateFilter, characters: ?*const StateCharacters, is_last_part: bool) Result;
+
+pub extern fn zjoltPhysicsSystemRestoreStateStream(system: *PhysicsSystem, stream: *const core.Stream, filter: ?*const StateFilter, characters: ?*const StateCharacters, is_last_part: bool) Result;
+
+pub extern fn zjoltCharacterSaveState(character_handle: *const Character, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
+
+pub extern fn zjoltCharacterSaveStateStream(character_handle: *const Character, stream: *const core.Stream) Result;
+
+pub extern fn zjoltCharacterRestoreState(character_handle: *Character, data: [*]const u8, size: usize) Result;
+
+pub extern fn zjoltCharacterRestoreStateStream(character_handle: *Character, stream: *const core.Stream) Result;
+
+pub extern fn zjoltRigidCharacterSaveState(character_handle: *const RigidCharacter, buffer: ?[*]u8, capacity: usize, out_size: *usize) Result;
+
+pub extern fn zjoltRigidCharacterSaveStateStream(character_handle: *const RigidCharacter, stream: *const core.Stream) Result;
+
+pub extern fn zjoltRigidCharacterRestoreState(character_handle: *RigidCharacter, data: [*]const u8, size: usize) Result;
+
+pub extern fn zjoltRigidCharacterRestoreStateStream(character_handle: *RigidCharacter, stream: *const core.Stream) Result;
 
 pub extern fn zjoltPhysicsSystemCompareState(state_a: [*]const u8, size_a: usize, state_b: [*]const u8, size_b: usize, out_diverged: *bool, out_offset: *usize) Result;
 

@@ -273,6 +273,10 @@ const char *zjoltResultName(ZJoltResult result) {
       return "body not found";
     case ZJOLT_RESULT_UNSUPPORTED:
       return "unsupported in this build";
+    case ZJOLT_RESULT_IO_ERROR:
+      return "stream I/O error";
+    case ZJOLT_RESULT_STATE_INCOMPLETE:
+      return "state incomplete";
   }
   return "unknown result";
 }
