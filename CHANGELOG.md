@@ -39,6 +39,14 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 - `zjoltRagdollSetLinearAndAngularVelocity`, `zjoltRagdollSetLinearVelocity`,
   `zjoltRagdollAddLinearVelocity` and `zjoltRagdollAddImpulse`. Moving a whole
   ragdoll meant walking its body ids and calling the body interface per part.
+- `zjoltSoftBodySharedSettingsOptimizeWithRemap` and
+  `zjoltSoftBodySharedSettingsGetRemapCounts`. `Optimize` reorders every
+  constraint list, and Jolt's `OptimizationResults` — the seven index maps
+  that say where each one went — was discarded, so any index a caller had
+  recorded named a different constraint afterwards with nothing to say so.
+- `zjoltSoftBodySharedSettingsSaveBinaryState` / `RestoreBinaryState` and
+  `SaveWithMaterials` / `RestoreWithMaterials`. A soft body's topology could
+  only be saved inside a whole scene.
 - `zjoltSkeletonPoseGetJointMatrices` and `zjoltSkeletonPoseSetJointMatrices`.
   The model-space matrices were computed and consumed inside the ABI and never
   readable, so a pose produced outside Jolt had no way in and a pose Jolt
@@ -96,11 +104,21 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `error.InvalidArgument` rather than cast.
 - `Ragdoll.setLinearAndAngularVelocity`, `setLinearVelocity`,
   `addLinearVelocity` and `addImpulse`.
+- `SoftBodySharedSettings.optimizeWithRemap`, `remapCounts`,
+  `saveBinaryState`, `restoreBinaryState`, `saveWithMaterials` and
+  `restoreWithMaterials`.
 - `SkeletonPose.getJointMatrices` and `setJointMatrices`.
 - `layersFromInstance` builds the same three layer tables from a live value
   rather than from a type, so a layer scheme read from data at run time is
   expressible. `layersFromType` is unchanged; both now reject a type missing
   one of the four required declarations with a `@compileError` naming it.
+
+### Fixed
+
+- `hostStream` panicked on a zero-length read or write. An empty
+  `JPH::Array`'s `data()` is NULL, and Jolt writes one per empty constraint
+  list, so saving soft body shared settings through a host stream aborted in
+  safe Zig before reaching the first field.
 
 ### Zig API — allocation
 
