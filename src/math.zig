@@ -341,7 +341,7 @@ fn v4differenceOfProducts(a: @Vector(4, f32), b: @Vector(4, f32), cc: @Vector(4,
 
 //=============================================================================
 // Oriented box overlap — the one overlap test that is not one-line arithmetic
-// on already-crossed fields (see `tools/unbound_geometry.txt`'s `Overlaps`
+// on already-crossed fields (see `tools/verdicts_geometry.txt`'s `Overlaps`
 // line): an arbitrarily-rotated box has no such shortcut. No `OrientedBox`
 // type exists in this file (`orientation`'s upper 3x3 plus `half_extents` is
 // passed loose) and the receiver rule needs the checked TYPE as the first

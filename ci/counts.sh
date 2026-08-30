@@ -111,11 +111,11 @@ count_verdict() {
   awk -F'\t' -v want="$1" '
     /^#/ || !NF { next }
     $3 == want { n++ }
-    END { print n + 0 }' tools/unbound_*.txt
+    END { print n + 0 }' tools/verdicts_*.txt
 }
 
 count_verdicts_total() {
-  awk -F'\t' '/^#/ || !NF { next } { n++ } END { print n + 0 }' tools/unbound_*.txt
+  awk -F'\t' '/^#/ || !NF { next } { n++ } END { print n + 0 }' tools/verdicts_*.txt
 }
 
 #===----------------------------------------------------------------------===//

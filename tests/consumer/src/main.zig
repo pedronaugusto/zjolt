@@ -1,11 +1,14 @@
 //! A downstream consumer of the `zjolt` Zig module.
 //!
-//! Deliberately the README's own example rather than anything clever: what is
-//! under test is that a consumer can reach the module at all, and that the
-//! build options it was compiled with are visible on the other side.
+//! It is the README's quick start, and the README QUOTES THIS FILE:
+//! `ci/check-examples.sh` fails the build if the two drift apart. What is
+//! under test is that a consumer can reach the module through `b.dependency`
+//! at all, that the example in the README compiles and runs, and that the
+//! build options zjolt was compiled with are visible from out here.
 const std = @import("std");
 const zjolt = @import("zjolt");
 
+// Which layers exist, and what collides with what. Plain Zig functions.
 const Layers = struct {
     pub const static: zjolt.ObjectLayer = 0;
     pub const moving: zjolt.ObjectLayer = 1;
@@ -41,17 +44,13 @@ pub fn main() !void {
     try zjolt.init(.{ .allocator = gpa });
     defer zjolt.deinit();
 
-    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
+    const jobs = try zjolt.JobSystem.initThreadPool(.{});
     defer jobs.deinit();
 
-    const system = try zjolt.PhysicsSystem.init(.{
-        .layers = zjolt.layersFromType(Layers),
-        .max_bodies = 1024,
-    });
+    const system = try zjolt.PhysicsSystem.init(.{ .layers = zjolt.layersFromType(Layers) });
     defer system.deinit();
-    system.setGravity(zjolt.gravity_earth);
 
-    const shape = try zjolt.Shape.initSphere(0.5, .{ .density = 1000 });
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
     const ball = try system.bodies().createAndAdd(.{
@@ -60,14 +59,24 @@ pub fn main() !void {
         .position = zjolt.rvec3(0, 10, 0),
     }, .activate);
 
-    var i: usize = 0;
-    while (i < 60) : (i += 1) _ = try system.step(1.0 / 60.0, 1, jobs);
+    // Per frame:
+    var frame: usize = 0;
+    while (frame < 60) : (frame += 1) {
+        const update_error = try system.step(1.0 / 60.0, 1, jobs);
+        if (update_error.contact_constraints_full) return error.ContactConstraintsFull;
+    }
 
-    // Gravity is the whole point: a ball left alone for a second must be
-    // lower than it started, or the library linked here is not stepping.
+    // The ball began at y = 10 and gravity is the whole point, so this is
+    // what says the library linked here really stepped.
     const transform = system.bodies().getTransform(ball);
     if (!(transform.position.y < 10)) return error.BallDidNotFall;
 
+    try reportBuild();
+}
+
+/// The half a real program would not have: what a consumer can learn about
+/// the library it linked, checked here because nothing else can check it.
+fn reportBuild() !void {
     // `options` is a separate module the dependency has to export alongside
     // `zjolt` itself, and it is what a consumer branches on to know whether
     // `Real` is 4 or 8 bytes wide. Reaching it from out here is the test.
@@ -75,8 +84,9 @@ pub fn main() !void {
         return error.OptionsDisagreeWithLayout;
     }
 
+    const cpu = zjolt.cpuFeatures();
     std.debug.print(
-        "zig consumer ok: zjolt {f}, jolt {f}, real {d} bytes\n",
-        .{ zjolt.version(), zjolt.joltVersion(), @sizeOf(zjolt.Real) },
+        "zig consumer ok: zjolt {f}, jolt {f}, real {d} bytes, avx2 {}\n",
+        .{ zjolt.version(), zjolt.joltVersion(), @sizeOf(zjolt.Real), cpu.avx2 },
     );
 }

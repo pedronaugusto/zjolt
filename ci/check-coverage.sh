@@ -4,7 +4,7 @@
 # and every verdict is checkable.
 #
 #   tools/coverage.sh --names   lists the names no entry point spells out.
-#   tools/unbound_*.txt         gives each one AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE,
+#   tools/verdicts_*.txt        gives each one AREA<TAB>NAME<TAB>VERDICT<TAB>EVIDENCE,
 #                               keyed by area so a name that is bound in one
 #                               place cannot vouch for it in another.
 #   tools/classify.sh           computes which exclusions upstream justifies.
@@ -74,7 +74,7 @@ fi
 #-----------------------------------------------------------------------------
 # Shape.
 #-----------------------------------------------------------------------------
-for f in tools/unbound_*.txt; do
+for f in tools/verdicts_*.txt; do
   awk -F'\t' -v F="$f" '
     /^#/ || !NF { next }
     NF != 4 { printf "%s:%d: not four tab-separated fields\n", F, FNR > "/dev/stderr"; next }

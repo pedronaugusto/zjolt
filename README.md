@@ -41,49 +41,87 @@ ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 
 ## Usage
 
-```zig
-const zjolt = @import("zjolt");
+Every line below is quoted from `tests/consumer/src/main.zig`, which is built
+through `b.dependency` and RUN — `zig build run` inside `tests/consumer`,
+which `ci/run.sh` does — the way a downstream project builds it. `ci/check-examples.sh` fails if these blocks and that file
+ever stop matching character for character, so the example a reader copies is
+the example the suite compiles.
 
+`tests/consumer/src/main.zig`
+```zig
 // Which layers exist, and what collides with what. Plain Zig functions.
 const Layers = struct {
     pub const static: zjolt.ObjectLayer = 0;
     pub const moving: zjolt.ObjectLayer = 1;
 
-    pub fn broadPhaseLayerCount() u32 { return 2; }
+    pub const bp_static: zjolt.BroadPhaseLayer = 0;
+    pub const bp_moving: zjolt.BroadPhaseLayer = 1;
+
+    pub fn broadPhaseLayerCount() u32 {
+        return 2;
+    }
+
     pub fn broadPhaseLayerFor(layer: zjolt.ObjectLayer) zjolt.BroadPhaseLayer {
-        return if (layer == static) 0 else 1;
+        return if (layer == static) bp_static else bp_moving;
     }
-    pub fn objectCanCollideWithBroadPhase(o: zjolt.ObjectLayer, b: zjolt.BroadPhaseLayer) bool {
-        return if (o == static) b == 1 else true;
+
+    pub fn objectCanCollideWithBroadPhase(
+        object: zjolt.ObjectLayer,
+        broad: zjolt.BroadPhaseLayer,
+    ) bool {
+        return if (object == static) broad == bp_moving else true;
     }
+
     pub fn objectsCanCollide(a: zjolt.ObjectLayer, b: zjolt.ObjectLayer) bool {
         return if (a == static) b == moving else true;
     }
 };
-
-try zjolt.init(.{ .allocator = gpa });
-defer zjolt.deinit();
-
-const jobs = try zjolt.JobSystem.initThreadPool(.{});
-defer jobs.deinit();
-
-const system = try zjolt.PhysicsSystem.init(.{ .layers = zjolt.layersFromType(Layers) });
-defer system.deinit();
-
-const shape = try zjolt.Shape.initSphere(0.5, .{});
-defer shape.release();
-
-const ball = try system.bodies().createAndAdd(.{
-    .shape = shape,
-    .object_layer = Layers.moving,
-    .position = zjolt.rvec3(0, 10, 0),
-}, .activate);
-
-// Per frame:
-const update_error = try system.step(1.0 / 60.0, 1, jobs);
-if (update_error.contact_constraints_full) { /* raise the limit */ }
-const transform = system.bodies().getTransform(ball);
 ```
+
+`tests/consumer/src/main.zig`
+```zig
+pub fn main() !void {
+    var gpa_state = std.heap.DebugAllocator(.{}){};
+    defer std.debug.assert(gpa_state.deinit() == .ok);
+    const gpa = gpa_state.allocator();
+
+    try zjolt.init(.{ .allocator = gpa });
+    defer zjolt.deinit();
+
+    const jobs = try zjolt.JobSystem.initThreadPool(.{});
+    defer jobs.deinit();
+
+    const system = try zjolt.PhysicsSystem.init(.{ .layers = zjolt.layersFromType(Layers) });
+    defer system.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const ball = try system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 10, 0),
+    }, .activate);
+
+    // Per frame:
+    var frame: usize = 0;
+    while (frame < 60) : (frame += 1) {
+        const update_error = try system.step(1.0 / 60.0, 1, jobs);
+        if (update_error.contact_constraints_full) return error.ContactConstraintsFull;
+    }
+
+    // The ball began at y = 10 and gravity is the whole point, so this is
+    // what says the library linked here really stepped.
+    const transform = system.bodies().getTransform(ball);
+    if (!(transform.position.y < 10)) return error.BallDidNotFall;
+
+    try reportBuild();
+}
+```
+
+`reportBuild` is that file's own last line and not part of the recipe: it
+checks that the build options crossed the module boundary, which is something
+only a consumer can check.
 
 Add it as a dependency and link the module:
 
@@ -489,8 +527,11 @@ defined `JPH_USE_AVX2` without also raising that model would turn on
 intrinsics the compiler is not permitted to select; one that raised both
 would be a second home for a fact the target already holds.
 
-Which means a default target is a BASELINE one — `x86_64` is SSE2, and Jolt's
-AVX2 paths are compiled out. Raise it the way any Zig build does:
+Which means a CROSS build is a baseline one: `-Dtarget=x86_64-linux-gnu`
+resolves to the `x86_64` model, which is SSE2, and Jolt's AVX2 paths are
+compiled out of it. A native build takes the host CPU instead, so on a host
+that has AVX2 `zjolt.cpuFeatures().avx2` is true with no options at all.
+Raise a cross build the way any Zig build does:
 
 ```
 zig build -Dcpu=x86_64_v3            # AVX2, F16C, FMA, BMI, LZCNT
@@ -720,7 +761,7 @@ with a fresh run. No number here is typed by hand.
 The claimed areas hold **2682 public Jolt names** — every method, every free
 function, and every public data member of a `*Settings` type, which is an API
 no method reaches. **1359 are spelled out by an entry point** of a matching
-name. The other **1323 carry a recorded verdict** in `tools/unbound_*.txt`,
+name. The other **1323 carry a recorded verdict** in `tools/verdicts_*.txt`,
 one line each with its evidence: **605 `BOUND`** (the effect is reachable, by
 another name), **198 `EXTENSION`** (a seam the host implements instead),
 **214 `INTERNAL`** (not public in Jolt either — recomputed by

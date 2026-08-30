@@ -184,6 +184,13 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   were stale.
 - `ci/counts.sh` is the single home for every count formula; the three scripts
   that quote one now source it instead of recomputing it.
+- The README's quick start is now two verbatim excerpts of
+  `tests/consumer/src/main.zig`, the file that is built through
+  `b.dependency` and run. `ci/check-examples.sh` reads README.md as well as
+  BINDING.md and holds them character for character; the two had drifted,
+  and the README's version was compiled by nothing.
+- `tools/unbound_*.txt` is renamed `tools/verdicts_*.txt`. 605 of its rows
+  record a `BOUND` verdict, so the old name described a minority of it.
 - `ci/check-coverage.sh` strips comments before deciding whether Zig calls an
   entry point. A doc comment that merely NAMED one counted as calling it, so
   prose could satisfy the rule that nothing is stranded.

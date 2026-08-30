@@ -178,7 +178,7 @@ jolt_settings_fields() {
 # false BOUND is the dangerous direction — nobody is ever asked about it.
 #
 # The cost is that a deliberate rename reads as unbound. That is the right
-# trade, because tools/unbound_*.txt has to answer for every name printed here.
+# trade, because tools/verdicts_*.txt has to answer for every name printed here.
 match_names() {
   awk '
     function split_words(m, out,   i, c, p, n) {
