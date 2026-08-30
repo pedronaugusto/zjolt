@@ -19,6 +19,53 @@ const fixture = @import("integration_test.zig");
 
 const Layers = fixture.Layers;
 
+/// The same two-layer scheme as `fixture.Layers`, except that none of it is
+/// known at compile time: the table is data in fields and every answer is read
+/// through `self`. This is what `layersFromInstance` exists for, and what
+/// `layersFromType` cannot express at all.
+const RuntimeLayers = struct {
+    /// broad_phase_for[object layer] -> broad phase layer.
+    broad_phase_for: [2]zjolt.BroadPhaseLayer,
+    /// object_pairs[a][b] -> whether a and b may collide.
+    object_pairs: [2][2]bool,
+    /// Counts every crossing, so a table installed and never consulted cannot
+    /// pass the test below.
+    asked: u32 = 0,
+
+    pub fn broadPhaseLayerCount(self: *RuntimeLayers) u32 {
+        return @intCast(self.broad_phase_for.len);
+    }
+
+    pub fn broadPhaseLayerFor(
+        self: *RuntimeLayers,
+        layer: zjolt.ObjectLayer,
+    ) zjolt.BroadPhaseLayer {
+        self.asked += 1;
+        return self.broad_phase_for[layer];
+    }
+
+    pub fn objectCanCollideWithBroadPhase(
+        self: *RuntimeLayers,
+        object: zjolt.ObjectLayer,
+        broad: zjolt.BroadPhaseLayer,
+    ) bool {
+        self.asked += 1;
+        for (self.object_pairs[object], 0..) |allowed, other| {
+            if (allowed and self.broad_phase_for[other] == broad) return true;
+        }
+        return false;
+    }
+
+    pub fn objectsCanCollide(
+        self: *RuntimeLayers,
+        a: zjolt.ObjectLayer,
+        b: zjolt.ObjectLayer,
+    ) bool {
+        self.asked += 1;
+        return self.object_pairs[a][b];
+    }
+};
+
 /// A floor plus one falling sphere, without any particular job system or
 /// scratch allocator — those are what each test below supplies itself.
 const Rig = struct {
@@ -709,4 +756,52 @@ test "addSimCollideHit's synthetic hit reaches the real contact pipeline" {
 
     try std.testing.expect(ctx.hits_added > 0);
     try std.testing.expect(system.wereBodiesInContact(ball, floor));
+}
+
+test "a layer scheme held in fields is installed and consulted, through the same three tables" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // Assembled as data rather than declared as constants: a level file or an
+    // editor would fill these in, which is the case layersFromType cannot
+    // serve at all.
+    var layers: RuntimeLayers = .{
+        .broad_phase_for = .{ 0, 1 },
+        .object_pairs = .{ .{ false, true }, .{ true, true } },
+    };
+
+    const system = try zjolt.PhysicsSystem.init(.{
+        .layers = zjolt.layersFromInstance(RuntimeLayers, &layers),
+        .max_bodies = 8,
+    });
+    defer system.deinit();
+    system.setGravity(zjolt.gravity_earth);
+
+    const floor_shape = try zjolt.Shape.initBox(zjolt.vec3(50, 0.5, 50), .{});
+    defer floor_shape.release();
+    _ = try system.bodies().createAndAdd(.{
+        .shape = floor_shape,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, -0.5, 0),
+    }, .dont_activate);
+    system.optimizeBroadPhase();
+
+    const ball_shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer ball_shape.release();
+    const ball = try system.bodies().createAndAdd(.{
+        .shape = ball_shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .activate);
+
+    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
+    defer jobs.deinit();
+    for (0..180) |_| _ = try system.step(1.0 / 60.0, 1, jobs);
+
+    // The ball came to rest on the floor rather than through it, which it can
+    // only do if the fields answered every question Jolt asked.
+    const y = system.bodies().getPosition(ball).y;
+    try std.testing.expect(y > 0.4 and y < 0.7);
+    try std.testing.expect(layers.asked > 0);
 }

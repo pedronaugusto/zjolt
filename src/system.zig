@@ -184,13 +184,10 @@ pub fn requireAnyDecl(comptime T: type, comptime names: []const []const u8) void
     }
 }
 
-/// Builds the three layer tables from a type declaring
-/// `broadPhaseLayerCount`, `broadPhaseLayerFor`,
-/// `objectCanCollideWithBroadPhase`, `objectsCanCollide`, and optionally
-/// `broadPhaseLayerName` (silently never called if misspelled or non-`pub`
-/// — `@hasDecl` only sees `pub`). Its returned string is cached for the
-/// system's whole life; return static storage, never a stack buffer.
-pub fn layersFromType(comptime T: type) Layers {
+/// The four questions Jolt asks about layers, checked once for both
+/// constructors below: a misspelled or non-`pub` method would otherwise
+/// install a table that answers nothing.
+fn requireLayerDecls(comptime T: type) void {
     comptime {
         for ([_][]const u8{
             "broadPhaseLayerCount",
@@ -204,46 +201,95 @@ pub fn layersFromType(comptime T: type) Layers {
             }
         }
     }
+}
 
-    const Thunks = struct {
+/// The five thunks, generated once for both constructors. `with_context`
+/// decides whether `user` is a `*T` to pass as the first argument or an
+/// unused null — the only difference between a compile-time layer map and a
+/// data-driven one, and the reason there is one generator rather than two.
+fn LayerThunks(comptime T: type, comptime with_context: bool) type {
+    return struct {
+        fn selfOf(user: ?*anyopaque) *T {
+            return @ptrCast(@alignCast(user.?));
+        }
+
         fn count(user: ?*anyopaque) callconv(.c) u32 {
-            _ = user;
-            return T.broadPhaseLayerCount();
+            return if (with_context)
+                T.broadPhaseLayerCount(selfOf(user))
+            else
+                T.broadPhaseLayerCount();
         }
+
         fn layerFor(user: ?*anyopaque, layer: ObjectLayer) callconv(.c) BroadPhaseLayer {
-            _ = user;
-            return T.broadPhaseLayerFor(layer);
+            return if (with_context)
+                T.broadPhaseLayerFor(selfOf(user), layer)
+            else
+                T.broadPhaseLayerFor(layer);
         }
+
         fn objectVsBroad(
             user: ?*anyopaque,
             object: ObjectLayer,
             broad: BroadPhaseLayer,
         ) callconv(.c) bool {
-            _ = user;
-            return T.objectCanCollideWithBroadPhase(object, broad);
-        }
-        fn objectPair(user: ?*anyopaque, a: ObjectLayer, b: ObjectLayer) callconv(.c) bool {
-            _ = user;
-            return T.objectsCanCollide(a, b);
-        }
-        fn layerName(user: ?*anyopaque, layer: BroadPhaseLayer) callconv(.c) ?[*:0]const u8 {
-            _ = user;
-            return T.broadPhaseLayerName(layer);
-        }
-    };
-
-    return .{
-        .broad_phase = .{
-            .num_broad_phase_layers = Thunks.count,
-            .broad_phase_layer_for_object_layer = Thunks.layerFor,
-            .broad_phase_layer_name = if (@hasDecl(T, "broadPhaseLayerName"))
-                Thunks.layerName
+            return if (with_context)
+                T.objectCanCollideWithBroadPhase(selfOf(user), object, broad)
             else
-                null,
-        },
-        .object_vs_broad_phase = .{ .should_collide = Thunks.objectVsBroad },
-        .object_layer_pair = .{ .should_collide = Thunks.objectPair },
+                T.objectCanCollideWithBroadPhase(object, broad);
+        }
+
+        fn objectPair(user: ?*anyopaque, a: ObjectLayer, b: ObjectLayer) callconv(.c) bool {
+            return if (with_context)
+                T.objectsCanCollide(selfOf(user), a, b)
+            else
+                T.objectsCanCollide(a, b);
+        }
+
+        fn layerName(user: ?*anyopaque, layer: BroadPhaseLayer) callconv(.c) ?[*:0]const u8 {
+            return if (with_context)
+                T.broadPhaseLayerName(selfOf(user), layer)
+            else
+                T.broadPhaseLayerName(layer);
+        }
+
+        fn tables(context: ?*anyopaque) Layers {
+            return .{
+                .broad_phase = .{
+                    .num_broad_phase_layers = count,
+                    .broad_phase_layer_for_object_layer = layerFor,
+                    .broad_phase_layer_name = if (@hasDecl(T, "broadPhaseLayerName"))
+                        layerName
+                    else
+                        null,
+                    .user = context,
+                },
+                .object_vs_broad_phase = .{ .should_collide = objectVsBroad, .user = context },
+                .object_layer_pair = .{ .should_collide = objectPair, .user = context },
+            };
+        }
     };
+}
+
+/// Builds the three layer tables from a type declaring
+/// `broadPhaseLayerCount`, `broadPhaseLayerFor`,
+/// `objectCanCollideWithBroadPhase` and `objectsCanCollide`, plus an optional
+/// `broadPhaseLayerName` — only found when `pub`, and its string is cached for
+/// the system's whole life, so return static storage. The compile-time form;
+/// for a scheme known only at run time see `layersFromInstance`.
+pub fn layersFromType(comptime T: type) Layers {
+    requireLayerDecls(T);
+    return LayerThunks(T, false).tables(null);
+}
+
+/// The same three tables from a live value: every method takes `*T` first and
+/// `context` reaches them through the `user` pointer Jolt carries for exactly
+/// this. A layer scheme loaded from a level file is a `T` with fields rather
+/// than a type with constants, which the form above cannot express at all.
+/// `context` must outlive the system it is installed on, as with every other
+/// listener in this file.
+pub fn layersFromInstance(comptime T: type, context: *T) Layers {
+    requireLayerDecls(T);
+    return LayerThunks(T, true).tables(context);
 }
 
 //=============================================================================

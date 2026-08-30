@@ -137,6 +137,7 @@ pub const ObjectLayer = system_mod.ObjectLayer;
 pub const BroadPhaseLayer = system_mod.BroadPhaseLayer;
 pub const Layers = system_mod.Layers;
 pub const layersFromType = system_mod.layersFromType;
+pub const layersFromInstance = system_mod.layersFromInstance;
 pub const PhysicsSystem = system_mod.PhysicsSystem;
 pub const JobSystem = system_mod.JobSystem;
 pub const UpdateError = system_mod.UpdateError;

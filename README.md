@@ -199,7 +199,10 @@ typedef struct ZJoltBroadPhaseLayerInterface {
 The C++ side implements the real `JPH::BroadPhaseLayerInterface` and forwards.
 C++ vtable layout stops being ABI, and `zjolt.layersFromType` turns an ordinary
 Zig struct into the table at comptime — no `callconv(.c)` in host code, no
-branch on the target's ABI, on any platform.
+branch on the target's ABI, on any platform. `user` is what makes the same
+table serve a scheme that is not known until run time: `zjolt.layersFromInstance`
+takes a value instead of a type, passes it as each method's first argument, and
+is otherwise the same three tables.
 
 The same shape covers `ObjectVsBroadPhaseLayerFilter`, `ObjectLayerPairFilter`,
 `ContactListener`, `BodyActivationListener` and the four query filters.
