@@ -18,16 +18,16 @@ system and no clock attached.
   `std.mem.Allocator`.
 - Drift between the C header and the Zig externs **fails the build**, not
   production: a test compares the two by reflection, with nothing listed by
-  hand. Twelve kinds of deliberate drift are verified to fail it, including a
-  field swap that leaves every offset in the struct unchanged — and four more
-  mutations do the same for the other guards, each naming the test that has to
-  catch it.
+  hand. 13 kinds of deliberate drift are verified to fail it, including a
+  field swap that leaves every offset in the struct unchanged; a further
+  9 mutations for the other guards do the same, each naming the test that has
+  to catch it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
   reach has been turned into a returned error, with a test that fails if the
   guard is removed.
 
-Status: **v0.1.0.** Every Jolt subsystem is bound and the surface is complete
+Status: **v0.2.0.** Every Jolt subsystem is bound and the surface is complete
 enough to build against. Still pre-1.0, so naming and shape can change between
 minor versions — but a change will be a change, not a silent one: the ABI
 cross-check makes any drift between the header and the Zig side a build
@@ -147,10 +147,16 @@ difference that matters is not spelling:
 
 |  | joltc | zjolt |
 |---|---|---|
-| entry points returning a result | none | 739 of 1406 |
-| entry points returning `void` | 728 | 378 |
+| entry points returning an error code | none | 752 |
+| entry points returning `void` | the large majority | 381 |
 | build-configuration handshake | none | `zjoltAbiLayout` + config id |
-| public headers | 1 | 25, one per subsystem, behind one umbrella |
+| public headers | one | 25, one per subsystem, behind one umbrella |
+
+The joltc column is `include/joltc.h` at commit `886e088`, dated 2026-07-13
+and read on 2026-08-30: 1269 `JPH_CAPI` declarations, 728 of them returning
+`void`, 109 returning `bool`, and none returning an error code — joltc has no
+result enum. Those four figures are another project's tree, so no gate here
+re-measures them; zjolt's own column is gated by `ci/check-numbers.sh`.
 
 joltc reports failure implicitly: a bad argument trips a Jolt assertion in a
 build that has them and does nothing in a build that does not. This package
@@ -378,23 +384,26 @@ reinterprets both fields.
 
 A check that guards everything else cannot be trusted on its own word: a
 refactor that quietly makes it vacuous looks exactly like a passing build. So
-`ci/check-abi-drift.sh` applies twelve kinds of deliberate drift one at a time —
+`ci/check-abi-drift.sh` applies 13 kinds of deliberate drift one at a time —
 that swap, a dropped parameter, a widened parameter, a renumbered enumerator, a
 narrowed enum tag, a moved mask bit, a drifted constant, an extern deleted from
 the Zig side, a field added to the header alone, a field's signedness flipped, a
-negative enumerator, and an extern replaced by a Zig helper wearing the same
-name — and asserts each is refused with a `zjolt ABI drift:` message.
+negative enumerator, an extern replaced by a Zig helper wearing the same name,
+and a module dropped from `src/c.zig`'s list — and asserts each is refused
+with a `zjolt ABI drift:` message.
 
-The same script mutates the other four guards, since a guard nothing tests is
+The same script mutates the other five guards, since a guard nothing tests is
 a guard nobody has checked: the entry-point preamble that turns a call made
 before `zjoltInit` into a result rather than a walk through an uninitialised
 allocator, the allocator seam, the callback error path that stashes a failure
-instead of unwinding across a Jolt callback, and the analysis sweep that
-forces Zig to look at wrappers nothing calls. Each of those declares the
+instead of unwinding across a Jolt callback, the analysis sweep that forces
+Zig to look at wrappers nothing calls, and the coverage classifier. Each of
+those declares the
 signal the build must produce, so a mutation that fails for an unrelated
 reason is reported as a wrong failure rather than counted as the guard doing
-its job — three of the four were miscounted on the first run and the check
-said so. Sixteen mutations, none missed. It runs under `ci/run.sh --full`.
+its job. 22 mutations in all, none missed, and `ci/check-numbers.sh` fails the
+build if that count and this sentence drift apart. It runs under
+`ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
 types are compared only by size and alignment — a `float *` declared as `*i32`
@@ -517,13 +526,13 @@ stepped further, and restored is back where the save was taken — position and
 velocity both — while a restore into a world whose body set changed is refused
 rather than half-applied.
 
-Two reflective sweeps run alongside those, and they are mechanical on purpose:
-one calls every entry point in the ABI with nulls, and one calls every entry
-point before `init`. Both discover the list by reflection rather than being
-handed it, so an entry point added tomorrow is swept without anyone
-remembering to add it. They prove nothing about whether the physics is right —
-that is what the tests above are for — but they prove no entry point can be
-reached into a crash.
+3 reflective sweeps run alongside those, and they are mechanical on purpose:
+one calls every entry point in the ABI with nulls, one calls every entry point
+before `init`, and one hands every enum parameter a value no enumerator names.
+All three discover the list by reflection rather than being handed it, so an
+entry point added tomorrow is swept without anyone remembering to add it. They
+prove nothing about whether the physics is right — that is what the tests
+above are for — but they prove no entry point can be reached into a crash.
 
 Both diagnostic hooks are exercised, which took some doing — every path that
 would have reached one has been turned into a returned error, so the two that
@@ -550,13 +559,15 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 
 The default is trimmed rather than complete, which is a concession to what Jolt
 is: 179 translation units per configuration, so one is tens of seconds rather
-than the couple of seconds a smaller library would take. On the machine this
-was written on, `--full` is 25 checks — 17 of them building and running the
-suite, 8 cross-compiling — in about eight minutes from a cold cache; the
-default is under a minute once the cache is warm.
+than the couple of seconds a smaller library would take. `--full` is 27 checks
+— 19 of them run on this host, 8 cross-compiling — which is minutes from a
+cold cache; the default is under a minute once the cache is warm.
 
-Every number in this README comes from `ci/measurements.sh`, which recomputes
-them. Run it before editing one.
+`ci/measurements.sh` recomputes every number this README states, and
+`ci/check-numbers.sh` FAILS THE BUILD when one of them disagrees with the
+tree. The second script names, in its own header, which numbers it gates and
+which it cannot: a count written in words instead of digits is beyond it, and
+so is a sentence that is wrong around a number that is right.
 
 ### Platform coverage
 

@@ -15,6 +15,10 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# The counts this script reports about the ABI itself come from one home,
+# shared with ci/measurements.sh and ci/check-numbers.sh.
+. ci/counts.sh
+
 LIST=0
 [ "${1:-}" = "--list" ] && LIST=1
 
@@ -228,7 +232,7 @@ done < "$work/zigrefs" 2>&1 >/dev/null | tee "$work/zigmiss" >&2
 # unreachable for a Zig host, and nothing above can see it. src/c/ and c.zig
 # are the extern layer; tests do not count as use.
 #-----------------------------------------------------------------------------
-grep -ho 'zjolt[A-Za-z0-9_]*(' ffi/*.h | grep -o 'zjolt[A-Za-z0-9_]*' | sort -u > "$work/entrypoints"
+list_callable_names > "$work/entrypoints"
 # src/c/ holds the extern declarations, and a declaration is not use — but it
 # now also holds the methods declared on the ABI structs themselves, and a
 # method body calling an entry point IS use. Count every line in src/c/ except
@@ -269,10 +273,11 @@ if [ "$LIST" -eq 1 ] && [ -s "$work/open" ]; then
   printf '\n'
 fi
 
-entry_points=$(grep -c . "$work/entrypoints")
+callable_names=$(grep -c . "$work/entrypoints")
 read -r spelled public <<<"$(tools/coverage.sh | awk '/^  TOTAL/{print $2, $3}')"
 printf '%szjolt coverage%s\n' "$BOLD" "$OFF"
-printf '  %-30s %5d\n' 'entry points exported' "$entry_points"
+printf '  %-30s %5d\n' 'entry points exported' "$(count_api_decls)"
+printf '  %-30s %5d\n' 'callable names checked' "$callable_names"
 printf '  %-30s %5d\n' 'public Jolt names, claimed areas' "$public"
 printf '  %-30s %5d  %sspelled out by an entry point%s\n' '  matched' "$spelled" "$DIM" "$OFF"
 awk -F'\t' '{ c[$3]++ } END { for (v in c) printf "    %-28s %5d\n", tolower(v), c[v] }' "$work/rows" | sort
@@ -281,24 +286,9 @@ if [ -s "$work/open" ]; then
   fail "$(grep -c . "$work/open") gap(s) — run with --list to see them"
 fi
 
-#-----------------------------------------------------------------------------
-# README's headline numbers. They are written by hand and nothing else in the
-# tree recomputes them, so they rot silently. Both are marked in bold in the
-# Scope section; keep the wording or update the two patterns below with it.
-#-----------------------------------------------------------------------------
-# Counted exactly as ci/measurements.sh counts them, so the two never disagree.
-# Summed with awk, not bc: bc is absent from a default Git-for-Windows
-# install, and this line failing left the comparison below reading an empty
-# string as the tree's count and passing.
-entry_point_decls=$(grep -rhc '^ZJOLT_API' ffi/*.h | awk '{ n += $1 } END { print n + 0 }')
-headers=$(grep -c '^#include "zjolt_' ffi/zjolt.h)
-readme_entry_points=$(grep -oE '\*\*[0-9]+ C entry points\*\*' README.md | grep -oE '[0-9]+' | sort -u)
-readme_headers=$(grep -oE '\*\*[0-9]+ headers\*\*' README.md | grep -oE '[0-9]+' | sort -u)
-if [ "$readme_entry_points" != "$entry_point_decls" ] || [ "$readme_headers" != "$headers" ]; then
-  printf '  README says %s entry points across %s headers; the tree has %s across %s\n' \
-    "${readme_entry_points:-none}" "${readme_headers:-none}" "$entry_point_decls" "$headers" >&2
-  fail 'README headline numbers are stale'
-fi
+# What a document says about any of this is ci/check-numbers.sh's job, not
+# this script's: every count a document states has one gate, and this one
+# would have been the second.
 if [ "$fails" -ne 0 ]; then
   printf '\n%sFAIL%s  %d problem(s)\n' "$RED" "$OFF" "$fails" >&2
   exit 1

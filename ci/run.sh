@@ -10,7 +10,7 @@
 #   ci/run.sh --full   # everything CI runs, minus the jobs that need network
 #
 # The default is trimmed rather than complete, and that is a deliberate
-# concession to what Jolt is: 130 translation units, so a single configuration
+# concession to what Jolt is: 179 translation units, so a single configuration
 # is tens of seconds rather than the couple of seconds a smaller library would
 # take. `--full` adds four more optimize modes, eight cross-compilation targets,
 # six build configurations and the ABI drift mutation test, which is several
@@ -88,16 +88,20 @@ run 'installed headers cover every include' bash -c '
     <(grep -oE "ffi/zjolt_[a-z_]+\.h" build.zig | sed "s|ffi/||" | sort -u) |
   grep . && { echo "not in build.zig'"'"'s installHeader list"; exit 1; }; exit 0'
 
-# Every public Jolt name in the areas this ABI claims has a verdict, and every
-# verdict that says "reachable" names a symbol the headers really declare. It
-# is here rather than under --full because it takes a second and because a gap
-# is the kind of thing that should stop a push, not wait for a nightly.
 # Comment blocks stay short and stay out of the narrative register. Cheap, and
 # the kind of drift that is invisible in review until a whole file reads like a
 # diary.
 run 'comment standard' ci/check-comments.sh
 
+# Every public Jolt name in the areas this ABI claims has a verdict, and every
+# verdict that says "reachable" names a symbol the headers really declare. It
+# is here rather than under --full because it takes a second and because a gap
+# is the kind of thing that should stop a push, not wait for a nightly.
 run 'coverage (every name has a verdict)' ci/check-coverage.sh
+
+# Every count a document states, recomputed and compared. A number in prose
+# rots in silence otherwise, and four of them had.
+run 'documented numbers' ci/check-numbers.sh
 
 #-----------------------------------------------------------------------------
 section 'Tests — native'

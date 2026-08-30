@@ -11,8 +11,10 @@
 # This prints what is actually true right now. Run it before touching a number
 # in a document, and paste what it says rather than what you remember.
 #
-# It measures; it does not judge. Nothing here fails a build — the numbers are
-# for prose, and prose is a human's job to keep honest.
+# It measures; it does not judge, and nothing here fails a build. The judging
+# is ci/check-numbers.sh, which recomputes the subset of these that a document
+# states and fails when one disagrees. This script is the wider view: it also
+# prints quantities no document quotes yet.
 #
 # Usage: ci/measurements.sh
 
@@ -21,29 +23,27 @@ cd "$(dirname "$0")/.."
 
 section() { printf '\n%s\n%s\n' "$1" "$(printf '%*s' "${#1}" '' | tr ' ' -)"; }
 
+# Every formula lives in ci/counts.sh. This script chooses what to print and
+# in what order; it may not count anything itself.
+. ci/counts.sh
+
 section "C ABI"
 
-# One ZJOLT_API per entry point, and the macro appears nowhere else.
-# awk rather than bc, which a default Git-for-Windows install does not have.
-entry_points=$(grep -rhc '^ZJOLT_API' ffi/*.h | awk '{ n += $1 } END { print n + 0 }')
+entry_points=$(count_api_decls)
 printf 'entry points (ZJOLT_API in ffi/*.h)   %s\n' "$entry_points"
+printf 'callable names (adds static inline)   %s\n' \
+  "$(list_callable_names | grep -c .)"
 
-# The Zig mirror of the same set. abi_check.zig fails the build if these ever
-# disagree, so a difference here means this script is counting wrong.
-externs=$(cat src/c/*.zig | grep -c '^pub extern fn zjolt')
+externs=$(count_externs)
 printf 'externs (pub extern fn in src/c/)     %s\n' "$externs"
 if [ "$entry_points" != "$externs" ]; then
   printf '  ^ these must match; src/abi_check.zig pairs them at build time\n'
 fi
 
-# Public means reachable through the umbrella. zjolt_internal.h and
-# zjolt_query_internal.h are neither included by it nor installed.
-printf 'public headers                        %s\n' \
-  "$(grep -c '^#include \"zjolt_' ffi/zjolt.h)"
-printf 'result-returning entry points         %s\n' \
-  "$(cat ffi/zjolt_*.h | grep -c '^ZJOLT_API ZJoltResult')"
-printf 'void entry points                     %s\n' \
-  "$(cat ffi/zjolt_*.h | grep -c '^ZJOLT_API void')"
+printf 'public headers                        %s\n' "$(count_public_headers)"
+printf 'result-returning entry points         %s\n' "$(count_returns_result)"
+printf 'void entry points                     %s\n' "$(count_returns_void)"
+printf 'version                               %s\n' "$(version_triple)"
 
 section "Tests"
 
@@ -67,11 +67,9 @@ section "Build size"
 
 # What a single configuration actually compiles. This is the number that sets
 # how long everything else takes.
-jolt_tu=$(find libs/JoltPhysics/Jolt -name '*.cpp' | wc -l | tr -d ' ')
-own_tu=$(ls ffi/*.cpp | wc -l | tr -d ' ')
-printf 'Jolt translation units                %s\n' "$jolt_tu"
-printf 'zjolt translation units               %s\n' "$own_tu"
-printf 'total per configuration               %s\n' "$((jolt_tu + own_tu))"
+printf 'Jolt translation units                %s\n' "$(count_jolt_tu)"
+printf 'zjolt translation units               %s\n' "$(count_own_tu)"
+printf 'total per configuration               %s\n' "$(count_total_tu)"
 printf 'zig source lines (src/)               %s\n' \
   "$(cat src/*.zig src/c/*.zig | wc -l | tr -d ' ')"
 printf 'C declaration modules (src/c/)        %s\n' \
@@ -81,27 +79,14 @@ printf 'C++ source lines (ffi/)               %s\n' \
 
 section "Guards"
 
-# One `try` per ABI-drift mutation, one `expect` per other-guard mutation.
-# ci/run.sh names the total in a label, so it has to be kept in step by hand —
-# this is where to read the true one, and the check below says so if it drifts.
-printf 'ABI drift mutations                   %s\n' \
-  "$(grep -c '^try ' ci/check-abi-drift.sh)"
-printf 'other-guard mutations                 %s\n' \
-  "$(grep -c '^expect ' ci/check-abi-drift.sh)"
-printf 'ci/run.sh checks (static)             %s\n' \
-  "$(grep -cE "^ *run ['\"]" ci/run.sh)"
-printf 'ci/run.sh cross targets               %s\n' \
-  "$(sed -n '/^ *for target in/,/^ *do$/p' ci/run.sh | grep -cE '^ +[a-z0-9_]+-')"
+printf 'ABI drift mutations                   %s\n' "$(count_drift_mutations)"
+printf 'other-guard mutations                 %s\n' "$(count_other_mutations)"
+printf 'mutations in all                      %s\n' "$(count_all_mutations)"
+printf 'reflective sweeps                     %s\n' "$(count_reflective_sweeps)"
+printf 'ci/run.sh host checks                 %s\n' "$(count_host_checks)"
+printf 'ci/run.sh cross targets               %s\n' "$(count_cross_targets)"
+printf 'ci/run.sh --full checks               %s\n' "$(count_full_checks)"
 
-# The one number in ci/run.sh that is written into a label rather than
-# computed, so it is the one that can silently disagree with the script it
-# names.
-label=$(sed -n "s/.*guard mutations (\\([0-9]*\\)).*/\\1/p" ci/run.sh)
-actual=$(( $(grep -c '^try ' ci/check-abi-drift.sh) + \
-           $(grep -c '^expect ' ci/check-abi-drift.sh) ))
-if [ -n "$label" ] && [ "$label" != "$actual" ]; then
-  printf "\n  ci/run.sh's label says %s mutations; check-abi-drift.sh has %s\n" \
-    "$label" "$actual"
-fi
-
+# Which of these a document quotes, and whether it quotes them correctly, is
+# ci/check-numbers.sh's question. This one only reports.
 printf '\n'
