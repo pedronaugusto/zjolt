@@ -42,6 +42,9 @@ typedef struct ZJoltCharacterDesc {
   /// Gap kept between the shape and geometry, so sweeps hit less.
   float character_padding;
   float penetration_recovery_speed;
+  /// The solver stops once this little of the step is left to simulate. Jolt's
+  /// early-out; smaller costs iterations, larger leaves motion unsimulated.
+  float min_time_remaining;
   float collision_tolerance;
   float hit_reduction_cos_max_angle;
   uint32_t max_collision_iterations;
@@ -53,6 +56,12 @@ typedef struct ZJoltCharacterDesc {
   /// It is what makes the character visible to ray casts and to other bodies,
   /// since CharacterVirtual itself is not in the broad phase. NULL for none.
   const ZJoltShape *inner_body_shape;
+  /// The id the inner body is created with, instead of a generated one — what
+  /// makes a rebuilt world hand the same character the same id, which is what
+  /// a replay or a rollback compares against. ZJOLT_BODY_ID_INVALID for a
+  /// generated one. Ignored without `inner_body_shape`; the same rules as
+  /// zjoltBodyCreateWithId otherwise.
+  ZJoltBodyId inner_body_id_override;
   ZJoltObjectLayer inner_body_layer;
 } ZJoltCharacterDesc;
 

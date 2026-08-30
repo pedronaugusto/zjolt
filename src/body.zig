@@ -16,6 +16,7 @@ const err = @import("error.zig");
 const math = @import("math.zig");
 const shape_mod = @import("shape.zig");
 const group_mod = @import("group.zig");
+const descriptor = @import("descriptor.zig");
 
 pub const BodyId = c.BodyId;
 pub const invalid_body_id = c.body_id_invalid;
@@ -121,33 +122,19 @@ pub const BodyDesc = struct {
     inertia_multiplier: f32 = 1,
 
     /// The two descriptors carry the same field names, so the crossing is
-    /// by name rather than by a hand-kept list: a field on one side and not
-    /// the other is a compile error here, not a value silently left at
-    /// Jolt's default. Only the two that change TYPE are named.
+    /// by name — @see `descriptor.zig`. Only the two whose TYPE changes
+    /// across the ABI are assigned by hand.
     fn toC(self: BodyDesc) c.BodyDesc {
         var out: c.BodyDesc = undefined;
         c.zjoltBodyDescInit(&out);
         out.shape = self.shape.handle;
         out.collision_group = group_mod.toC(self.collision_group);
-        inline for (@typeInfo(BodyDesc).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "shape")) continue;
-            if (comptime std.mem.eql(u8, field.name, "collision_group")) continue;
-            @field(out, field.name) = @field(self, field.name);
-        }
+        descriptor.crossByName(&out, self, &.{ "shape", "collision_group" });
         return out;
     }
 
-    // The other direction of the same check: every field of the C
-    // descriptor is modelled here, so a field added to ZJoltBodyDesc and
-    // forgotten here cannot become a setting nobody can reach — which is
-    // exactly what happened to six BodyCreationSettings fields at once.
     comptime {
-        for (@typeInfo(c.BodyDesc).@"struct".fields) |field| {
-            if (!@hasField(BodyDesc, field.name)) {
-                @compileError("BodyDesc does not model ZJoltBodyDesc." ++
-                    field.name);
-            }
-        }
+        descriptor.requireModelled(BodyDesc, c.BodyDesc);
     }
 };
 

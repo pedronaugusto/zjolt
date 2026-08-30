@@ -54,6 +54,11 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   three passed `JPH::EBodyType::RigidBody` unconditionally, so a system's soft
   bodies were unreachable through every active-body query this ABI had.
 
+- `ZJoltCharacterDesc` gained `min_time_remaining` and
+  `inner_body_id_override`. `CharacterVirtualSettings` has both; without the
+  first the solver's early-out could not be tuned, and without the second a
+  character's inner body took a generated id, so a rebuilt world handed the
+  same character a different one — the thing a replay compares against.
 - `ZJoltBodyDesc` gained six fields, in Jolt's own order:
   `apply_gyroscopic_force`, `collide_kinematic_vs_non_dynamic`,
   `use_manifold_reduction`, `enhanced_internal_edge_removal`,
@@ -77,6 +82,11 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `HeightFieldOptions.materials_capacity`.
 - `PhysicsSystem.numActiveBodies`, `countActiveBodies`, `getActiveBodies` and
   `getActiveBodiesUnsafe` take a `BodyType`, mirroring the C change.
+- `Character.Options` carries `min_time_remaining` and
+  `inner_body_id_override`. Both `Character.Options` and
+  `RigidCharacter.Options` now cross to their C descriptor by field NAME, the
+  way `BodyDesc` already did; the shared `descriptor.zig` is the one home for
+  that rule, and a field on one side and not the other is a compile error.
 - `zjolt.constraintList` fills a caller's buffer with every constraint in a
   system, each holding a reference of its own.
 - `RagdollSettings.setPartConstraint`, `partConstraint`,

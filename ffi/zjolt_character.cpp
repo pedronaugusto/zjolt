@@ -616,6 +616,7 @@ void zjoltCharacterDescInit(ZJoltCharacterDesc *desc) {
   desc->predictive_contact_distance = defaults.mPredictiveContactDistance;
   desc->character_padding = defaults.mCharacterPadding;
   desc->penetration_recovery_speed = defaults.mPenetrationRecoverySpeed;
+  desc->min_time_remaining = defaults.mMinTimeRemaining;
   desc->collision_tolerance = defaults.mCollisionTolerance;
   desc->hit_reduction_cos_max_angle = defaults.mHitReductionCosMaxAngle;
   desc->max_collision_iterations = defaults.mMaxCollisionIterations;
@@ -627,6 +628,7 @@ void zjoltCharacterDescInit(ZJoltCharacterDesc *desc) {
           : ZJOLT_BACK_FACE_MODE_IGNORE;
   desc->enhanced_internal_edge_removal = defaults.mEnhancedInternalEdgeRemoval;
   desc->inner_body_shape = nullptr;
+  desc->inner_body_id_override = ZJOLT_BODY_ID_INVALID;
   desc->inner_body_layer = static_cast<ZJoltObjectLayer>(defaults.mInnerBodyLayer);
 }
 
@@ -667,6 +669,7 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
   settings.mPredictiveContactDistance = desc->predictive_contact_distance;
   settings.mCharacterPadding = desc->character_padding;
   settings.mPenetrationRecoverySpeed = desc->penetration_recovery_speed;
+  settings.mMinTimeRemaining = desc->min_time_remaining;
   settings.mCollisionTolerance = desc->collision_tolerance;
   settings.mHitReductionCosMaxAngle = desc->hit_reduction_cos_max_angle;
   settings.mMaxCollisionIterations = desc->max_collision_iterations;
@@ -679,6 +682,9 @@ ZJoltResult zjoltCharacterCreate(ZJoltPhysicsSystem *system,
   settings.mEnhancedInternalEdgeRemoval = desc->enhanced_internal_edge_removal;
   if (desc->inner_body_shape != nullptr) {
     settings.mInnerBodyShape = zjolt::ToJolt(desc->inner_body_shape);
+    if (desc->inner_body_id_override != ZJOLT_BODY_ID_INVALID) {
+      settings.mInnerBodyIDOverride = zjolt::ToJolt(desc->inner_body_id_override);
+    }
     settings.mInnerBodyLayer =
         static_cast<JPH::ObjectLayer>(desc->inner_body_layer);
   }

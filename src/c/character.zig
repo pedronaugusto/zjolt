@@ -52,6 +52,7 @@ pub const CharacterDesc = extern struct {
     predictive_contact_distance: f32,
     character_padding: f32,
     penetration_recovery_speed: f32,
+    min_time_remaining: f32,
     collision_tolerance: f32,
     hit_reduction_cos_max_angle: f32,
     max_collision_iterations: u32,
@@ -60,6 +61,7 @@ pub const CharacterDesc = extern struct {
     back_face_mode: BackFaceMode,
     enhanced_internal_edge_removal: bool,
     inner_body_shape: ?*const Shape,
+    inner_body_id_override: BodyId,
     inner_body_layer: ObjectLayer,
 };
 

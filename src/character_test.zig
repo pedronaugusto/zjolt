@@ -711,6 +711,82 @@ test "a custom character-vs-character callback excludes a pairing the built-in l
 }
 
 //=============================================================================
+// The two CharacterVirtualSettings fields that reach the solver
+//=============================================================================
+
+/// How far a character walks along +x in one 1/60 s step at 5 m/s, given
+/// `min_time_remaining`. The one variable across the two arms below.
+fn walkedWith(min_time_remaining: f32) !f32 {
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+        .min_time_remaining = min_time_remaining,
+    });
+    defer character.deinit();
+
+    const before = character.getPosition();
+    character.setLinearVelocity(zjolt.vec3(5, 0, 0));
+    try character.update(1.0 / 60.0, zjolt.vec3(0, 0, 0), null, null);
+    return @floatCast(character.getPosition().x - before.x);
+}
+
+test "min_time_remaining is the solver's early-out, and one larger than the step stops the move" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // Jolt's default is 1e-4 s, far below a 1/60 s step, so the move runs.
+    const moved = try walkedWith(1.0e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 5.0 / 60.0), moved, 1e-3);
+
+    // A whole second left to simulate is never reached inside a 1/60 s step,
+    // so the collision loop does not run a single iteration.
+    const stalled = try walkedWith(1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), stalled, 1e-6);
+}
+
+test "an inner body takes the id it was given rather than a generated one" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+
+    // A free index below the fixture's max_bodies: Jolt indexes its body
+    // array with the low bits of the id, so a larger one has no slot.
+    const chosen: zjolt.BodyId = 0x0000_0064;
+    const pinned = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 3, 0),
+        .inner_body_shape = capsule,
+        .inner_body_layer = Layers.moving,
+        .inner_body_id_override = chosen,
+    });
+    defer pinned.deinit();
+    try std.testing.expectEqual(chosen, pinned.innerBodyId());
+
+    // The other arm, one variable apart: no override, so Jolt generates one,
+    // and it is not the id the first character was pinned to.
+    const generated = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(4, 3, 0),
+        .inner_body_shape = capsule,
+        .inner_body_layer = Layers.moving,
+    });
+    defer generated.deinit();
+    try std.testing.expect(generated.innerBodyId() != zjolt.invalid_body_id);
+    try std.testing.expect(generated.innerBodyId() != chosen);
+}
+
+//=============================================================================
 // The inner body
 //=============================================================================
 

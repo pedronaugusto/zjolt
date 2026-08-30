@@ -11,6 +11,7 @@ const c = @import("c/character.zig");
 const err = @import("error.zig");
 const math = @import("math.zig");
 const body_mod = @import("body.zig");
+const descriptor = @import("descriptor.zig");
 const query_mod = @import("query.zig");
 const shape_mod = @import("shape.zig");
 const state_c = @import("c/state.zig");
@@ -98,6 +99,10 @@ pub const Character = struct {
         /// Gap kept between the shape and geometry so sweeps hit less.
         character_padding: f32 = 0.02,
         penetration_recovery_speed: f32 = 1,
+        /// The solver stops once this little of the step is left. Jolt's
+        /// early-out: smaller costs iterations, larger leaves motion
+        /// unsimulated.
+        min_time_remaining: f32 = 1.0e-4,
         collision_tolerance: f32 = 1.0e-3,
         hit_reduction_cos_max_angle: f32 = 0.999,
         max_collision_iterations: u32 = 5,
@@ -109,7 +114,16 @@ pub const Character = struct {
         /// Optional rigid body that follows the character so casts and other
         /// bodies can see it. Null for none.
         inner_body_shape: ?shape_mod.Shape = null,
+        /// The id the inner body takes instead of a generated one, so a
+        /// rebuilt world hands the same character the same id — what a
+        /// replay or a rollback compares against. `invalid_body_id` for a
+        /// generated one; ignored without an `inner_body_shape`.
+        inner_body_id_override: body_mod.BodyId = body_mod.invalid_body_id,
         inner_body_layer: c.ObjectLayer = 0,
+
+        comptime {
+            descriptor.requireModelled(@This(), c.CharacterDesc);
+        }
     };
 
     /// The character borrows `system` for its lifetime and must be `deinit`ed
@@ -121,26 +135,8 @@ pub const Character = struct {
         // still gets a sensible value.
         c.zjoltCharacterDescInit(&desc);
         desc.shape = opts.shape.handle;
-        desc.position = opts.position;
-        desc.rotation = opts.rotation;
-        desc.up = opts.up;
-        desc.shape_offset = opts.shape_offset;
-        desc.user_data = opts.user_data;
-        desc.max_slope_angle = opts.max_slope_angle;
-        desc.mass = opts.mass;
-        desc.max_strength = opts.max_strength;
-        desc.predictive_contact_distance = opts.predictive_contact_distance;
-        desc.character_padding = opts.character_padding;
-        desc.penetration_recovery_speed = opts.penetration_recovery_speed;
-        desc.collision_tolerance = opts.collision_tolerance;
-        desc.hit_reduction_cos_max_angle = opts.hit_reduction_cos_max_angle;
-        desc.max_collision_iterations = opts.max_collision_iterations;
-        desc.max_constraint_iterations = opts.max_constraint_iterations;
-        desc.max_num_hits = opts.max_num_hits;
-        desc.back_face_mode = opts.back_face_mode;
-        desc.enhanced_internal_edge_removal = opts.enhanced_internal_edge_removal;
         desc.inner_body_shape = if (opts.inner_body_shape) |s| s.handle else null;
-        desc.inner_body_layer = opts.inner_body_layer;
+        descriptor.crossByName(&desc, opts, &.{ "shape", "inner_body_shape" });
 
         var handle: *c.Character = undefined;
         try err.check(c.zjoltCharacterCreate(system.handle, &desc, &handle));
@@ -1320,6 +1316,10 @@ pub const RigidCharacter = struct {
             .rotation_y = false,
             .rotation_z = false,
         },
+
+        comptime {
+            descriptor.requireModelled(@This(), c.RigidCharacterDesc);
+        }
     };
 
     /// Builds the character's rigid body but does not add it to the
@@ -1334,17 +1334,7 @@ pub const RigidCharacter = struct {
         // still gets a sensible value.
         c.zjoltRigidCharacterDescInit(&desc);
         desc.shape = opts.shape.handle;
-        desc.position = opts.position;
-        desc.rotation = opts.rotation;
-        desc.user_data = opts.user_data;
-        desc.up = opts.up;
-        desc.max_slope_angle = opts.max_slope_angle;
-        desc.enhanced_internal_edge_removal = opts.enhanced_internal_edge_removal;
-        desc.layer = opts.layer;
-        desc.mass = opts.mass;
-        desc.friction = opts.friction;
-        desc.gravity_factor = opts.gravity_factor;
-        desc.allowed_dofs = opts.allowed_dofs;
+        descriptor.crossByName(&desc, opts, &.{"shape"});
 
         var handle: *c.RigidCharacter = undefined;
         try err.check(c.zjoltRigidCharacterCreate(system.handle, &desc, &handle));
