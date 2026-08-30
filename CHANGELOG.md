@@ -212,6 +212,19 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 
 ### Build
 
+- `build.zig` writes and installs `zjolt_config.h`, carrying the two options
+  that change the ABI and `ZJOLT_SHARED`; `zjolt_core.h` includes it when it
+  is there. Zig propagates include paths and libraries across a link but never
+  -D flags, so a C or C++ host had to repeat `-Ddouble_precision` and
+  `-Dobject_layer_bits` by hand and got `ZJOLT_RESULT_CONFIG_MISMATCH` at
+  init, or a lost `__declspec(dllimport)`, when it did not. A consumer reading
+  `ffi/` straight out of the tree still gets the header defaults, and
+  `zjoltInit` still refuses a mismatch.
+- `tests/consumer` forwards both ABI options, and `ci/run.sh` runs it a second
+  time with `-Ddouble_precision`. Its C half now compares the library's
+  reported layout against its own `sizeof(ZJoltReal)`, `sizeof(ZJoltObjectLayer)`
+  and `ZJOLT_CONFIG_ID`, which is what makes that second run a test rather
+  than a repetition.
 - No `-Dsimd` option, stated in the README and in `build.zig` where someone
   would look for one: Jolt derives every `JPH_USE_*` from the compiler's own
   predefines, so `-Dcpu=` already is the lever and a second one could

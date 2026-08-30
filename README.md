@@ -641,8 +641,8 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 
 The default is trimmed rather than complete, which is a concession to what Jolt
 is: 179 translation units per configuration, so one is tens of seconds rather
-than the couple of seconds a smaller library would take. `--full` is 28 checks
-— 20 of them run on this host, 8 cross-compiling — which is minutes from a
+than the couple of seconds a smaller library would take. `--full` is 29 checks
+— 21 of them run on this host, 8 cross-compiling — which is minutes from a
 cold cache; the default is under a minute once the cache is warm.
 
 `ci/measurements.sh` recomputes every number this README states, and

@@ -15,7 +15,28 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const zjolt = b.dependency("zjolt", .{ .target = target, .optimize = optimize });
+
+    // Forwarded so this build can be run twice, once either way. The two
+    // options that change zjolt's ABI are exactly the two a C host used to
+    // have to repeat by hand; running with one of them set is what proves
+    // the installed zjolt_config.h carries them instead.
+    const double_precision = b.option(
+        bool,
+        "double_precision",
+        "Build zjolt with JPH_DOUBLE_PRECISION",
+    ) orelse false;
+    const object_layer_bits = b.option(
+        u8,
+        "object_layer_bits",
+        "Width of an object layer, 16 or 32",
+    ) orelse 16;
+
+    const zjolt = b.dependency("zjolt", .{
+        .target = target,
+        .optimize = optimize,
+        .double_precision = double_precision,
+        .object_layer_bits = object_layer_bits,
+    });
 
     // 1. The Zig module, driven the way the README's example drives it.
     const zig_consumer = b.addExecutable(.{

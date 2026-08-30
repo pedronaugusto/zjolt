@@ -19,11 +19,17 @@ int main(void) {
   if (stats.size_bytes == 0) return 1;
   zjoltShapeRelease(sphere);
 
-  /* The library's own account of its layout, which is the thing a C host
-   * cannot get from the header alone -- ZJoltReal changes width with the
-   * build options the library was compiled with, not the ones in scope here. */
+  /* The library's own account of its layout, against what the headers in
+   * scope here say. They agree because build.zig installs zjolt_config.h
+   * beside the headers, carrying the options the library was compiled with;
+   * without it a host had to repeat them by hand, and ZJoltReal came out the
+   * wrong width. This is the check, and zjoltInit above is the second one --
+   * it compares the caller's ZJOLT_CONFIG_ID with the library's. */
   ZJoltAbiLayout layout;
   zjoltAbiLayout(&layout);
+  if (layout.real_size != (uint32_t)sizeof(ZJoltReal)) return 1;
+  if (layout.object_layer_size != (uint32_t)sizeof(ZJoltObjectLayer)) return 1;
+  if (layout.config_id != (uint32_t)ZJOLT_CONFIG_ID) return 1;
 
   const uint32_t v = zjoltVersion();
   const uint32_t j = zjoltJoltVersion();

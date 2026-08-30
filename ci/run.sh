@@ -124,6 +124,12 @@ run 'test-c (C ABI standalone)' zig build test-c
 # in-repo suite. See tests/consumer/build.zig.
 run 'consumer (module + artifact)' env -C tests/consumer zig build run
 
+# The same consumer with an ABI option set. Nothing in tests/consumer passes
+# -DZJOLT_DOUBLE_PRECISION to its C compiler, so this passes only because
+# build.zig installs zjolt_config.h beside the headers; without it the C host
+# reads a 4-byte ZJoltReal from a library that writes 8.
+run 'consumer (double precision, via the installed config header)'   env -C tests/consumer zig build run -Ddouble_precision
+
 if [ $FULL -eq 1 ]; then
   run 'test Debug (defaults, UBSan off)' zig build test -Doptimize=Debug
   for mode in ReleaseSafe ReleaseFast ReleaseSmall; do

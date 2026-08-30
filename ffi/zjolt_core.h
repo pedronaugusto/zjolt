@@ -20,6 +20,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Written by build.zig from the options the library was compiled with, and
+   installed beside these headers. Zig's build graph carries include paths and
+   libraries across a link, never -D flags, so this file is how a C consumer
+   learns them; without it every host had to repeat -Ddouble_precision and its
+   friends by hand. Absent — reading ffi/ straight out of the tree — the
+   defaults below stand, and zjoltInit refuses a mismatch outright. */
+#if defined(__has_include)
+#if __has_include("zjolt_config.h")
+#include "zjolt_config.h"
+#endif
+#endif
+
 #if defined(_MSC_VER) && defined(ZJOLT_SHARED)
 #ifdef ZJOLT_BUILD
 #define ZJOLT_API __declspec(dllexport)
