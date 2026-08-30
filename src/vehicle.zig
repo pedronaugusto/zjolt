@@ -376,7 +376,8 @@ pub const VehicleConstraint = struct {
         return c.zjoltVehicleConstraintGetClutchFriction(self.handle);
     }
 
-    /// Current gear ratio times the differential ratio; 0 in neutral.
+    /// The current gear's ratio alone, from `mGearRatios`/
+    /// `mReverseGearRatios`; no differential ratio is applied. 0 in neutral.
     pub fn gearRatio(self: VehicleConstraint) f32 {
         return c.zjoltVehicleConstraintGetGearRatio(self.handle);
     }
@@ -407,8 +408,8 @@ pub const VehicleConstraint = struct {
 
     /// Clamps the engine's current RPM between its min and max. Every other
     /// engine method that changes RPM already does this; for a host that
-    /// pokes `getEngineDesc`'s min_rpm/max_rpm at runtime and wants the
-    /// current RPM to respect the change immediately.
+    /// narrows min_rpm/max_rpm through `setEngineDesc`, which moves the
+    /// bounds and leaves the current RPM where it was.
     pub fn engineClampRPM(self: VehicleConstraint) err.Error!void {
         try err.check(c.zjoltVehicleConstraintEngineClampRPM(self.handle));
     }
@@ -456,6 +457,14 @@ pub const VehicleConstraint = struct {
         return out;
     }
 
+    /// The writable half of `getEngineDesc`: Jolt's `VehicleEngine` derives
+    /// from `VehicleEngineSettings`, so every field creation sets is a live
+    /// field of a running vehicle. Narrowing min_rpm/max_rpm moves the bounds
+    /// and leaves the current RPM where it was — `engineClampRPM` after.
+    pub fn setEngineDesc(self: VehicleConstraint, desc: EngineDesc) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintSetEngineDesc(self.handle, &desc));
+    }
+
     /// Everything about the transmission except its gear ratio arrays — see
     /// `gearRatios`. `forward_gear_ratios`/`reverse_gear_ratios` are always
     /// NULL with a 0 count: borrowed-pointer fields this has no buffer to
@@ -464,6 +473,15 @@ pub const VehicleConstraint = struct {
         var out: TransmissionDesc = undefined;
         try err.check(c.zjoltVehicleConstraintGetTransmissionDesc(self.handle, &out));
         return out;
+    }
+
+    /// The writable half of `getTransmissionDesc`, on the same terms. The
+    /// gear-ratio pointers are borrowed for the duration of the call, and
+    /// leaving them NULL keeps the ratios already in place — which is what
+    /// makes a read of `getTransmissionDesc`, a change, and a write here a
+    /// round-trip rather than a way to lose the gears.
+    pub fn setTransmissionDesc(self: VehicleConstraint, desc: TransmissionDesc) err.Error!void {
+        try err.check(c.zjoltVehicleConstraintSetTransmissionDesc(self.handle, &desc));
     }
 
     pub const GearRatios = struct { forward: u32, reverse: u32 };

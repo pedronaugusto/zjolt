@@ -1475,6 +1475,27 @@ ZJoltResult zjoltVehicleConstraintGetEngineDesc(
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltVehicleConstraintSetEngineDesc(
+    ZJoltVehicleConstraint *constraint, const ZJoltVehicleEngineDesc *desc) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleEngine *e = EngineOf(constraint);
+  if (e == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  FillEngineSettings(*e, *desc);
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltVehicleConstraintSetTransmissionDesc(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleTransmissionDesc *desc) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  JPH::VehicleTransmission *t = TransmissionOf(constraint);
+  if (t == nullptr) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  FillTransmissionSettings(*t, *desc);
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltVehicleConstraintGetTransmissionDesc(
     const ZJoltVehicleConstraint *constraint,
     ZJoltVehicleTransmissionDesc *out) {

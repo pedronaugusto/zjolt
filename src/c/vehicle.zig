@@ -393,7 +393,11 @@ pub extern fn zjoltVehicleConstraintEngineDrawRPM(constraint: *VehicleConstraint
 
 pub extern fn zjoltVehicleConstraintGetEngineDesc(constraint: *const VehicleConstraint, out: *VehicleEngineDesc) Result;
 
+pub extern fn zjoltVehicleConstraintSetEngineDesc(constraint: *VehicleConstraint, desc: *const VehicleEngineDesc) Result;
+
 pub extern fn zjoltVehicleConstraintGetTransmissionDesc(constraint: *const VehicleConstraint, out: *VehicleTransmissionDesc) Result;
+
+pub extern fn zjoltVehicleConstraintSetTransmissionDesc(constraint: *VehicleConstraint, desc: *const VehicleTransmissionDesc) Result;
 
 pub extern fn zjoltVehicleConstraintGetGearRatios(constraint: *const VehicleConstraint, out_forward: ?[*]f32, forward_capacity: u32, out_forward_count: *u32, out_reverse: ?[*]f32, reverse_capacity: u32, out_reverse_count: *u32) Result;
 

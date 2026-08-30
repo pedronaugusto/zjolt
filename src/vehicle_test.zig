@@ -969,6 +969,71 @@ test "getEngineDesc and getTransmissionDesc round-trip the rig's construction-ti
     try std.testing.expectError(error.BufferTooSmall, car.vehicle.gearRatios(&too_small, &reverse));
 }
 
+test "the engine and transmission are writable as well as readable, and the current gear's ratio carries no differential ratio" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    // VehicleTransmission::GetCurrentRatio indexes mGearRatios and applies
+    // nothing else. The rig's differentials carry Jolt's own default ratio of
+    // 3.42, so a reading that folded it in would be 9.097 rather than 2.66 --
+    // which is what this ABI's documentation used to claim it was.
+    try car.vehicle.setGear(1, 1.0);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.66), car.vehicle.gearRatio(), 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.42), car.vehicle.differential(0).?.differential_ratio, 1e-4);
+
+    // Narrowing the engine's range moves the BOUNDS and leaves the current
+    // RPM where it was. That is the whole reason engineClampRPM exists, and
+    // it is unreachable until the bounds can be changed at all.
+    try car.vehicle.setEngineRpm(5000);
+    var engine = try car.vehicle.getEngineDesc();
+    engine.min_rpm = 800;
+    engine.max_rpm = 4000;
+    engine.max_torque = 321;
+    try car.vehicle.setEngineDesc(engine);
+
+    const read_back = try car.vehicle.getEngineDesc();
+    try std.testing.expectApproxEqAbs(@as(f32, 800), read_back.min_rpm, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 4000), read_back.max_rpm, 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 321), read_back.max_torque, 1e-4);
+    // The curve came back through a read-modify-write untouched.
+    try std.testing.expectEqual(@as(u32, 3), read_back.normalized_torque.count);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 5000), car.vehicle.engineRpm(), 1e-2);
+    try car.vehicle.engineClampRPM();
+    try std.testing.expectApproxEqAbs(@as(f32, 4000), car.vehicle.engineRpm(), 1e-2);
+
+    // getTransmissionDesc always reports NULL gear-ratio pointers, so writing
+    // one straight back must KEEP the ratios rather than clear them.
+    var transmission = try car.vehicle.getTransmissionDesc();
+    transmission.shift_up_rpm = 3500;
+    transmission.mode = .manual;
+    try car.vehicle.setTransmissionDesc(transmission);
+
+    var forward: [8]f32 = undefined;
+    var reverse: [8]f32 = undefined;
+    var counts = try car.vehicle.gearRatios(&forward, &reverse);
+    try std.testing.expectEqual(@as(u32, 5), counts.forward);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.66), forward[0], 1e-4);
+
+    const after = try car.vehicle.getTransmissionDesc();
+    try std.testing.expectApproxEqAbs(@as(f32, 3500), after.shift_up_rpm, 1e-4);
+    try std.testing.expectEqual(zjolt.VehicleTransmissionMode.manual, after.mode);
+
+    // And a non-NULL array replaces them, on the same borrowed-for-the-call
+    // terms as creation.
+    const two_speed = [_]f32{ 3.0, 1.5 };
+    transmission.forward_gear_ratios = &two_speed;
+    transmission.forward_gear_ratio_count = two_speed.len;
+    try car.vehicle.setTransmissionDesc(transmission);
+    counts = try car.vehicle.gearRatios(&forward, &reverse);
+    try std.testing.expectEqual(@as(u32, 2), counts.forward);
+    try std.testing.expectApproxEqAbs(@as(f32, 3.0), forward[0], 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.5), forward[1], 1e-4);
+}
+
 //=============================================================================
 // The debug RPM meter
 //=============================================================================

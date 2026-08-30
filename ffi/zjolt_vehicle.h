@@ -431,8 +431,9 @@ ZJOLT_API bool
 zjoltVehicleConstraintIsSwitchingGear(const ZJoltVehicleConstraint *constraint);
 ZJOLT_API float
 zjoltVehicleConstraintGetClutchFriction(const ZJoltVehicleConstraint *constraint);
-/// Current gear ratio times the differential ratio (transmission's
-/// VehicleTransmission::GetCurrentRatio); 0 in neutral.
+/// The current gear's ratio alone — VehicleTransmission::GetCurrentRatio,
+/// which indexes mGearRatios/mReverseGearRatios and applies no differential
+/// ratio. 0 in neutral.
 ZJOLT_API float
 zjoltVehicleConstraintGetGearRatio(const ZJoltVehicleConstraint *constraint);
 
@@ -465,9 +466,9 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineApplyDamping(
     ZJoltVehicleConstraint *constraint, float delta_time);
 /// Clamps the engine's current RPM between its min and max —
 /// VehicleEngine::ClampRPM. Every other engine entry point that changes RPM
-/// already does this; exposed for a host that pokes
-/// zjoltVehicleConstraintGetEngineDesc's min_rpm/max_rpm at runtime and wants
-/// the current RPM to respect the change immediately.
+/// already does this; exposed for a host that narrows min_rpm/max_rpm through
+/// zjoltVehicleConstraintSetEngineDesc, which changes the bounds and leaves
+/// the current RPM where it was.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineClampRPM(
     ZJoltVehicleConstraint *constraint);
 /// True when the engine is idle enough to allow the vehicle to sleep —
@@ -502,6 +503,14 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintEngineDrawRPM(
 ZJOLT_API ZJoltResult zjoltVehicleConstraintGetEngineDesc(
     const ZJoltVehicleConstraint *constraint, ZJoltVehicleEngineDesc *out);
 
+/// The writable half of the pair. JPH::VehicleEngine derives from
+/// VehicleEngineSettings, so every field creation sets is a live field of a
+/// running vehicle, and this applies the same conversion the create path
+/// does. The current RPM is not re-clamped: narrowing min_rpm/max_rpm leaves
+/// it outside the new range until zjoltVehicleConstraintEngineClampRPM.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintSetEngineDesc(
+    ZJoltVehicleConstraint *constraint, const ZJoltVehicleEngineDesc *desc);
+
 /// Everything about the transmission except its gear ratio arrays (see
 /// zjoltVehicleConstraintGetGearRatios), read from the live
 /// VehicleTransmission. `out->forward_gear_ratios`/`reverse_gear_ratios` are
@@ -509,6 +518,16 @@ ZJOLT_API ZJoltResult zjoltVehicleConstraintGetEngineDesc(
 /// entry point has no caller buffer to point them at.
 ZJOLT_API ZJoltResult zjoltVehicleConstraintGetTransmissionDesc(
     const ZJoltVehicleConstraint *constraint, ZJoltVehicleTransmissionDesc *out);
+
+/// The writable half of the pair, on the same terms:
+/// JPH::VehicleTransmission derives from VehicleTransmissionSettings. The
+/// gear-ratio arrays are borrowed for the duration of the call exactly as at
+/// creation, and NULL (or a 0 count) leaves the ratios already in place
+/// rather than clearing them — which is what makes a read-modify-write of the
+/// struct zjoltVehicleConstraintGetTransmissionDesc fills round-trip.
+ZJOLT_API ZJoltResult zjoltVehicleConstraintSetTransmissionDesc(
+    ZJoltVehicleConstraint *constraint,
+    const ZJoltVehicleTransmissionDesc *desc);
 
 /// The transmission's forward and reverse gear ratios, count-then-fill:
 /// `out_forward`/`out_reverse` NULL (or a short capacity) reports the true
