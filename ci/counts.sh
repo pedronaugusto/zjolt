@@ -82,6 +82,36 @@ count_abi_table_rows() {
 }
 
 #===----------------------------------------------------------------------===//
+# Coverage of Jolt
+#===----------------------------------------------------------------------===//
+
+# tools/coverage.sh's TOTAL line, as two shell variables. The walk it does
+# reads every Jolt header and takes tens of seconds, so it runs once per shell
+# and the answer is remembered; a file cache would be a second copy of the
+# number, free to go stale, which is the defect this file exists to prevent.
+load_coverage_totals() {
+  [ -n "${coverage_names_spelled:-}" ] && return 0
+  local line
+  line=$(tools/coverage.sh | awk '/^  TOTAL/ { print $2, $3 }')
+  coverage_names_spelled=${line%% *}
+  coverage_names_public=${line##* }
+}
+
+# Ledger lines carrying one verdict. ci/check-coverage.sh has already proved
+# every line well formed, every verdict known, and the set equal to what
+# tools/coverage.sh printed; this only tallies what it validated.
+count_verdict() {
+  awk -F'\t' -v want="$1" '
+    /^#/ || !NF { next }
+    $3 == want { n++ }
+    END { print n + 0 }' tools/unbound_*.txt
+}
+
+count_verdicts_total() {
+  awk -F'\t' '/^#/ || !NF { next } { n++ } END { print n + 0 }' tools/unbound_*.txt
+}
+
+#===----------------------------------------------------------------------===//
 # The guards
 #===----------------------------------------------------------------------===//
 

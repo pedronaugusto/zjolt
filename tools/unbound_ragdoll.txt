@@ -9,5 +9,4 @@
 #   INTERNAL   upstream marks it internal, or it has no public declaration.
 #              tools/classify.sh computes this; nothing else may claim it.
 #   GAP        work. ci/check-coverage.sh fails while any remain.
-Physics/Ragdoll	AdditionalConstraint	BOUND	zjoltRagdollGetBodyIds zjoltConstraintCreateFixed zjoltConstraintAdd ZJoltRagdollConstraintDesc zjoltConstraintRemove zjoltRagdollRelease
 Physics/Ragdoll	GetBodyCount	BOUND	zjoltRagdollGetBodyIds

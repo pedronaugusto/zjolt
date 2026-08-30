@@ -59,3 +59,15 @@ match($0, /[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(/) {
   for (i = 1; i <= top; i++) if (!acc[i]) { pub = 0; break }
   print n "\t" (pub ? "public" : "nonpublic")
 }
+
+# A data member, which no `name(` match can see: Jolt names every one
+# mSomething, and a *Settings type's fields are its whole API. Recorded
+# without the prefix, the same spelling tools/coverage.sh harvests. A line
+# carrying a paren is a method or an initialiser call, and the rule above
+# already answered for those.
+index($0, "(") == 0 && match($0, /[^A-Za-z0-9_]m[A-Z][A-Za-z0-9_]*/) {
+  n = substr(substr($0, RSTART+1, RLENGTH-1), 2)
+  pub = 1
+  for (i = 1; i <= top; i++) if (!acc[i]) { pub = 0; break }
+  print n "\t" (pub ? "public" : "nonpublic")
+}

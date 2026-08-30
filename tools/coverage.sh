@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
-# zjolt — which public Jolt names in the claimed areas no entry point spells
-# out. A work list, not a score: name matching is naive on purpose, and
-# ci/check-coverage.sh is what holds every name it prints to a verdict.
+# zjolt — which public Jolt names in the claimed areas nothing in ffi/*.h
+# spells out: methods and free functions, and the public DATA MEMBERS of
+# Jolt's *Settings types, which are an API no method reaches. A work list, not
+# a score: name matching is naive on purpose, and ci/check-coverage.sh is what
+# holds every name it prints to a verdict.
 #
 #   tools/coverage.sh                 # summary per area
 #   tools/coverage.sh Constraints     # and the unbound names in that area
@@ -40,6 +42,16 @@ else B=; D=; G=; Y=; O=; fi
 # at camelCase boundaries.
 bound=$(grep -ho 'zjolt[A-Za-z0-9_]*(' ffi/*.h |
         grep -o 'zjolt[A-Za-z0-9_]*' | sort -u)
+
+# Every declarator name in ffi/*.h — a struct field or a function parameter,
+# taken as an identifier sitting immediately before `,` `;` `)` or `[`, which
+# is what a declarator ends with and what a type keyword never does. Comments
+# are stripped first: matching prose would let the word "parts" in a sentence
+# vouch for JPH::RagdollSettings::mParts, and a false BOUND is the direction
+# nobody is ever asked about.
+bound_fields=$( { sed -E 's://.*::' ffi/*.h | grep -oE '[ *][a-z][a-z0-9_]*[,;)[]' |
+                    sed -E 's/^[ *]//; s/[,;)[]$//'
+                  printf '%s\n' "$bound"; } | sort -u)
 
 # Public names Jolt declares in one directory: methods, and — unlike a
 # class-only API — free functions declared straight in a namespace, which is
@@ -101,7 +113,62 @@ jolt_methods() {
   ' 2>/dev/null | sort -u
 }
 
-# Match a batch of upstream names against `bound` in one awk pass.
+# Public data members of Jolt's *Settings types, in one directory.
+#
+# `mMaxSteerAngle` is reachable through no method at all, so jolt_methods above
+# cannot see it: a settings object IS Jolt's public-field API for a subsystem,
+# and harvesting only `name(` left every one of those fields outside the
+# coverage claim. Names come out with Jolt's `m` prefix stripped, because that
+# is the part zjolt's own field names correspond to.
+jolt_settings_fields() {
+  find "$JOLT/$1" -maxdepth "${2:-99}" -name '*.h' 2>/dev/null -print0 | xargs -0 awk '
+    FNR == 1 { settings = 0; pub = 0; depth = 0; opened = 0; in_comment = 0 }
+    # Strip /* */ spans, the same way jolt_methods does.
+    {
+      line = $0
+      if (in_comment) {
+        p = index(line, "*/")
+        if (p == 0) next
+        line = substr(line, p + 2); in_comment = 0
+      }
+      while ((a = index(line, "/*")) > 0) {
+        rest = substr(line, a + 2)
+        b = index(rest, "*/")
+        if (b == 0) { line = substr(line, 1, a - 1); in_comment = 1; break }
+        line = substr(line, 1, a - 1) substr(rest, b + 2)
+      }
+      $0 = line
+    }
+    /^[[:space:]]*\/\// { next }
+    # A settings type at namespace scope. A class starts private, a struct
+    # public. `struct PhysicsSettings;` is a forward declaration, not a
+    # definition: taking it for one latched the harvester on for the rest of
+    # the file and reported the next class private members as settings fields.
+    !settings && match($0, /^(class|struct)[[:space:]]+([A-Z_]+[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*Settings[A-Za-z0-9_]*/) {
+      if (index($0, ";") > 0 && index($0, "{") == 0) next
+      settings = 1; pub = ($0 ~ /^struct/); depth = 0; opened = 0
+    }
+    !settings { next }
+    /^[[:space:]]*(private|protected):/ { pub = 0; next }
+    /^[[:space:]]*public:/              { pub = 1; next }
+    {
+      n = gsub(/{/, "{") - gsub(/}/, "}")
+      if (n != 0) opened = 1
+      depth += n
+      if (opened && depth <= 0) { settings = 0; next }
+    }
+    !pub { next }
+    # Jolt names every data member mSomething. A line carrying a paren is a
+    # method, a constructor, or a field whose default is a call — only the last
+    # is a field, and skipping all three keeps this harvest from re-reporting
+    # what jolt_methods already covers. Stated as a blind spot in README.
+    index($0, "(") == 0 && match($0, /[^A-Za-z0-9_]m[A-Z][A-Za-z0-9_]*/) {
+      print substr(substr($0, RSTART + 1, RLENGTH - 1), 2)
+    }
+  ' 2>/dev/null | sort -u
+}
+
+# Match a batch of upstream names against a bound-name list in one awk pass.
 #
 # Both sides are split into words at camelCase boundaries and underscores, and
 # an upstream name matches when its words appear as an ordered subsequence of
@@ -140,8 +207,10 @@ match_names() {
   ' "$1" -
 }
 
-boundfile=$(mktemp); trap 'rm -f "$boundfile"' EXIT
+boundfile=$(mktemp); fieldfile=$(mktemp)
+trap 'rm -f "$boundfile" "$fieldfile"' EXIT
 printf '%s\n' "$bound" > "$boundfile"
+printf '%s\n' "$bound_fields" > "$fieldfile"
 
 if [ "$NAMES" -eq 0 ]; then
   printf '%szjolt coverage of Jolt%s  %s(by name; a work list, not a score)%s\n\n' \
@@ -156,10 +225,13 @@ do
   depth=${spec#*:}; [ "$depth" = "$area" ] && depth=99
   [ -d "$JOLT/$area" ] || continue
   methods=$(jolt_methods "$area" "$depth")
-  [ -z "$methods" ] && continue
+  fields=$(jolt_settings_fields "$area" "$depth")
+  [ -z "$methods" ] && [ -z "$fields" ] && continue
 
-  unbound=$(printf '%s\n' "$methods" | match_names "$boundfile")
-  p=$(printf '%s\n' "$methods" | grep -c .)
+  unbound=$( { printf '%s\n' "$methods" | match_names "$boundfile"
+               printf '%s\n' "$fields"  | match_names "$fieldfile"; } |
+             grep . | sort -u)
+  p=$(printf '%s\n%s\n' "$methods" "$fields" | grep -c .)
   u=$(printf '%s\n' "$unbound" | grep -c .)
   b=$((p - u))
 
@@ -184,6 +256,8 @@ printf '\n  %-34s %8d %8d %5d%%\n' "TOTAL" "$total_b" "$total_p" \
   "$(( total_p == 0 ? 0 : total_b * 100 / total_p ))"
 printf '\n  %sentry points exported: %s%s\n' "$D" \
   "$(printf '%s\n' "$bound" | grep -c .)" "$O"
+printf '  %ssettings fields counted too; a field whose default is a call is not%s\n' \
+  "$D" "$O"
 printf '  %sname matching is naive; %s says what each unbound name really is%s\n' \
   "$D" "ci/check-coverage.sh" "$O"
 printf '  %spass an area name to list what is unbound there%s\n' "$D" "$O"

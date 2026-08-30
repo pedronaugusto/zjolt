@@ -82,6 +82,7 @@ Physics/Constraints	LockAllConstraints	INTERNAL	upstream libs/JoltPhysics/Jolt/P
 Physics/Constraints	MakeFixedAxis	BOUND	ZJoltSixDofConstraintDesc zjoltSixDofConstraintIsFixedAxis
 Physics/Constraints	MakeFreeAxis	BOUND	ZJoltSixDofConstraintDesc zjoltSixDofConstraintIsFreeAxis
 Physics/Constraints	OnCCDContactAdded	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
+Physics/Constraints	PositionMotorSettings	BOUND	ZJoltPathConstraintDesc zjoltPathConstraintGetMotorSettings
 Physics/Constraints	PrepareConstraintBuffer	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
 Physics/Constraints	RecycleConstraintBuffer	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Constraints/ContactConstraintManager.h:31 (file)
 Physics/Constraints	SetConstraintPriority	BOUND	zjoltConstraintSetPriority

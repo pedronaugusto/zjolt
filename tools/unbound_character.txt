@@ -31,6 +31,7 @@ Physics/Character	GetHash	LANGUAGE	std.hash.Wyhash
 Physics/Character	GetInnerBodyPosition	INTERNAL	no public declaration
 Physics/Character	HandleContact	INTERNAL	no public declaration
 Physics/Character	HashBytes	LANGUAGE	std.hash.Wyhash
+Physics/Character	InnerBodyIDOverride	BOUND	ZJoltCharacterDesc zjoltCharacterGetInnerBodyId
 Physics/Character	IsSameBody	BOUND	ZJoltCharacterContact
 Physics/Character	ListenerContactValue	EXTENSION	ZJoltCharacterContactListenerCallbacks ZJoltCharacterContactSettings
 Physics/Character	MoveShape	INTERNAL	no public declaration

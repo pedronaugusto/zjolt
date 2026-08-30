@@ -274,7 +274,9 @@ if [ "$LIST" -eq 1 ] && [ -s "$work/open" ]; then
 fi
 
 callable_names=$(grep -c . "$work/entrypoints")
-read -r spelled public <<<"$(tools/coverage.sh | awk '/^  TOTAL/{print $2, $3}')"
+load_coverage_totals
+spelled=$coverage_names_spelled
+public=$coverage_names_public
 printf '%szjolt coverage%s\n' "$BOLD" "$OFF"
 printf '  %-30s %5d\n' 'entry points exported' "$(count_api_decls)"
 printf '  %-30s %5d\n' 'callable names checked' "$callable_names"

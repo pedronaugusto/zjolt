@@ -142,6 +142,16 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   were stale.
 - `ci/counts.sh` is the single home for every count formula; the three scripts
   that quote one now source it instead of recomputing it.
+- `tools/coverage.sh` harvests the public data members of Jolt's `*Settings`
+  types as well as its methods, and matches them against the declarator names
+  in `ffi/*.h`. A settings object is the whole public API of several
+  subsystems and reaches no method, so every one of those fields sat outside
+  the coverage claim. `tools/jolt_access.awk` learned the same rule, so
+  `INTERNAL` stays recomputed rather than asserted for a field.
+- The README's completeness claim states the recomputed figures — public
+  names, how many an entry point spells out, and the tally per verdict — with
+  the blind spots of the count beside them. `ci/check-numbers.sh` gates every
+  one, and checks that the two halves still add to the whole.
 - `zjoltVehicleConstraintGetGearRatio` was documented as returning the gear
   ratio times the differential ratio. It returns the gear ratio alone.
 

@@ -91,6 +91,12 @@ abi_options=$(count_abi_config_bits)
 abi_rows=$(count_abi_table_rows)
 version=$(version_triple)
 
+# The coverage tally. load_coverage_totals walks every Jolt header once, which
+# is the slowest thing this script does and the reason the figures it feeds
+# are worth gating: a hand-typed one would never be re-derived.
+load_coverage_totals
+verdict_rows=$(count_verdicts_total)
+
 vehicle_points=$(count_api_decls_in ffi/zjolt_vehicle.h)
 ragdoll_points=$(count_api_decls_in ffi/zjolt_ragdoll.h)
 softbody_points=$(count_api_decls_in ffi/zjolt_softbody.h)
@@ -127,6 +133,17 @@ claim 'README reflective sweeps' README.md \
 claim 'README ABI-changing options' README.md \
   'Exactly [0-9]+ rows change the ABI' "$abi_options"
 
+claim 'README public Jolt names' README.md \
+  '\*\*[0-9]+ public Jolt names\*\*' "$coverage_names_public"
+claim 'README names spelled out by an entry point' README.md \
+  '\*\*[0-9]+ are spelled out by an entry point\*\*' "$coverage_names_spelled"
+claim 'README names carrying a verdict' README.md \
+  '\*\*[0-9]+ carry a recorded verdict\*\*' "$verdict_rows"
+for verdict in BOUND EXTENSION INTERNAL LANGUAGE ZIG GAP; do
+  claim "README $verdict verdicts" README.md \
+    "\*\*[0-9]+ \`$verdict\`\*\*" "$(count_verdict "$verdict")"
+done
+
 claim 'BINDING C declaration modules' BINDING.md \
   'list of [0-9]+ modules' "$c_modules"
 
@@ -144,6 +161,19 @@ claim 'ci/run.sh translation units' ci/run.sh \
   '[0-9]+ translation units' "$total_tu"
 claim 'ci/run.sh mutation label' ci/run.sh \
   'guard mutations \([0-9]+\)' "$all_mutations"
+
+# Not a claim in a document either: the two halves of the coverage tally
+# against the total they are halves of. A ledger line deleted along with the
+# name it answered for keeps both claims above true and this one false.
+if [ "$((coverage_names_spelled + verdict_rows))" != "$coverage_names_public" ]; then
+  printf '  %s%-44s %s + %s is not %s%s\n' \
+    "$RED" 'coverage tally adds up' "$coverage_names_spelled" "$verdict_rows" \
+    "$coverage_names_public" "$OFF" >&2
+  fails=$((fails + 1))
+else
+  printf '  %-44s %s%s%s\n' 'coverage tally adds up' \
+    "$DIM" "$coverage_names_public" "$OFF"
+fi
 
 # Not a claim in a document: the document's TABLE against the same count the
 # claim above was checked against.

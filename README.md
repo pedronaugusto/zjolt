@@ -670,9 +670,52 @@ entity system, an asset format, and any coupling to a particular renderer.
 Debug geometry comes out as data for the host to draw. Those are a host's job,
 and keeping them out is what makes this package reusable.
 
-There are no known coverage gaps: `ci/check-coverage.sh` fails the build while
-any public Jolt name in the claimed areas lacks a verdict, and it recomputes
-every exclusion from Jolt's own headers on each run. Design decisions that stay settled are recorded at the end of
+### How complete that is, as a number
+
+`tools/coverage.sh` walks Jolt's own headers and counts what is there;
+`ci/check-coverage.sh` fails the build while any name it prints lacks a
+verdict, and `ci/check-numbers.sh` fails it while any figure below disagrees
+with a fresh run. No number here is typed by hand.
+
+The claimed areas hold **2682 public Jolt names** — every method, every free
+function, and every public data member of a `*Settings` type, which is an API
+no method reaches. **1359 are spelled out by an entry point** of a matching
+name. The other **1323 carry a recorded verdict** in `tools/unbound_*.txt`,
+one line each with its evidence: **605 `BOUND`** (the effect is reachable, by
+another name), **198 `EXTENSION`** (a seam the host implements instead),
+**214 `INTERNAL`** (not public in Jolt either — recomputed by
+`tools/classify.sh`, never asserted), **190 `LANGUAGE`** (Zig has it already),
+**116 `ZIG`** (ported to Zig rather than bound), and **0 `GAP`**. A `GAP` fails
+the build, so the last figure is the only one it can be.
+
+What those numbers do **not** say, because a completeness figure with no
+stated blind spots is worse than none:
+
+- **Matching is by name, not by behaviour.** A name counts as spelled out when
+  its camelCase words appear in order inside an entry point's. That is
+  deliberately strict in the safe direction — a renamed binding reads as
+  unbound and has to earn a ledger line — but a coincidental word match reads
+  as covered, and nothing here compares semantics.
+- **`BOUND` means the effect is reachable through the entry points its
+  evidence names, not that the upstream symbol itself crosses the ABI.**
+  `Skeleton::CalculateParentJointIndices` is `BOUND` because
+  `zjoltSkeletonAddJoint` sets what it would compute, not because it is
+  callable.
+- **The evidence is checked for existence, not for correctness.** A `BOUND` or
+  `EXTENSION` line must name a symbol that really is in `ffi/*.h`, a `ZIG`
+  line must point at a declaration that really is in `src/`, and `INTERNAL` is
+  recomputed rather than believed — but none of that proves the binding
+  behaves like Jolt's. The tests do that, and they reach far fewer names.
+- **The harvest cannot see everything.** A settings field whose default is a
+  call carries a paren and is read as a method; operators, macros and
+  `JPH_`-prefixed declarations are skipped; so are names under four
+  characters. Each exclusion is in `tools/coverage.sh` beside the code that
+  applies it.
+- **Only `libs/JoltPhysics/Jolt` is counted.** A Jolt directory missing from
+  the claimed list fails the build, so the denominator cannot quietly shrink —
+  but Jolt's samples and test framework are not counted at all.
+
+Design decisions that stay settled are recorded at the end of
 [BINDING.md](BINDING.md).
 
 ## Contributing

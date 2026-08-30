@@ -9,6 +9,7 @@
 #   INTERNAL   upstream marks it internal, or it has no public declaration.
 #              tools/classify.sh computes this; nothing else may claim it.
 #   GAP        work. ci/check-coverage.sh fails while any remain.
+Physics/Hair	EndVtx	BOUND	ZJoltHairStrand zjoltHairGetSimulatedStrands
 Physics/Hair	GetAngularVelocities	BOUND	zjoltHairReadBackVertexState ZJoltHairVertexState
 Physics/Hair	GetGridVelocityAndDensity	BOUND	zjoltHairLockReadBackBuffers
 Physics/Hair	GetHairSettings	BOUND	zjoltHairGetInfo ZJoltHairInfo
@@ -27,21 +28,45 @@ Physics/Hair	GetVelocityAndDensityCB	EXTENSION	ZJoltComputeInterface
 Physics/Hair	GlobalPoseOnly	BOUND	ZJoltHairMaterial
 Physics/Hair	GradientSampler	BOUND	zjoltHairGradientSample zjoltHairCreate
 Physics/Hair	GridSampler	BOUND	zjoltHairPositionToGridIndex
+Physics/Hair	GridSizeMin1	BOUND	zjoltHairPositionToGridIndex zjoltHairGradientSample
+Physics/Hair	GridSizeMin2	BOUND	zjoltHairPositionToGridIndex zjoltHairGradientSample
+Physics/Hair	GridStride	BOUND	zjoltHairPositionToGridIndex zjoltHairGradientSample
 Physics/Hair	InitCompute	BOUND	zjoltHairCreate zjoltHairCreateFromGroom
 Physics/Hair	InitRenderAndSimulationStrands	BOUND	zjoltHairCreate
 Physics/Hair	InitializeContext	INTERNAL	no public declaration
 Physics/Hair	MakeStepDependent	ZIG	src/c/hair.zig:HairGradient.makeStepDependent
 Physics/Hair	MeasureLength	ZIG	src/c/hair.zig:HairStrand.measureLength
 Physics/Hair	NeedsGrid	ZIG	src/c/hair.zig:HairMaterial.needsGrid
+Physics/Hair	NeutralDensityCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	NumIterationsPerSecond	BOUND	ZJoltHairDesc
 Physics/Hair	PositionToIndexAndFraction	BOUND	zjoltHairPositionToGridIndex
 Physics/Hair	PrepareForScalpSkinning	BOUND	zjoltHairUpdate zjoltHairSkinScalpVertices
 Physics/Hair	RStrand	BOUND	ZJoltHairStrand ZJoltHairDesc zjoltHairReadBackRenderPositions
 Physics/Hair	ReadBackGPUState	BOUND	zjoltHairReadBackPositions zjoltHairReadBackRenderPositions zjoltHairReadBackScalpVertices zjoltHairReadBackVertexState zjoltHairLockReadBackBuffers
 Physics/Hair	RegisterHair	BOUND	zjoltInit
+Physics/Hair	RenderStrands	BOUND	ZJoltHairDesc zjoltHairGetInfo
+Physics/Hair	RenderVertices	BOUND	ZJoltHairDesc zjoltHairReadBackRenderPositions
 Physics/Hair	SStrand	BOUND	zjoltHairGetSimulatedStrands ZJoltHairStrand
 Physics/Hair	SVertex	BOUND	ZJoltHairVertex
 Physics/Hair	SVertexInfluence	BOUND	zjoltHairCreate zjoltHairCreateFromGroom
+Physics/Hair	SVertexInfluencesCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	ScalpNumSkinWeightsPerVertex	BOUND	ZJoltHairDesc zjoltHairSkinScalpVertices
+Physics/Hair	ScalpSkinWeightsCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	ScalpTrianglesCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	ScalpVerticesCB	EXTENSION	ZJoltComputeInterface
 Physics/Hair	SetScalpToHead	EXTENSION	ZJoltComputeInterface
 Physics/Hair	SetScalpTrianglesCB	EXTENSION	ZJoltComputeInterface
 Physics/Hair	SetScalpVerticesCB	EXTENSION	ZJoltComputeInterface zjoltHairCreate
+Physics/Hair	SimStrands	BOUND	zjoltHairGetSimulatedStrands ZJoltHairStrand
+Physics/Hair	SimVertices	BOUND	zjoltHairGetSimulatedVertices ZJoltHairSimVertex
+Physics/Hair	SkinPointsCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	StartVtx	BOUND	ZJoltHairStrand zjoltHairGetSimulatedStrands
+Physics/Hair	StrandMaterialIndexCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	StrandVertexCountsCB	EXTENSION	ZJoltComputeInterface
 Physics/Hair	VertexCount	BOUND	ZJoltHairStrand zjoltHairGetSimulatedStrands
+Physics/Hair	VerticesBishopCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	VerticesFixedCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	VerticesLengthCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	VerticesOmega0CB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	VerticesPositionCB	EXTENSION	ZJoltComputeInterface
+Physics/Hair	VerticesStrandFractionCB	EXTENSION	ZJoltComputeInterface
