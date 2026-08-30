@@ -34,7 +34,7 @@ cross-check makes any drift between the header and the Zig side a build
 failure, and there are no compatibility aliases anywhere, so there is exactly
 one spelling of everything.
 
-Working today: every Jolt subsystem, across **1406 C entry points** — shapes,
+Working today: every Jolt subsystem, across **1417 C entry points** — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,
 ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 [Scope](#scope) for what that covers and what is deliberately left out.
@@ -581,7 +581,7 @@ measurement said so.
 
 ## Scope
 
-Every Jolt subsystem is bound: **1406 C entry points** across **25 headers**,
+Every Jolt subsystem is bound: **1417 C entry points** across **25 headers**,
 each one mirrored by a Zig wrapper that a reflective cross-check pairs at build
 time. Not one entry point is stranded — `tools/zig_surface_exceptions.txt` is
 empty, and `ci/check-coverage.sh` fails both if an entry point loses its Zig

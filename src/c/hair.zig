@@ -182,6 +182,7 @@ pub const HairInfo = extern struct {
     grid_size_y: u32,
     grid_size_z: u32,
     max_root_distance_to_scalp: f32,
+    density_scale: f32,
 };
 
 pub const HairGridCell = extern struct {
@@ -261,6 +262,35 @@ pub extern fn zjoltHairReadBackVertexState(hair: *Hair, out_state: ?[*]HairVerte
 pub extern fn zjoltHairGetSimulatedStrands(hair: *const Hair, out_strands: ?[*]HairStrand, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltHairGetInfo(hair: *const Hair, out: *HairInfo) Result;
+
+pub const hair_influences_per_render_vertex: u32 = 3;
+pub const hair_no_influence: u32 = 0xffff_ffff;
+
+pub const HairSimVertex = extern struct {
+    position: Vec3,
+    inv_mass: f32,
+    length: f32,
+    strand_fraction: f32,
+    bishop: Quat,
+    omega0: Quat,
+};
+
+pub const HairSVertexInfluence = extern struct {
+    vertex_index: u32,
+    relative_position: Vec3,
+    weight: f32,
+};
+
+pub const HairSkinPoint = extern struct {
+    triangle_index: u32,
+    u: f32,
+    v: f32,
+    to_bishop: Quat,
+};
+
+pub extern fn zjoltHairGetSimulatedVertices(hair: *const Hair, out_vertices: ?[*]HairSimVertex, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltHairGetRenderVertexInfluences(hair: *const Hair, out_influences: ?[*]HairSVertexInfluence, capacity: u32, out_count: *u32) Result;
+pub extern fn zjoltHairGetSkinPoints(hair: *const Hair, out_points: ?[*]HairSkinPoint, capacity: u32, out_count: *u32) Result;
 
 pub extern fn zjoltHairLockReadBackBuffers(hair: *Hair, out: *HairReadBackView) Result;
 

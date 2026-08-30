@@ -37,6 +37,16 @@ pub const Gradient = c.HairGradient;
 pub const SkinWeight = c.HairSkinWeight;
 pub const Material = c.HairMaterial;
 pub const VertexState = c.HairVertexState;
+pub const SimVertex = c.HairSimVertex;
+pub const SVertexInfluence = c.HairSVertexInfluence;
+pub const SkinPoint = c.HairSkinPoint;
+
+/// Influences per render vertex, Jolt's `cHairNumSVertexInfluences`. A fixed
+/// limit of upstream's, not of zjolt's.
+pub const influences_per_render_vertex = c.hair_influences_per_render_vertex;
+
+/// `SVertexInfluence.vertex_index` for a slot that carries nothing.
+pub const no_influence = c.hair_no_influence;
 pub const Info = c.HairInfo;
 
 /// One velocity/density grid cell, as `Hair.lockReadBack` reports it: velocity
@@ -714,6 +724,76 @@ pub const Hair = struct {
         return count;
     }
 
+    /// How many entries `simulatedVertices` would write.
+    pub fn simulatedVertexCount(self: Hair) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetSimulatedVertices(self.handle, null, 0, &count));
+        return count;
+    }
+
+    /// The simulated groom as `init` derived it: modelled position, inverse
+    /// mass, rest length to the next vertex, fraction along the strand, and
+    /// the rest Bishop frame and twist. None of it is recoverable from what
+    /// was passed in, and `readBackPositions` gives only the live positions.
+    /// Cheap: reads the groom, not the device.
+    pub fn simulatedVertices(self: Hair, out: []SimVertex) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetSimulatedVertices(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return count;
+    }
+
+    /// How many entries `renderVertexInfluences` would write —
+    /// `influences_per_render_vertex` times the render vertex count.
+    pub fn renderVertexInfluenceCount(self: Hair) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetRenderVertexInfluences(self.handle, null, 0, &count));
+        return count;
+    }
+
+    /// The interpolation `readBackRenderPositions` applies:
+    /// `influences_per_render_vertex` entries per render vertex, in render
+    /// vertex order. A slot whose `vertex_index` is `no_influence` carries
+    /// nothing.
+    pub fn renderVertexInfluences(self: Hair, out: []SVertexInfluence) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetRenderVertexInfluences(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return count;
+    }
+
+    /// How many entries `skinPoints` would write — one per simulated strand.
+    /// `error.Unsupported` for a groom with no scalp.
+    pub fn skinPointCount(self: Hair) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetSkinPoints(self.handle, null, 0, &count));
+        return count;
+    }
+
+    /// Where each simulated strand's root was matched onto the scalp mesh, in
+    /// `simulatedStrands` order. `error.Unsupported` for a scalp-less groom:
+    /// a strand attached to nothing has no skin point rather than a zeroed
+    /// one. @see `Info.max_root_distance_to_scalp` for how far the worst
+    /// match moved.
+    pub fn skinPoints(self: Hair, out: []SkinPoint) err.Error!u32 {
+        var count: u32 = 0;
+        try err.check(c.zjoltHairGetSkinPoints(
+            self.handle,
+            out.ptr,
+            @intCast(out.len),
+            &count,
+        ));
+        return count;
+    }
+
     /// What `init` made of the groom — the counts, the grid, and the bounds
     /// Jolt derived, not the ones that went in. `max_root_distance_to_scalp` is
     /// the one to check first on an authoring-tool groom: Jolt projects every
@@ -1303,6 +1383,23 @@ test "a scalp carries the roots, and the skinned scalp is what says so" {
 
     try std.testing.expectEqual(@as(u32, 3), try hair.scalpVertexCount());
 
+    // Both roots sit inside the one triangle, so both skin points name it and
+    // their barycentric weights are the exact solution of
+    // root = u*v0 + v*v1 + (1 - u - v)*v2 for the two authored roots.
+    var points: [2]SkinPoint = undefined;
+    try std.testing.expectEqual(@as(u32, 2), try hair.skinPointCount());
+    try std.testing.expectEqual(@as(u32, 2), try hair.skinPoints(&points));
+    for (points) |point| {
+        try std.testing.expectEqual(@as(u32, 0), point.triangle_index);
+        const q = point.to_bishop;
+        const length_sq = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+        try std.testing.expectApproxEqAbs(@as(f32, 1), length_sq, 1.0e-3);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), points[0].u, 1.0e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), points[0].v, 1.0e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 6.0), points[1].u, 1.0e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 3.0), points[1].v, 1.0e-4);
+
     // The rest pose skins the scalp to where it was modelled.
     try hair.setPose(&identity, &.{identity});
     try hair.update(system, 1.0 / 60.0);
@@ -1339,6 +1436,142 @@ test "a scalp carries the roots, and the skinned scalp is what says so" {
     });
     defer bald.deinit();
     try std.testing.expectEqual(@as(u32, 0), try bald.scalpVertexCount());
+    // And a strand attached to nothing has no skin point, rather than a
+    // zeroed one that reads as "attached to triangle 0".
+    try std.testing.expectError(error.Unsupported, bald.skinPointCount());
+}
+
+test "the derived groom crosses: rest lengths, strand fractions, frames and influences" {
+    if (!isCpuSupported()) return error.SkipZigTest;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    var bridged = @import("memory.zig").bridge(gpa.allocator());
+    var init_desc: c.InitDesc = .{ .allocator = &bridged };
+    try std.testing.expectEqual(
+        c.Result.ok,
+        c.zjoltInitWithConfig(&init_desc, c.config_id),
+    );
+    defer c.zjoltDeinit();
+
+    const compute = try ComputeSystem.initCpu();
+    defer compute.deinit();
+
+    const groom = testGroom();
+    const hair = try Hair.init(compute, .{
+        .vertices = &groom.vertices,
+        .strands = &groom.strands,
+        .materials = &.{groom.material},
+        .simulation_bounds_padding = math.vec3(0.5, 0.5, 0.5),
+        .grid_size = .{ 4, 5, 6 },
+        .object_layer = TestLayers.moving,
+    });
+    defer hair.deinit();
+
+    var strands: [2]Strand = undefined;
+    _ = try hair.simulatedStrands(&strands);
+
+    var vertices: [7]SimVertex = undefined;
+    try std.testing.expectEqual(@as(u32, 7), try hair.simulatedVertexCount());
+    try std.testing.expectEqual(@as(u32, 7), try hair.simulatedVertices(&vertices));
+
+    for (strands) |strand| {
+        // A root is pinned by inv_mass, which is what the solver's fixed-vertex
+        // buffer is built from; the rest are free.
+        try std.testing.expectEqual(@as(f32, 0), vertices[strand.start_vertex].inv_mass);
+        try std.testing.expect(vertices[strand.start_vertex + 1].inv_mass > 0);
+
+        // 0 at the root, 1 at the tip, strictly increasing between.
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 0),
+            vertices[strand.start_vertex].strand_fraction,
+            1.0e-5,
+        );
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 1),
+            vertices[strand.end_vertex - 1].strand_fraction,
+            1.0e-5,
+        );
+        var i = strand.start_vertex + 1;
+        while (i < strand.end_vertex) : (i += 1) {
+            try std.testing.expect(
+                vertices[i].strand_fraction > vertices[i - 1].strand_fraction,
+            );
+        }
+
+        // testGroom spaces every vertex 0.1 apart, so every rest length is
+        // that — measured by Jolt, not echoed from the desc, which carries no
+        // length at all. The last vertex of a strand starts no rod.
+        i = strand.start_vertex;
+        while (i + 1 < strand.end_vertex) : (i += 1) {
+            try std.testing.expectApproxEqAbs(@as(f32, 0.1), vertices[i].length, 1.0e-5);
+        }
+        try std.testing.expectEqual(@as(f32, 0), vertices[strand.end_vertex - 1].length);
+    }
+
+    // Every frame is a usable rotation, and the first rod of a strand has no
+    // previous rod to twist against.
+    for (vertices) |v| {
+        const b = v.bishop;
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 1),
+            b.x * b.x + b.y * b.y + b.z * b.z + b.w * b.w,
+            1.0e-3,
+        );
+        const o = v.omega0;
+        try std.testing.expectApproxEqAbs(
+            @as(f32, 1),
+            o.x * o.x + o.y * o.y + o.z * o.z + o.w * o.w,
+            1.0e-3,
+        );
+    }
+
+    // Every strand here is simulated, so each render vertex is carried by the
+    // simulated vertex it IS, at weight 1 and no offset, and its other two
+    // slots are empty. A groom with interpolated strands spreads the weight.
+    const groom_info = try hair.info();
+    var influences: [7 * influences_per_render_vertex]SVertexInfluence = undefined;
+    try std.testing.expectEqual(
+        @as(u32, 7 * influences_per_render_vertex),
+        try hair.renderVertexInfluenceCount(),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 7 * influences_per_render_vertex),
+        try hair.renderVertexInfluences(&influences),
+    );
+    for (0..groom_info.render_vertex_count) |render_index| {
+        var total: f32 = 0;
+        for (0..influences_per_render_vertex) |slot| {
+            const inf = influences[render_index * influences_per_render_vertex + slot];
+            if (inf.vertex_index == no_influence) {
+                try std.testing.expectEqual(@as(f32, 0), inf.weight);
+                continue;
+            }
+            try std.testing.expect(inf.vertex_index < groom_info.simulated_vertex_count);
+            total += inf.weight;
+        }
+        try std.testing.expectApproxEqAbs(@as(f32, 1), total, 1.0e-4);
+    }
+
+    // density_scale is 1 / the largest neutral-density cell, so scaling that
+    // cell by it gives exactly 1 — which is what says it is the reciprocal
+    // rather than the maximum itself.
+    var peak: f32 = 0;
+    for (0..groom_info.grid_size_z) |z| {
+        for (0..groom_info.grid_size_y) |y| {
+            for (0..groom_info.grid_size_x) |x| {
+                const d = try hair.neutralDensity(
+                    @intCast(x),
+                    @intCast(y),
+                    @intCast(z),
+                );
+                peak = @max(peak, d);
+            }
+        }
+    }
+    try std.testing.expect(peak > 0);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), peak * groom_info.density_scale, 1.0e-4);
 }
 
 test "the authored gradients and compliance curve evaluate the way the solver reads them" {

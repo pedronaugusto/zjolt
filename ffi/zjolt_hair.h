@@ -482,12 +482,101 @@ typedef struct ZJoltHairInfo {
   /// failing. 0 for a scalp-less groom, or one restored from a blob
   /// predating this field.
   float max_root_distance_to_scalp;
+  /// HairSettings::mDensityScale: the RECIPROCAL of the largest cell value
+  /// in the neutral density grid, so multiplying zjoltHairGetNeutralDensity
+  /// or a grid cell's `density` by it maps the grid onto 0..1. Exactly 0,
+  /// not infinity, for a groom with no density in any cell.
+  float density_scale;
 } ZJoltHairInfo;
 
 /// Fills `out` with what the groom turned into. Cheap; nothing here touches the
 /// device.
 ZJOLT_API ZJoltResult zjoltHairGetInfo(const ZJoltHair *hair,
                                        ZJoltHairInfo *out);
+
+//===----------------------------------------------------------------------===//
+// The groom Jolt derived — HairSettings' own per-vertex arrays.
+//
+// zjoltHairCreate rewrites the authored groom: it picks which strands are
+// simulated, regroups them, measures rest lengths and builds a Bishop frame
+// per vertex, then matches every root to the scalp. None of that is
+// recoverable from what went in, and the solver's own device buffers are
+// filled from it. These are the three arrays that carry it. Two-call
+// protocol, as everywhere else here; no device access.
+//===----------------------------------------------------------------------===//
+
+/// One simulated vertex as HairSettings::Init left it, in the hair's local
+/// space and in the order zjoltHairReadBackPositions reports.
+typedef struct ZJoltHairSimVertex {
+  /// The MODELLED pose, not the simulated one — zjoltHairReadBackPositions
+  /// gives the latter.
+  ZJoltVec3 position;
+  /// 0 pins the vertex, which is how a strand is held by its root.
+  float inv_mass;
+  /// Distance to the next vertex of the unloaded strand; 0 at the last.
+  float length;
+  /// 0 at the strand's root, 1 at its tip.
+  float strand_fraction;
+  /// The rest Bishop frame, orienting the rod starting here.
+  ZJoltQuat bishop;
+  /// Conjugate(previous bishop) * bishop — the unloaded twist between this
+  /// rod and the one before it. Identity at a strand's first vertex.
+  ZJoltQuat omega0;
+} ZJoltHairSimVertex;
+
+ZJOLT_API ZJoltResult zjoltHairGetSimulatedVertices(
+    const ZJoltHair *hair, ZJoltHairSimVertex *out_vertices, uint32_t capacity,
+    uint32_t *out_count);
+
+/// How one simulated vertex carries one render vertex.
+/// ZJOLT_HAIR_NO_INFLUENCE in `vertex_index` means this slot is unused.
+#define ZJOLT_HAIR_NO_INFLUENCE 0xffffffffu
+
+/// Influences per render vertex (Jolt's cHairNumSVertexInfluences). Fixed
+/// upstream, not by zjolt.
+#define ZJOLT_HAIR_INFLUENCES_PER_RENDER_VERTEX 3
+
+typedef struct ZJoltHairSVertexInfluence {
+  /// Index into zjoltHairGetSimulatedVertices' array.
+  uint32_t vertex_index;
+  /// Offset from that simulated vertex to the render vertex, in the
+  /// simulated vertex's own frame.
+  ZJoltVec3 relative_position;
+  /// 0 = not attached, 1 = fully attached.
+  float weight;
+} ZJoltHairSVertexInfluence;
+
+/// The interpolation zjoltHairReadBackRenderPositions applies, laid out
+/// ZJOLT_HAIR_INFLUENCES_PER_RENDER_VERTEX per render vertex — so
+/// `out_count` is that times zjoltHairGetInfo's render_vertex_count, and
+/// `capacity` counts influences rather than vertices.
+ZJOLT_API ZJoltResult zjoltHairGetRenderVertexInfluences(
+    const ZJoltHair *hair, ZJoltHairSVertexInfluence *out_influences,
+    uint32_t capacity, uint32_t *out_count);
+
+/// Where one strand's root sits on the scalp mesh, one per simulated
+/// STRAND, in zjoltHairGetSimulatedStrands' order.
+typedef struct ZJoltHairSkinPoint {
+  /// Which triangle, counting triangles rather than the vertex indices
+  /// zjoltHairCreate's scalp_triangles holds three of per triangle.
+  uint32_t triangle_index;
+  /// Barycentric weights: the root sits at u*v0 + v*v1 + (1-u-v)*v2, where
+  /// v0/v1/v2 are that triangle's vertices in order.
+  float u;
+  float v;
+  /// Rotation from the frame the triangle defines to the strand's first
+  /// Bishop frame. Jolt stores this compressed into 32 bits; what comes back
+  /// here is the quaternion it decompresses to, so it round-trips to about
+  /// that precision rather than exactly.
+  ZJoltQuat to_bishop;
+} ZJoltHairSkinPoint;
+
+/// ZJOLT_RESULT_UNSUPPORTED for a groom with no scalp: a strand with nothing
+/// to attach to has no skin point at all, rather than a zeroed one.
+ZJOLT_API ZJoltResult zjoltHairGetSkinPoints(const ZJoltHair *hair,
+                                             ZJoltHairSkinPoint *out_points,
+                                             uint32_t capacity,
+                                             uint32_t *out_count);
 
 //===----------------------------------------------------------------------===//
 // The raw buffer window: what Lock/UnlockReadBackBuffers guard, zero-copy.

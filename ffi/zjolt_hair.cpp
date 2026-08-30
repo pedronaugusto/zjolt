@@ -1332,7 +1332,104 @@ ZJoltResult zjoltHairGetInfo(const ZJoltHair *hair, ZJoltHairInfo *out) {
   out->grid_size_y = static_cast<uint32_t>(settings->mGridSize.GetY());
   out->grid_size_z = static_cast<uint32_t>(settings->mGridSize.GetZ());
   out->max_root_distance_to_scalp = hair->max_root_distance_to_scalp;
+  out->density_scale = settings->mDensityScale;
   return ZJOLT_RESULT_OK;
+}
+
+//===----------------------------------------------------------------------===//
+// The groom Jolt derived
+//===----------------------------------------------------------------------===//
+
+ZJoltResult zjoltHairGetSimulatedVertices(const ZJoltHair *hair,
+                                          ZJoltHairSimVertex *out_vertices,
+                                          uint32_t capacity,
+                                          uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const uint32_t count = static_cast<uint32_t>(settings->mSimVertices.size());
+  *out_count = count;
+  if (out_vertices == nullptr) return ZJOLT_RESULT_OK;
+
+  const uint32_t n = capacity < count ? capacity : count;
+  for (uint32_t i = 0; i < n; ++i) {
+    const JPH::HairSettings::SVertex &v = settings->mSimVertices[i];
+    zjolt::WriteVec3(&out_vertices[i].position, JPH::Vec3(v.mPosition));
+    out_vertices[i].inv_mass = v.mInvMass;
+    out_vertices[i].length = v.mLength;
+    out_vertices[i].strand_fraction = v.mStrandFraction;
+    zjolt::WriteQuat(&out_vertices[i].bishop,
+                     JPH::Quat(JPH::Vec4::sLoadFloat4(&v.mBishop)));
+    zjolt::WriteQuat(&out_vertices[i].omega0,
+                     JPH::Quat(JPH::Vec4::sLoadFloat4(&v.mOmega0)));
+  }
+
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairGetRenderVertexInfluences(
+    const ZJoltHair *hair, ZJoltHairSVertexInfluence *out_influences,
+    uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  static_assert(cHairNumSVertexInfluences ==
+                    ZJOLT_HAIR_INFLUENCES_PER_RENDER_VERTEX,
+                "the ABI publishes Jolt's own influence count");
+  static_assert(JPH::HairSettings::cNoInfluence == ZJOLT_HAIR_NO_INFLUENCE,
+                "the ABI publishes Jolt's own no-influence sentinel");
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  const uint32_t vertices =
+      static_cast<uint32_t>(settings->mRenderVertices.size());
+  const uint32_t count = vertices * ZJOLT_HAIR_INFLUENCES_PER_RENDER_VERTEX;
+  *out_count = count;
+  if (out_influences == nullptr) return ZJOLT_RESULT_OK;
+
+  const uint32_t n = capacity < count ? capacity : count;
+  for (uint32_t i = 0; i < n; ++i) {
+    const JPH::HairSettings::SVertexInfluence &inf =
+        settings->mRenderVertices[i / ZJOLT_HAIR_INFLUENCES_PER_RENDER_VERTEX]
+            .mInfluences[i % ZJOLT_HAIR_INFLUENCES_PER_RENDER_VERTEX];
+    out_influences[i].vertex_index = inf.mVertexIndex;
+    zjolt::WriteVec3(&out_influences[i].relative_position,
+                     JPH::Vec3(inf.mRelativePosition));
+    out_influences[i].weight = inf.mWeight;
+  }
+
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltHairGetSkinPoints(const ZJoltHair *hair,
+                                   ZJoltHairSkinPoint *out_points,
+                                   uint32_t capacity, uint32_t *out_count) {
+  ZJOLT_ENTER(out_count);
+  if (!zjolt::Present(hair, out_count)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::HairSettings *settings = hair->hair->GetHairSettings();
+  if (settings->mSkinPoints.empty()) {
+    *out_count = 0;
+    return zjolt::SetError(ZJOLT_RESULT_UNSUPPORTED,
+                           "this groom has no scalp, so its strands are "
+                           "attached to nothing");
+  }
+
+  const uint32_t count = static_cast<uint32_t>(settings->mSkinPoints.size());
+  *out_count = count;
+  if (out_points == nullptr) return ZJOLT_RESULT_OK;
+
+  const uint32_t n = capacity < count ? capacity : count;
+  for (uint32_t i = 0; i < n; ++i) {
+    const JPH::HairSettings::SkinPoint &sp = settings->mSkinPoints[i];
+    out_points[i].triangle_index = sp.mTriangleIndex;
+    out_points[i].u = sp.mU;
+    out_points[i].v = sp.mV;
+    zjolt::WriteQuat(&out_points[i].to_bishop,
+                     JPH::Quat::sDecompressUnitQuat(sp.mToBishop));
+  }
+
+  return capacity < count ? ZJOLT_RESULT_BUFFER_TOO_SMALL : ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//
