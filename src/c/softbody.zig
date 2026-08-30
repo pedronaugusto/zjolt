@@ -11,6 +11,8 @@ const core = @import("core.zig");
 const group = @import("group.zig");
 const shape = @import("shape.zig");
 
+pub const Stream = core.Stream;
+
 // Re-exported so a caller of this module sees one namespace rather than
 // having to know which header a shared primitive came from.
 pub const AABox = core.AABox;
@@ -147,6 +149,41 @@ pub extern fn zjoltSoftBodySharedSettingsCalculateEdgeLengths(settings: *SoftBod
 pub extern fn zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(settings: *SoftBodySharedSettings) Result;
 
 pub extern fn zjoltSoftBodySharedSettingsOptimize(settings: *SoftBodySharedSettings) void;
+
+/// How long each of `zjoltSoftBodySharedSettingsOptimizeWithRemap`'s seven
+/// remaps is.
+pub const SoftBodyRemapCounts = extern struct {
+    edges: u32 = 0,
+    lra: u32 = 0,
+    rod_stretch_shear: u32 = 0,
+    rod_bend_twist: u32 = 0,
+    dihedral_bend: u32 = 0,
+    volume: u32 = 0,
+    skinned: u32 = 0,
+};
+
+/// Where to write each remap; null skips that one.
+pub const SoftBodyRemapBuffers = extern struct {
+    edges: ?[*]u32 = null,
+    lra: ?[*]u32 = null,
+    rod_stretch_shear: ?[*]u32 = null,
+    rod_bend_twist: ?[*]u32 = null,
+    dihedral_bend: ?[*]u32 = null,
+    volume: ?[*]u32 = null,
+    skinned: ?[*]u32 = null,
+};
+
+pub extern fn zjoltSoftBodySharedSettingsGetRemapCounts(settings: *const SoftBodySharedSettings, out: *SoftBodyRemapCounts) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsOptimizeWithRemap(settings: *SoftBodySharedSettings, out_remap: *const SoftBodyRemapBuffers, capacity: *const SoftBodyRemapCounts) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsSaveBinaryState(settings: *const SoftBodySharedSettings, stream: *const Stream) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsRestoreBinaryState(stream: *const Stream, out: **SoftBodySharedSettings) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsSaveWithMaterials(settings: *const SoftBodySharedSettings, stream: *const Stream) Result;
+
+pub extern fn zjoltSoftBodySharedSettingsRestoreWithMaterials(stream: *const Stream, out: **SoftBodySharedSettings) Result;
 
 pub extern fn zjoltSoftBodyDescInit(desc: *SoftBodyDesc) void;
 

@@ -398,6 +398,116 @@ ZJoltResult zjoltSoftBodySharedSettingsSetMaterials(
   return ZJOLT_RESULT_OK;
 }
 
+namespace {
+
+constexpr uint8_t kSharedSettingsStreamMagic[4] = {'Z', 'S', 'B', 'B'};
+constexpr uint8_t kSharedSettingsWithMaterialsMagic[4] = {'Z', 'S', 'B', 'M'};
+
+ZJoltResult SaveSharedSettings(const ZJoltSoftBodySharedSettings *settings,
+                               const ZJoltStream *stream,
+                               const uint8_t magic[4], bool with_materials) {
+  if (!zjolt::Present(settings, stream)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanWrite(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs write and is_failed to save through");
+  }
+
+  zjolt::HostStream host(*stream);
+  zjolt::WriteStreamHeader(host, magic);
+  const JPH::SoftBodySharedSettings *s = zjolt::ToJolt(settings);
+  if (with_materials) {
+    JPH::SoftBodySharedSettings::SharedSettingsToIDMap settings_map;
+    JPH::SoftBodySharedSettings::MaterialToIDMap material_map;
+    s->SaveWithMaterials(host, settings_map, material_map);
+  } else {
+    s->SaveBinaryState(host);
+  }
+
+  if (host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_IO_ERROR,
+                           "the stream failed while writing the soft body "
+                           "shared settings");
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+}  // namespace
+
+ZJoltResult zjoltSoftBodySharedSettingsSaveBinaryState(
+    const ZJoltSoftBodySharedSettings *settings, const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  return SaveSharedSettings(settings, stream, kSharedSettingsStreamMagic,
+                            false);
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsSaveWithMaterials(
+    const ZJoltSoftBodySharedSettings *settings, const ZJoltStream *stream) {
+  ZJOLT_ENTER();
+  return SaveSharedSettings(settings, stream, kSharedSettingsWithMaterialsMagic,
+                            true);
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsRestoreBinaryState(
+    const ZJoltStream *stream, ZJoltSoftBodySharedSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs read and is_failed to restore from");
+  }
+
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(
+      host, kSharedSettingsStreamMagic,
+      "not soft body shared settings saved by "
+      "zjoltSoftBodySharedSettingsSaveBinaryState");
+  if (header != ZJOLT_RESULT_OK) return header;
+
+  JPH::Ref<JPH::SoftBodySharedSettings> restored =
+      new JPH::SoftBodySharedSettings();
+  restored->RestoreBinaryState(host);
+  if (host.IsEOF() || host.IsFailed()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT,
+                           "the stream ran out while reading the soft body "
+                           "shared settings");
+  }
+
+  restored->AddRef();
+  *out = zjolt::ToC(restored.GetPtr());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsRestoreWithMaterials(
+    const ZJoltStream *stream, ZJoltSoftBodySharedSettings **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(stream, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::StreamCanRead(stream)) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "stream needs read and is_failed to restore from");
+  }
+
+  zjolt::HostStream host(*stream);
+  const ZJoltResult header = zjolt::ReadStreamHeader(
+      host, kSharedSettingsWithMaterialsMagic,
+      "not soft body shared settings saved by "
+      "zjoltSoftBodySharedSettingsSaveWithMaterials");
+  if (header != ZJOLT_RESULT_OK) return header;
+
+  JPH::SoftBodySharedSettings::IDToSharedSettingsMap settings_map;
+  JPH::SoftBodySharedSettings::IDToMaterialMap material_map;
+  JPH::SoftBodySharedSettings::SettingsResult result =
+      JPH::SoftBodySharedSettings::sRestoreWithMaterials(host, settings_map,
+                                                         material_map);
+  if (result.HasError()) {
+    return zjolt::SetError(ZJOLT_RESULT_BAD_FORMAT, result.GetError().c_str());
+  }
+
+  JPH::Ref<JPH::SoftBodySharedSettings> restored = result.Get();
+  restored->AddRef();
+  *out = zjolt::ToC(restored.GetPtr());
+  return ZJOLT_RESULT_OK;
+}
+
 ZJoltResult zjoltSoftBodySharedSettingsGetMaterials(
     const ZJoltSoftBodySharedSettings *settings,
     const ZJoltPhysicsMaterial **out_materials, uint32_t capacity,
@@ -781,6 +891,118 @@ ZJoltResult zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(
 void zjoltSoftBodySharedSettingsOptimize(ZJoltSoftBodySharedSettings *settings) {
   if (settings == nullptr) return;
   zjolt::ToJolt(settings)->Optimize();
+}
+
+namespace {
+
+constexpr size_t kRemapCount = 7;
+
+/// The two structs are one list of seven written twice, so neither may grow
+/// without the other: a capacity with no buffer, or a buffer with no
+/// capacity, is a remap checked against the wrong length.
+static_assert(sizeof(ZJoltSoftBodyRemapBuffers) ==
+                  kRemapCount * sizeof(uint32_t *),
+              "ZJoltSoftBodyRemapBuffers must hold exactly the seven remaps");
+static_assert(sizeof(ZJoltSoftBodyRemapCounts) ==
+                  kRemapCount * sizeof(uint32_t),
+              "ZJoltSoftBodyRemapCounts must hold exactly the seven remaps");
+
+ZJoltResult CheckRemapCapacity(uint32_t capacity, size_t needed,
+                               const char *what) {
+  if (static_cast<size_t>(capacity) < needed) {
+    return zjolt::SetError(ZJOLT_RESULT_BUFFER_TOO_SMALL, what);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+void CopyRemap(const JPH::Array<JPH::uint> &from, uint32_t *to) {
+  if (to == nullptr) return;
+  for (size_t i = 0; i < from.size(); ++i) {
+    to[i] = static_cast<uint32_t>(from[i]);
+  }
+}
+
+}  // namespace
+
+ZJoltResult zjoltSoftBodySharedSettingsGetRemapCounts(
+    const ZJoltSoftBodySharedSettings *settings,
+    ZJoltSoftBodyRemapCounts *out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(settings, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  const JPH::SoftBodySharedSettings *s = zjolt::ToJolt(settings);
+  out->edges = static_cast<uint32_t>(s->mEdgeConstraints.size());
+  out->lra = static_cast<uint32_t>(s->mLRAConstraints.size());
+  out->rod_stretch_shear =
+      static_cast<uint32_t>(s->mRodStretchShearConstraints.size());
+  out->rod_bend_twist =
+      static_cast<uint32_t>(s->mRodBendTwistConstraints.size());
+  out->dihedral_bend =
+      static_cast<uint32_t>(s->mDihedralBendConstraints.size());
+  out->volume = static_cast<uint32_t>(s->mVolumeConstraints.size());
+  out->skinned = static_cast<uint32_t>(s->mSkinnedConstraints.size());
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSoftBodySharedSettingsOptimizeWithRemap(
+    ZJoltSoftBodySharedSettings *settings,
+    const ZJoltSoftBodyRemapBuffers *out_remap,
+    const ZJoltSoftBodyRemapCounts *capacity) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(settings, out_remap, capacity)) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+
+  // Every capacity checked before anything is reordered: a refusal here has
+  // to leave the settings usable, and Optimize is not undoable.
+  ZJoltSoftBodyRemapCounts needed;
+  const ZJoltResult counted =
+      zjoltSoftBodySharedSettingsGetRemapCounts(settings, &needed);
+  if (counted != ZJOLT_RESULT_OK) return counted;
+
+  struct Pair {
+    uint32_t *buffer;
+    uint32_t capacity;
+    uint32_t needed;
+    const char *what;
+  };
+  const Pair pairs[kRemapCount] = {
+      {out_remap->edges, capacity->edges, needed.edges,
+       "the edge remap buffer is shorter than the edge constraint list"},
+      {out_remap->lra, capacity->lra, needed.lra,
+       "the LRA remap buffer is shorter than the LRA constraint list"},
+      {out_remap->rod_stretch_shear, capacity->rod_stretch_shear,
+       needed.rod_stretch_shear,
+       "the rod stretch-shear remap buffer is shorter than its list"},
+      {out_remap->rod_bend_twist, capacity->rod_bend_twist,
+       needed.rod_bend_twist,
+       "the rod bend-twist remap buffer is shorter than its list"},
+      {out_remap->dihedral_bend, capacity->dihedral_bend, needed.dihedral_bend,
+       "the dihedral bend remap buffer is shorter than its list"},
+      {out_remap->volume, capacity->volume, needed.volume,
+       "the volume remap buffer is shorter than the volume constraint list"},
+      {out_remap->skinned, capacity->skinned, needed.skinned,
+       "the skinned remap buffer is shorter than the skinned constraint list"},
+  };
+  for (const Pair &pair : pairs) {
+    if (pair.buffer == nullptr) continue;
+    const ZJoltResult fits =
+        CheckRemapCapacity(pair.capacity, pair.needed, pair.what);
+    if (fits != ZJOLT_RESULT_OK) return fits;
+  }
+
+  JPH::SoftBodySharedSettings::OptimizationResults results;
+  zjolt::ToJolt(settings)->Optimize(results);
+
+  CopyRemap(results.mEdgeRemap, out_remap->edges);
+  CopyRemap(results.mLRARemap, out_remap->lra);
+  CopyRemap(results.mRodStretchShearConstraintRemap,
+            out_remap->rod_stretch_shear);
+  CopyRemap(results.mRodBendTwistConstraintRemap, out_remap->rod_bend_twist);
+  CopyRemap(results.mDihedralBendRemap, out_remap->dihedral_bend);
+  CopyRemap(results.mVolumeRemap, out_remap->volume);
+  CopyRemap(results.mSkinnedRemap, out_remap->skinned);
+  return ZJOLT_RESULT_OK;
 }
 
 //===----------------------------------------------------------------------===//

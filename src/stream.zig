@@ -48,11 +48,17 @@ pub fn hostStream(comptime T: type, context: *T) Stream {
         fn selfOf(user: ?*anyopaque) *T {
             return @ptrCast(@alignCast(user.?));
         }
+        // A zero-length read or write carries a NULL pointer, because that
+        // is what an empty `JPH::Array`'s `data()` is — and Jolt writes one
+        // per empty constraint list. Dereferencing it to form a slice is a
+        // panic in safe Zig, so the length is checked before the pointer.
         fn read(user: ?*anyopaque, data: ?*anyopaque, size: usize) callconv(.c) void {
+            if (size == 0) return;
             const bytes: [*]u8 = @ptrCast(data.?);
             T.read(selfOf(user), bytes[0..size]);
         }
         fn write(user: ?*anyopaque, data: ?*const anyopaque, size: usize) callconv(.c) void {
+            if (size == 0) return;
             const bytes: [*]const u8 = @ptrCast(data.?);
             T.write(selfOf(user), bytes[0..size]);
         }

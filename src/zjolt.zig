@@ -770,6 +770,7 @@ test {
     _ = @import("state_test.zig");
     _ = @import("debug_test.zig");
     _ = @import("system_test.zig");
+    _ = @import("softbody_test.zig");
     _ = @import("factory_test.zig");
     _ = @import("math_test.zig");
 

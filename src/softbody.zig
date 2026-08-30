@@ -21,6 +21,8 @@ const body_mod = @import("body.zig");
 const group_mod = @import("group.zig");
 const material_mod = @import("material.zig");
 const shape_mod = @import("shape.zig");
+const stream_mod = @import("stream.zig");
+const descriptor = @import("descriptor.zig");
 const system_mod = @import("system.zig");
 
 pub const BendType = c.SoftBodyBendType;
@@ -307,6 +309,85 @@ pub const SharedSettings = struct {
     /// been added, and before creating any soft body from these settings.
     pub fn optimize(self: SharedSettings) void {
         c.zjoltSoftBodySharedSettingsOptimize(self.handle);
+    }
+
+    /// How long each of `optimizeWithRemap`'s seven remaps is: the length of
+    /// the matching constraint list, read BEFORE optimising.
+    pub const RemapCounts = c.SoftBodyRemapCounts;
+
+    /// Where each remap is written. A null slice skips that one.
+    pub const RemapBuffers = struct {
+        edges: ?[]u32 = null,
+        lra: ?[]u32 = null,
+        rod_stretch_shear: ?[]u32 = null,
+        rod_bend_twist: ?[]u32 = null,
+        dihedral_bend: ?[]u32 = null,
+        volume: ?[]u32 = null,
+        skinned: ?[]u32 = null,
+
+        comptime {
+            // The Zig struct and the C one are the same seven names; a field
+            // added to one alone would be silently dropped by the crossing
+            // below, which is a remap written to the wrong buffer.
+            descriptor.requireModelled(@This(), c.SoftBodyRemapBuffers);
+            descriptor.requireModelled(c.SoftBodyRemapBuffers, @This());
+        }
+    };
+
+    pub fn remapCounts(self: SharedSettings) err.Error!RemapCounts {
+        var out: RemapCounts = .{};
+        try err.check(c.zjoltSoftBodySharedSettingsGetRemapCounts(self.handle, &out));
+        return out;
+    }
+
+    /// `optimize`, keeping the seven index maps Jolt builds while
+    /// reordering: `out.edges[old] == new`, and so on. Any index recorded
+    /// before optimising names a different constraint afterwards, and
+    /// without these nothing says so. Every buffer is checked against
+    /// `remapCounts` BEFORE anything is reordered, so
+    /// `error.BufferTooSmall` leaves the settings untouched.
+    pub fn optimizeWithRemap(self: SharedSettings, out: RemapBuffers) err.Error!void {
+        var buffers: c.SoftBodyRemapBuffers = .{};
+        var capacity: RemapCounts = .{};
+        inline for (@typeInfo(RemapBuffers).@"struct".fields) |field| {
+            if (@field(out, field.name)) |slice| {
+                @field(buffers, field.name) = slice.ptr;
+                @field(capacity, field.name) = @intCast(slice.len);
+            }
+        }
+        try err.check(c.zjoltSoftBodySharedSettingsOptimizeWithRemap(
+            self.handle,
+            &buffers,
+            &capacity,
+        ));
+    }
+
+    /// Jolt's binary form of the settings — every vertex, face, constraint
+    /// and inverse bind matrix. Does NOT write the material list, which is
+    /// Jolt's own split; `saveWithMaterials` writes both. This is the asset,
+    /// not a body's runtime state.
+    pub fn saveBinaryState(self: SharedSettings, stream: stream_mod.Stream) err.Error!void {
+        try err.check(c.zjoltSoftBodySharedSettingsSaveBinaryState(self.handle, &stream));
+    }
+
+    /// Rebuilds what `saveBinaryState` wrote, with the default material on
+    /// every face. Release the result with `release`.
+    pub fn restoreBinaryState(stream: stream_mod.Stream) err.Error!SharedSettings {
+        var handle: *c.SoftBodySharedSettings = undefined;
+        try err.check(c.zjoltSoftBodySharedSettingsRestoreBinaryState(&stream, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// The settings AND the material list they index, in one stream.
+    pub fn saveWithMaterials(self: SharedSettings, stream: stream_mod.Stream) err.Error!void {
+        try err.check(c.zjoltSoftBodySharedSettingsSaveWithMaterials(self.handle, &stream));
+    }
+
+    /// Rebuilds what `saveWithMaterials` wrote, materials included.
+    pub fn restoreWithMaterials(stream: stream_mod.Stream) err.Error!SharedSettings {
+        var handle: *c.SoftBodySharedSettings = undefined;
+        try err.check(c.zjoltSoftBodySharedSettingsRestoreWithMaterials(&stream, &handle));
+        return .{ .handle = handle };
     }
 };
 

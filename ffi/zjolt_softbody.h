@@ -216,6 +216,33 @@ ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsGetMaterials(
     const ZJoltPhysicsMaterial **out_materials, uint32_t capacity,
     uint32_t *out_count);
 
+/// Jolt's own binary form of the settings — every vertex, face, constraint
+/// and inverse bind matrix — over the same ZJoltStream seam as
+/// zjoltShapeSaveStream. Does NOT write the material list, which is Jolt's
+/// own split: zjoltSoftBodySharedSettingsSaveWithMaterials writes both.
+///
+/// A body's runtime state is not here. This is the asset, not the simulation.
+ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsSaveBinaryState(
+    const ZJoltSoftBodySharedSettings *settings, const ZJoltStream *stream);
+
+/// Rebuilds what zjoltSoftBodySharedSettingsSaveBinaryState wrote, with the
+/// default material on every face. Release the result with
+/// zjoltSoftBodySharedSettingsRelease.
+ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsRestoreBinaryState(
+    const ZJoltStream *stream, ZJoltSoftBodySharedSettings **out);
+
+/// The settings AND the material list they index, in one stream — what
+/// zjoltSceneSaveStream writes per soft body, reachable for a single asset.
+/// Every material must be one this ABI can rebuild by RTTI name.
+ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsSaveWithMaterials(
+    const ZJoltSoftBodySharedSettings *settings, const ZJoltStream *stream);
+
+/// Rebuilds what zjoltSoftBodySharedSettingsSaveWithMaterials wrote,
+/// materials included. Release the result with
+/// zjoltSoftBodySharedSettingsRelease.
+ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsRestoreWithMaterials(
+    const ZJoltStream *stream, ZJoltSoftBodySharedSettings **out);
+
 /// Appends `count` vertices. Vertex indices in every other Add* call below
 /// refer to the append order across every call so far — add all vertices
 /// before the faces and constraints that reference them.
@@ -339,6 +366,48 @@ zjoltSoftBodySharedSettingsCalculateSkinnedConstraintNormals(
 /// (SoftBodyMotionProperties.cpp:1060).
 ZJOLT_API void zjoltSoftBodySharedSettingsOptimize(
     ZJoltSoftBodySharedSettings *settings);
+
+/// How long each of zjoltSoftBodySharedSettingsOptimizeWithRemap's seven
+/// remaps is: the length of the matching constraint list BEFORE optimising,
+/// which is what makes a capacity checkable in advance.
+typedef struct ZJoltSoftBodyRemapCounts {
+  uint32_t edges;
+  uint32_t lra;
+  uint32_t rod_stretch_shear;
+  uint32_t rod_bend_twist;
+  uint32_t dihedral_bend;
+  uint32_t volume;
+  uint32_t skinned;
+} ZJoltSoftBodyRemapCounts;
+
+/// Where to write each remap. Any member may be NULL to skip that one.
+/// Field for field the same seven as ZJoltSoftBodyRemapCounts, in the same
+/// order; zjolt_softbody.cpp static_asserts that neither grows alone.
+typedef struct ZJoltSoftBodyRemapBuffers {
+  uint32_t *edges;
+  uint32_t *lra;
+  uint32_t *rod_stretch_shear;
+  uint32_t *rod_bend_twist;
+  uint32_t *dihedral_bend;
+  uint32_t *volume;
+  uint32_t *skinned;
+} ZJoltSoftBodyRemapBuffers;
+
+/// Fills `out` with the seven lengths above. Cheap; no allocation.
+ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsGetRemapCounts(
+    const ZJoltSoftBodySharedSettings *settings,
+    ZJoltSoftBodyRemapCounts *out);
+
+/// zjoltSoftBodySharedSettingsOptimize, keeping the seven index maps Jolt
+/// builds while reordering: `out_remap->edges[old] == new`, and so on. Any
+/// index a caller recorded before optimising names a different constraint
+/// afterwards, and without these nothing says so. `capacity` is checked
+/// against zjoltSoftBodySharedSettingsGetRemapCounts BEFORE anything is
+/// reordered; a NULL buffer skips its remap and its capacity is not read.
+ZJOLT_API ZJoltResult zjoltSoftBodySharedSettingsOptimizeWithRemap(
+    ZJoltSoftBodySharedSettings *settings,
+    const ZJoltSoftBodyRemapBuffers *out_remap,
+    const ZJoltSoftBodyRemapCounts *capacity);
 
 //===----------------------------------------------------------------------===//
 // Creating a soft body
