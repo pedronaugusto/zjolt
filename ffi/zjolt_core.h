@@ -90,6 +90,43 @@ ZJOLT_API uint32_t zjoltJoltVersion(void);
 ZJOLT_API uint32_t zjoltConfigId(void);
 
 //===----------------------------------------------------------------------===//
+// Which instruction set the library was actually compiled for.
+//
+// Jolt derives every JPH_USE_* from the COMPILER's own predefines —
+// __AVX2__, __SSE4_2__, __F16C__, __FMA__ (Jolt/Core/Core.h). So the lever is
+// the target's CPU model, and zjolt adds no second one: a -Dsimd= that set
+// JPH_USE_AVX2 without also raising the CPU model would make Jolt emit
+// intrinsics the compiler is not allowed to select.
+//
+// What it costs to leave a target at its baseline is silence, which is what
+// this reports instead. It is not folded into ZJOLT_CONFIG_ID: an ISA
+// changes speed, never a layout, so a consumer built for another one still
+// links and still agrees about every struct.
+//===----------------------------------------------------------------------===//
+
+/// Bits of zjoltCpuFeatures. One per Jolt JPH_USE_* macro, spelled the same;
+/// Jolt implies the narrower ones from the wider, so AVX2 arrives with AVX,
+/// SSE4_2, SSE4_1, F16C, LZCNT, TZCNT and FMADD already set.
+typedef enum ZJoltCpuFeature {
+  ZJOLT_CPU_FEATURE_SSE = 1u << 0,
+  ZJOLT_CPU_FEATURE_SSE4_1 = 1u << 1,
+  ZJOLT_CPU_FEATURE_SSE4_2 = 1u << 2,
+  ZJOLT_CPU_FEATURE_AVX = 1u << 3,
+  ZJOLT_CPU_FEATURE_AVX2 = 1u << 4,
+  ZJOLT_CPU_FEATURE_AVX512 = 1u << 5,
+  ZJOLT_CPU_FEATURE_F16C = 1u << 6,
+  ZJOLT_CPU_FEATURE_LZCNT = 1u << 7,
+  ZJOLT_CPU_FEATURE_TZCNT = 1u << 8,
+  ZJOLT_CPU_FEATURE_FMADD = 1u << 9,
+  ZJOLT_CPU_FEATURE_NEON = 1u << 10
+} ZJoltCpuFeature;
+
+/// The ZJoltCpuFeature bits Jolt compiled with, ORed. Reads the macros from
+/// inside the library, so it is what the vectorised paths were built for
+/// rather than what the running CPU could do.
+ZJOLT_API uint32_t zjoltCpuFeatures(void);
+
+//===----------------------------------------------------------------------===//
 // Results. The declared surface does not depend on build options: a
 // compiled-out feature keeps its function, returning
 // ZJOLT_RESULT_UNSUPPORTED instead of failing to link. What is enabled is

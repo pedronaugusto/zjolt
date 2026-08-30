@@ -34,7 +34,7 @@ cross-check makes any drift between the header and the Zig side a build
 failure, and there are no compatibility aliases anywhere, so there is exactly
 one spelling of everything.
 
-Working today: every Jolt subsystem, across **1448 C entry points** — shapes,
+Working today: every Jolt subsystem, across **1449 C entry points** — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,
 ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 [Scope](#scope) for what that covers and what is deliberately left out.
@@ -479,6 +479,37 @@ build.** One a flag turns off still exists and returns
 `ZJOLT_RESULT_UNSUPPORTED`, so a caller never has to `#ifdef` around a
 declaration, and a Zig caller never sees a missing symbol.
 
+### The instruction set is the target's, not an option
+
+There is deliberately no `-Dsimd`. Jolt derives every `JPH_USE_*` from the
+compiler's own predefines — `__AVX2__`, `__SSE4_2__`, `__F16C__`, `__FMA__`
+([`Jolt/Core/Core.h`](libs/JoltPhysics/Jolt/Core/Core.h)) — so the lever
+already exists and it is the Zig target's CPU model. A zjolt option that
+defined `JPH_USE_AVX2` without also raising that model would turn on
+intrinsics the compiler is not permitted to select; one that raised both
+would be a second home for a fact the target already holds.
+
+Which means a default target is a BASELINE one — `x86_64` is SSE2, and Jolt's
+AVX2 paths are compiled out. Raise it the way any Zig build does:
+
+```
+zig build -Dcpu=x86_64_v3            # AVX2, F16C, FMA, BMI, LZCNT
+zig build -Dtarget=x86_64-linux-gnu -Dcpu=x86_64_v2
+```
+
+What is not acceptable is that this be invisible, which it was.
+`zjolt.cpuFeatures()` (C: `zjoltCpuFeatures`) reports the `JPH_USE_*` set the
+LIBRARY was compiled with, read from inside it, one flag per Jolt macro. It
+is not part of `ZJOLT_CONFIG_ID`: an instruction set changes speed, never a
+layout, so a consumer compiled for a different one still agrees about every
+struct and `zjoltInit` has no reason to refuse it.
+
+`JPH_DISABLE_CUSTOM_ALLOCATOR` is not an option either, and that one never
+will be: it compiles away the five function pointers
+[`Jolt/Core/Memory.h`](libs/JoltPhysics/Jolt/Core/Memory.h) declares, which
+are the whole of `init(.{ .allocator = ... })`. Exposing it would leave that
+argument accepted and ignored.
+
 ## Testing
 
 ```sh
@@ -602,7 +633,7 @@ measurement said so.
 
 ## Scope
 
-Every Jolt subsystem is bound: **1448 C entry points** across **25 headers**,
+Every Jolt subsystem is bound: **1449 C entry points** across **25 headers**,
 each one mirrored by a Zig wrapper that a reflective cross-check pairs at build
 time. Not one entry point is stranded — `tools/zig_surface_exceptions.txt` is
 empty, and `ci/check-coverage.sh` fails both if an entry point loses its Zig

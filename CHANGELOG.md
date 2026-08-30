@@ -51,6 +51,11 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   The model-space matrices were computed and consumed inside the ABI and never
   readable, so a pose produced outside Jolt had no way in and a pose Jolt
   computed had no way out.
+- `zjoltCpuFeatures` and the `ZJoltCpuFeature` flags, one per Jolt
+  `JPH_USE_*` macro. Which instruction set Jolt's vector paths were compiled
+  for was unknowable from outside the library, and a default Zig target
+  resolves to a baseline CPU model, so a build could be running the SSE2
+  paths with nothing able to say so.
 - `zjoltGroupFilterCustomCreate`, `zjoltGroupFilterIsTable` and the
   `ZJoltCustomGroupFilter` callback. `JPH::GroupFilter` is an abstract base a
   game subclasses and `GroupFilterTable` is the one implementation Jolt ships;
@@ -123,6 +128,10 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `saveBinaryState`, `restoreBinaryState`, `saveWithMaterials` and
   `restoreWithMaterials`.
 - `SkeletonPose.getJointMatrices` and `setJointMatrices`.
+- `zjolt.cpuFeatures()` returns a `CpuFeatures` flag struct. A test holds it
+  to Jolt's own implication order — AVX2 arrives with AVX, SSE4_2, SSE4_1,
+  F16C, LZCNT, TZCNT and FMADD — so a report that had come loose from the
+  macros Jolt compiled with fails the build.
 - `GroupFilter.initCustom` takes a `can_collide` callback and `isTable` says
   which kind a filter is. The three table methods return
   `error.InvalidArgument` on a callback filter rather than casting it.
@@ -195,6 +204,13 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   ratio times the differential ratio. It returns the gear ratio alone.
 
 ### Build
+
+- No `-Dsimd` option, stated in the README and in `build.zig` where someone
+  would look for one: Jolt derives every `JPH_USE_*` from the compiler's own
+  predefines, so `-Dcpu=` already is the lever and a second one could
+  disagree with it. `JPH_DISABLE_CUSTOM_ALLOCATOR` is refused for a different
+  reason — it compiles away the five function pointers that ARE
+  `init(.{ .allocator = ... })`.
 
 - The hosted workflow runs `-Ddebug_renderer=true` for both the Zig suite and
   the C ABI test. The option was declared and never built there.

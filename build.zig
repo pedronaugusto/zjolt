@@ -253,6 +253,9 @@ const zjolt_ffi_sources = [_][]const u8{
 };
 
 pub fn build(b: *std.Build) void {
+    // No -Dsimd here on purpose: Jolt reads the compiler's own __AVX2__ and
+    // friends, so `-Dcpu=` already IS the lever, and zjoltCpuFeatures reports
+    // what a build resolved to. README "The instruction set is the target's".
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 

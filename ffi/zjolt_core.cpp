@@ -249,6 +249,44 @@ uint32_t zjoltJoltVersion(void) {
 
 uint32_t zjoltConfigId(void) { return static_cast<uint32_t>(ZJOLT_CONFIG_ID); }
 
+uint32_t zjoltCpuFeatures(void) {
+  uint32_t features = 0;
+#ifdef JPH_USE_SSE
+  features |= ZJOLT_CPU_FEATURE_SSE;
+#endif
+#ifdef JPH_USE_SSE4_1
+  features |= ZJOLT_CPU_FEATURE_SSE4_1;
+#endif
+#ifdef JPH_USE_SSE4_2
+  features |= ZJOLT_CPU_FEATURE_SSE4_2;
+#endif
+#ifdef JPH_USE_AVX
+  features |= ZJOLT_CPU_FEATURE_AVX;
+#endif
+#ifdef JPH_USE_AVX2
+  features |= ZJOLT_CPU_FEATURE_AVX2;
+#endif
+#ifdef JPH_USE_AVX512
+  features |= ZJOLT_CPU_FEATURE_AVX512;
+#endif
+#ifdef JPH_USE_F16C
+  features |= ZJOLT_CPU_FEATURE_F16C;
+#endif
+#ifdef JPH_USE_LZCNT
+  features |= ZJOLT_CPU_FEATURE_LZCNT;
+#endif
+#ifdef JPH_USE_TZCNT
+  features |= ZJOLT_CPU_FEATURE_TZCNT;
+#endif
+#ifdef JPH_USE_FMADD
+  features |= ZJOLT_CPU_FEATURE_FMADD;
+#endif
+#ifdef JPH_USE_NEON
+  features |= ZJOLT_CPU_FEATURE_NEON;
+#endif
+  return features;
+}
+
 const char *zjoltResultName(ZJoltResult result) {
   switch (result) {
     case ZJOLT_RESULT_OK:

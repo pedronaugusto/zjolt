@@ -1384,6 +1384,22 @@ pub extern fn zjoltJoltVersion() u32;
 
 pub extern fn zjoltConfigId() u32;
 
+pub const CpuFeature = enum(c_int) {
+    sse = 1 << 0,
+    sse4_1 = 1 << 1,
+    sse4_2 = 1 << 2,
+    avx = 1 << 3,
+    avx2 = 1 << 4,
+    avx512 = 1 << 5,
+    f16c = 1 << 6,
+    lzcnt = 1 << 7,
+    tzcnt = 1 << 8,
+    fmadd = 1 << 9,
+    neon = 1 << 10,
+};
+
+pub extern fn zjoltCpuFeatures() u32;
+
 pub extern fn zjoltResultName(result: Result) [*:0]const u8;
 
 pub extern fn zjoltLastError() [*:0]const u8;

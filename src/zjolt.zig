@@ -626,6 +626,31 @@ pub fn joltVersion() Version {
     return Version.unpack(core.zjoltJoltVersion());
 }
 
+/// The instruction set Jolt's vectorised paths were COMPILED for, one flag
+/// per Jolt `JPH_USE_*` macro. Not what the running CPU supports.
+///
+/// zjolt has no option for this. Jolt reads the compiler's own predefines,
+/// so the lever is the Zig target's CPU model — `-Dcpu=x86_64_v3` and its
+/// like — and a second lever could disagree with the first.
+pub const CpuFeatures = packed struct(u32) {
+    sse: bool = false,
+    sse4_1: bool = false,
+    sse4_2: bool = false,
+    avx: bool = false,
+    avx2: bool = false,
+    avx512: bool = false,
+    f16c: bool = false,
+    lzcnt: bool = false,
+    tzcnt: bool = false,
+    fmadd: bool = false,
+    neon: bool = false,
+    _padding: u21 = 0,
+};
+
+pub fn cpuFeatures() CpuFeatures {
+    return @bitCast(core.zjoltCpuFeatures());
+}
+
 //=============================================================================
 // Tests
 //=============================================================================
@@ -819,6 +844,36 @@ test "the library reports the build the wrapper was compiled for" {
     const deterministic_bit =
         (layout.build_flags & core.build_flag_cross_platform_deterministic) != 0;
     try std.testing.expectEqual(options.cross_platform_deterministic, deterministic_bit);
+}
+
+test "the reported instruction set is Jolt's own implication order" {
+    // Jolt/Core/Core.h derives each JPH_USE_* from the wider one, so the set
+    // is a chain and not a bag: AVX2 implies AVX, SSE4_2, SSE4_1, F16C,
+    // LZCNT, TZCNT and FMADD. A report that broke the chain would mean the
+    // macros this reads are not the ones Jolt compiled its vector paths with.
+    const cpu = cpuFeatures();
+
+    if (cpu.avx512) try std.testing.expect(cpu.avx2);
+    if (cpu.avx2) {
+        try std.testing.expect(cpu.avx);
+        try std.testing.expect(cpu.f16c);
+        try std.testing.expect(cpu.lzcnt);
+        try std.testing.expect(cpu.tzcnt);
+        try std.testing.expect(cpu.fmadd);
+    }
+    if (cpu.avx) try std.testing.expect(cpu.sse4_2);
+    if (cpu.sse4_2) try std.testing.expect(cpu.sse4_1);
+    if (cpu.sse4_1) try std.testing.expect(cpu.sse);
+
+    // One of the two vector back ends is always compiled in: Vec4 and Quat
+    // have an SSE form and a NEON form, and the scalar fallback is the third.
+    // On the two architectures zjolt is built for, one of these holds.
+    const arch = @import("builtin").cpu.arch;
+    if (arch.isX86()) try std.testing.expect(cpu.sse);
+    if (arch.isAARCH64()) try std.testing.expect(cpu.neon);
+
+    // And nothing outside the eleven named bits is set.
+    try std.testing.expectEqual(@as(u21, 0), cpu._padding);
 }
 
 test "version reporting is wired up" {
