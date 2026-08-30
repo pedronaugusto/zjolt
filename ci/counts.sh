@@ -62,6 +62,12 @@ count_api_decls_in() {
   grep -c '^ZJOLT_API' "$1"
 }
 
+# The C declaration modules. src/c.zig lists them and both reflective guards
+# walk that list, so this is also how many modules those guards cover.
+count_c_modules() {
+  ls src/c/*.zig | wc -l | tr -d ' '
+}
+
 #===----------------------------------------------------------------------===//
 # The guards
 #===----------------------------------------------------------------------===//

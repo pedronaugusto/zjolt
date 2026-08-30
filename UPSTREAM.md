@@ -49,11 +49,14 @@ Vehicles, ragdolls and soft bodies are compiled and bound: `zjolt_vehicle.h`,
 
 ## Toolchain floor
 
-Jolt 5.6 dropped support for Visual Studio before 2022, Clang before 16, and
-GCC before 12. zjolt compiles Jolt through Zig's bundled Clang, which is well
-past that floor on every target in the CI matrix — but a consumer linking the
-static library into an older toolchain's C++ project should know the floor
-exists.
+Upstream states its own floor in `README.md` at the pinned tag `v5.6.0`:
+"Compiles with Visual Studio 2022+, Clang 16+ or GCC 12+", and "Uses C++ 17"
+(read 2026-08-30 from `jrouwe/JoltPhysics`). zjolt compiles Jolt through Zig's
+bundled Clang, which is past that floor on every target in the CI matrix — but
+a consumer linking the static library into an older toolchain's C++ project
+should know the floor exists. Nothing in this repository re-measures another
+project's stated requirements, so this is a dated quotation rather than a
+gated fact.
 
 ## Configuration macros, and the abort they cause
 

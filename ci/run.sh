@@ -103,6 +103,10 @@ run 'coverage (every name has a verdict)' ci/check-coverage.sh
 # rots in silence otherwise, and four of them had.
 run 'documented numbers' ci/check-numbers.sh
 
+# BINDING.md's walk-through, character for character against the files it
+# names. It was wrong in all four panels at once before this existed.
+run 'documented examples' ci/check-examples.sh
+
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------
@@ -133,7 +137,7 @@ if [ $FULL -eq 1 ]; then
   # Mutation test for the ABI cross-check itself — see the script's own header
   # for why a check that guards everything else needs one. It rebuilds once per
   # mutation, which is why it is here and not in the default run.
-  run 'guard mutations (22)' ci/check-abi-drift.sh
+  run 'guard mutations (26)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
   section 'Tests — build configurations'

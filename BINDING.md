@@ -29,54 +29,76 @@ A subsystem is one concern — constraints, vehicles, ragdolls — and it gets:
 |---|---|
 | `ffi/zjolt_<area>.h` | the C declarations, `ZJOLT_API` on each |
 | `ffi/zjolt_<area>.cpp` | the C++ implementation, `#include "zjolt_internal.h"` first |
-| `src/c.zig` | one `pub extern fn` per entry point, hand-written |
+| `src/c/<area>.zig` | one `pub extern fn` per entry point, hand-written |
 | `src/<area>.zig` | the Zig wrapper — errors, slices, methods |
 | `src/zjolt.zig` | re-exports of the wrapper's public names |
 
-Plus three one-line registrations: the header in `public_headers` and the
-`.cpp` in the source list, both in `build.zig`; and `#include "zjolt_<area>.h"`
-in the umbrella `ffi/zjolt.h`.
+Plus four one-line registrations: the header in `public_headers` and the
+`.cpp` in the source list, both in `build.zig`; `#include "zjolt_<area>.h"` in
+the umbrella `ffi/zjolt.h`; and the module in `src/c.zig`, which is the list
+`src/abi_check.zig` and `src/misuse_sweep_test.zig` walk. A module missing
+from that list is a module neither guard covers.
 
-Nothing in `src/` may `@cImport`. `src/c.zig` is hand-written on purpose, and
+Nothing in `src/` may `@cImport`. `src/c/` is hand-written on purpose, and
 `src/abi_check.zig` is what proves it did not drift.
 
 ## One entry point, all the way through
 
-This is the whole pattern. Read it instead of reading a subsystem.
+This is the whole pattern. Read it instead of reading a subsystem. Every
+panel below is a verbatim excerpt, and `ci/check-examples.sh` fails the build
+if it stops matching the file it names.
 
 `ffi/zjolt_shape.h`
 ```c
-ZJOLT_API ZJoltResult zjoltShapeCreateSphere(float radius, float density,
-                                             ZJoltShape **out);
+ZJOLT_API ZJoltResult zjoltShapeCreateSphere(
+    float radius, float density, const ZJoltPhysicsMaterial *material,
+    ZJoltShape **out);
 ```
 
 `ffi/zjolt_shape.cpp`
 ```cpp
 ZJoltResult zjoltShapeCreateSphere(float radius, float density,
+                                   const ZJoltPhysicsMaterial *material,
                                    ZJoltShape **out) {
-  ZJOLT_ENTER(out);                                    // clears out, refuses pre-init
+  ZJOLT_ENTER(out);
   if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  JPH::SphereShapeSettings settings(radius);           // settings on the STACK
+  JPH::SphereShapeSettings settings(radius, ToJoltMaterial(material));
   if (density > 0.0f) settings.SetDensity(density);
   JPH::Shape::ShapeResult result = settings.Create();
-  return Finish(result, out);                          // or zjolt::Own(fresh)
+  return Finish(result, out);
 }
 ```
 
-`src/c.zig`
+Four things in eleven lines: `ZJOLT_ENTER` clears the out-parameters and
+refuses a call made before `zjoltInit`; `zjolt::Present` reports a null
+pointer as `ZJOLT_RESULT_INVALID_ARGUMENT` naming the parameter; the settings
+object is built on the STACK and never crosses; and `Finish` does the
+reference-count arithmetic, as `zjolt::Own(fresh)` does for an object that is
+not a shape.
+
+`src/c/shape.zig`
 ```zig
-pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, out: **Shape) Result;
+pub extern fn zjoltShapeCreateSphere(radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
 ```
 
 `src/shape.zig`
 ```zig
-pub fn initSphere(radius: f32, density: f32) err.Error!Shape {
-    var handle: *c.Shape = undefined;
-    try err.check(c.zjoltShapeCreateSphere(radius, density, &handle));
-    return .{ .handle = handle };
-}
+    pub fn initSphere(radius: f32, opts: ConvexOptions) err.Error!Shape {
+        var handle: *c.Shape = undefined;
+        try err.check(c.zjoltShapeCreateSphere(
+            radius,
+            opts.density,
+            materialHandle(opts.material),
+            &handle,
+        ));
+        return .{ .handle = handle };
+    }
 ```
+
+The wrapper is where a C parameter list becomes Zig: the optional trailing
+parameters every convex shape shares collapse into one `ConvexOptions`, and
+`ZJoltResult` becomes `err.Error!Shape`.
 
 `src/zjolt.zig` — one re-export line. `build.zig` — the `.h` in `public_headers`,
 the `.cpp` in the FFI source list, any new Jolt TUs in `jolt_sources`.
@@ -199,6 +221,9 @@ zig build test-c
 zig build --build-file tests/consumer/build.zig run
 ci/run.sh --full        # includes ci/check-abi-drift.sh
 ```
+
+`ci/run.sh` also runs `ci/check-examples.sh` and `ci/check-numbers.sh`, so an
+example or a count that this change moves fails there rather than in review.
 
 `ci/run.sh --full` executes the configurations that change ABI widths
 (`-Ddouble_precision`, `-Dobject_layer_bits=32`), which a compile alone does

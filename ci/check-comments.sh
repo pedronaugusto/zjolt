@@ -2,7 +2,14 @@
 #
 # Refuses comment blocks that have stopped being reference documentation.
 # Length per block, not density: a header where every declaration carries two
-# crisp lines is correct at any percentage.
+# crisp lines is correct at any percentage. Two rules, and this file is the
+# only statement of either:
+#
+#   1. At most MAX_DECL lines directly above one declaration, MAX_HEADER for
+#      the block at the top of a file or under a //===---===// banner.
+#   2. No narrative register. The grep below is the list; it rejects the
+#      first person, an appeal to what something used to be, and the phrases
+#      that introduce an aside rather than a fact.
 #
 #   ci/check-comments.sh [--list]
 
@@ -59,7 +66,7 @@ fi
 if [ -s "$work/voice" ]; then
   head -30 "$work/voice" | sed 's/^/  /' >&2
   n=$(grep -c . "$work/voice")
-  printf '%s%d narrative comment line(s) — see COMMENT_STANDARD%s\n' "$RED" "$n" "$OFF" >&2
+  printf '%s%d narrative comment line(s) — the register list is in ci/check-comments.sh%s\n' "$RED" "$n" "$OFF" >&2
   fails=$((fails + 1))
 fi
 

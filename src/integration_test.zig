@@ -2701,7 +2701,7 @@ test "a mesh reports the material of the triangle that was hit" {
     ));
 }
 
-test "a height field reports the material of the quad that was hit" {
+test "a height field's quad materials are indexed x-major, so an asymmetric quad reports its own material" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();
 
@@ -2714,10 +2714,14 @@ test "a height field reports the material of the quad that was hit" {
     defer rock.release();
 
     const samples = [_]f32{0} ** 16;
-    // One index per quad — (4 - 1)^2 of them, not one per sample. Quad (2, 2)
-    // is the odd one out.
+    // One index per quad — (4 - 1)^2 of them, not one per sample.
+    // HeightFieldShape.h:104 gives the encoding as
+    // mMaterials[mMaterialIndices[x + y * (mSampleCount - 1)]], so this is
+    // quad (2, 0) and NOT quad (0, 2). Picking an asymmetric quad is the
+    // point: a corner or a diagonal quad has the same index either way round
+    // and would pass under a y-major encoding too.
     var quad_materials = [_]u8{0} ** 9;
-    quad_materials[2 + 2 * 3] = 1;
+    quad_materials[2 + 0 * 3] = 1;
 
     const field = try zjolt.Shape.initHeightField(&samples, 4, .{
         .materials = &.{ grass, rock },
@@ -2736,8 +2740,11 @@ test "a height field reports the material of the quad that was hit" {
 
     const queries = world.system.queries();
 
+    // Quad (x, y) spans local x in [x, x+1] and local z in [y, y+1], so the
+    // centre of quad (2, 0) is (2.5, 0.5) and the y-major reading of the same
+    // index would put it at (0.5, 2.5) instead.
     const on_rock = (try queries.castRayClosest(
-        zjolt.rvec3(2.5, 10, 2.5),
+        zjolt.rvec3(2.5, 10, 0.5),
         zjolt.vec3(0, -20, 0),
         null,
         null,
@@ -2748,7 +2755,7 @@ test "a height field reports the material of the quad that was hit" {
     );
 
     const on_grass = (try queries.castRayClosest(
-        zjolt.rvec3(1.5, 10, 1.5),
+        zjolt.rvec3(0.5, 10, 2.5),
         zjolt.vec3(0, -20, 0),
         null,
         null,

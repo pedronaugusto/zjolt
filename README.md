@@ -19,9 +19,9 @@ system and no clock attached.
 - Drift between the C header and the Zig externs **fails the build**, not
   production: a test compares the two by reflection, with nothing listed by
   hand. 13 kinds of deliberate drift are verified to fail it, including a
-  field swap that leaves every offset in the struct unchanged; a further
-  9 mutations for the other guards do the same, each naming the test that has
-  to catch it.
+  field swap that leaves every offset in the struct unchanged, and
+  13 mutations for the other guards do the same, each naming the test that
+  has to catch it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
   reach has been turned into a returned error, with a test that fails if the
@@ -392,18 +392,18 @@ negative enumerator, an extern replaced by a Zig helper wearing the same name,
 and a module dropped from `src/c.zig`'s list — and asserts each is refused
 with a `zjolt ABI drift:` message.
 
-The same script mutates the other five guards, since a guard nothing tests is
+The same script mutates the other seven guards, since a guard nothing tests is
 a guard nobody has checked: the entry-point preamble that turns a call made
 before `zjoltInit` into a result rather than a walk through an uninitialised
 allocator, the allocator seam, the callback error path that stashes a failure
-instead of unwinding across a Jolt callback, the analysis sweep that forces
-Zig to look at wrappers nothing calls, and the coverage classifier. Each of
-those declares the
-signal the build must produce, so a mutation that fails for an unrelated
-reason is reported as a wrong failure rather than counted as the guard doing
-its job. 22 mutations in all, none missed, and `ci/check-numbers.sh` fails the
-build if that count and this sentence drift apart. It runs under
-`ci/run.sh --full`.
+instead of unwinding across a Jolt callback, the analysis sweep that forces Zig
+to look at wrappers nothing calls, the coverage classifier, and the two guards
+over the documents — `ci/check-numbers.sh` and `ci/check-examples.sh`, which
+are mutated by editing a document rather than a source. Each of those declares
+the signal that must appear, so a mutation that fails for an unrelated reason
+is reported as a wrong failure rather than counted as the guard doing its job.
+26 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
+that count and this sentence drift apart. It runs under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
 types are compared only by size and alignment — a `float *` declared as `*i32`
@@ -509,8 +509,8 @@ destroying it rather than leaving the broad phase holding freed bodies; and a
 character on a ramp is supported by it while one pressed against a wall is
 not.
 
-Every subsystem now owes at least one such test, and the ones added last cover
-the parts a caller most easily gets subtly wrong: a box's mass and inertia
+The bar is one characteristic test per subsystem, never one per entry point.
+These cover the parts a caller most easily gets subtly wrong: a box's mass and inertia
 follow from its dimensions and density; a compound's centre of mass sits where
 its children put it rather than at its origin; a material attached to one mesh
 triangle comes back through a ray hit as that same material and not its
@@ -559,8 +559,8 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 
 The default is trimmed rather than complete, which is a concession to what Jolt
 is: 179 translation units per configuration, so one is tens of seconds rather
-than the couple of seconds a smaller library would take. `--full` is 27 checks
-— 19 of them run on this host, 8 cross-compiling — which is minutes from a
+than the couple of seconds a smaller library would take. `--full` is 28 checks
+— 20 of them run on this host, 8 cross-compiling — which is minutes from a
 cold cache; the default is under a minute once the cache is warm.
 
 `ci/measurements.sh` recomputes every number this README states, and

@@ -16,7 +16,11 @@
         "tools",
         ".github",
         "LICENSE",
+        // Every markdown file the package ships. README.md links all of
+        // them, so one left out of this list is a dead link in a fetched
+        // copy rather than a missing convenience.
         "BINDING.md",
+        "CHANGELOG.md",
         "README.md",
         "UPSTREAM.md",
     },

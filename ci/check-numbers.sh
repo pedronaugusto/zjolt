@@ -81,6 +81,7 @@ cross_targets=$(count_cross_targets)
 full_checks=$(count_full_checks)
 
 sweeps=$(count_reflective_sweeps)
+c_modules=$(count_c_modules)
 version=$(version_triple)
 
 vehicle_points=$(count_api_decls_in ffi/zjolt_vehicle.h)
@@ -116,12 +117,18 @@ claim 'README --full cross builds' README.md \
 claim 'README reflective sweeps' README.md \
   '[0-9]+ reflective sweeps' "$sweeps"
 
+claim 'BINDING C declaration modules' BINDING.md \
+  'list of [0-9]+ modules' "$c_modules"
+
 claim 'UPSTREAM vehicle/ragdoll/softbody' UPSTREAM.md \
   'carry [0-9]+, [0-9]+ and [0-9]+ entry points' \
   "$vehicle_points $ragdoll_points $softbody_points"
 
 claim 'check-abi-drift other-guard mutations' ci/check-abi-drift.sh \
   '[0-9]+ of the mutations aim at the other guards' "$other_mutations"
+
+claim 'workflow mutation count' .github/workflows/ci.yml \
+  'mutates the sources [0-9]+ ways' "$all_mutations"
 
 claim 'ci/run.sh translation units' ci/run.sh \
   '[0-9]+ translation units' "$total_tu"

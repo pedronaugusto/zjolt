@@ -72,8 +72,8 @@ printf 'zjolt translation units               %s\n' "$(count_own_tu)"
 printf 'total per configuration               %s\n' "$(count_total_tu)"
 printf 'zig source lines (src/)               %s\n' \
   "$(cat src/*.zig src/c/*.zig | wc -l | tr -d ' ')"
-printf 'C declaration modules (src/c/)        %s\n' \
-  "$(ls src/c/*.zig | wc -l | tr -d ' ')"
+printf 'C declaration modules (src/c/)        %s
+' "$(count_c_modules)"
 printf 'C++ source lines (ffi/)               %s\n' \
   "$(cat ffi/*.cpp ffi/*.h | wc -l | tr -d ' ')"
 

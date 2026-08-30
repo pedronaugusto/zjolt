@@ -78,7 +78,7 @@ fn fail(comptime msg: []const u8) void {
 
 fn theirDecl(comptime name: []const u8, comptime because: []const u8) type {
     if (!@hasDecl(h, name)) {
-        fail("`" ++ because ++ "` in src/c.zig expects `" ++ name ++
+        fail("`" ++ because ++ "` in src/c/ expects `" ++ name ++
             "` in ffi/zjolt.h, which does not declare it");
     }
     return @TypeOf(@field(h, name));
@@ -91,12 +91,12 @@ fn sameSizeAndAlign(
 ) void {
     if (@sizeOf(Ours) != @sizeOf(Theirs)) {
         fail(what ++ " is " ++ std.fmt.comptimePrint("{d}", .{@sizeOf(Ours)}) ++
-            " bytes in src/c.zig but " ++ std.fmt.comptimePrint("{d}", .{@sizeOf(Theirs)}) ++
+            " bytes in src/c/ but " ++ std.fmt.comptimePrint("{d}", .{@sizeOf(Theirs)}) ++
             " in ffi/zjolt.h");
     }
     if (@alignOf(Ours) != @alignOf(Theirs)) {
         fail(what ++ " has alignment " ++ std.fmt.comptimePrint("{d}", .{@alignOf(Ours)}) ++
-            " in src/c.zig but " ++ std.fmt.comptimePrint("{d}", .{@alignOf(Theirs)}) ++
+            " in src/c/ but " ++ std.fmt.comptimePrint("{d}", .{@alignOf(Theirs)}) ++
             " in ffi/zjolt.h");
     }
 }
@@ -141,11 +141,11 @@ fn sameScalar(
     if (!across_enum and oi == .int and ti == .int and
         oi.int.signedness != ti.int.signedness)
     {
-        fail(what ++ " is " ++ @tagName(oi.int.signedness) ++ " in src/c.zig but " ++
+        fail(what ++ " is " ++ @tagName(oi.int.signedness) ++ " in src/c/ but " ++
             @tagName(ti.int.signedness) ++ " in ffi/zjolt.h");
     }
     if ((oi == .int) != (ti == .int) or (oi == .float) != (ti == .float)) {
-        fail(what ++ " is a " ++ @tagName(oi) ++ " in src/c.zig but a " ++
+        fail(what ++ " is a " ++ @tagName(oi) ++ " in src/c/ but a " ++
             @tagName(ti) ++ " in ffi/zjolt.h");
     }
 }
@@ -163,7 +163,7 @@ fn checkFnType(
 
     if (ours.params.len != theirs.params.len) {
         fail(what ++ " takes " ++ std.fmt.comptimePrint("{d}", .{ours.params.len}) ++
-            " parameters in src/c.zig but " ++ std.fmt.comptimePrint("{d}", .{theirs.params.len}) ++
+            " parameters in src/c/ but " ++ std.fmt.comptimePrint("{d}", .{theirs.params.len}) ++
             " in ffi/zjolt.h");
     }
     if (ours.is_var_args != theirs.is_var_args) {
@@ -171,7 +171,7 @@ fn checkFnType(
     }
 
     inline for (ours.params, theirs.params, 0..) |op, tp, i| {
-        const OP = op.type orelse fail(what ++ " has an untyped parameter in src/c.zig");
+        const OP = op.type orelse fail(what ++ " has an untyped parameter in src/c/");
         const TP = tp.type orelse fail(what ++ " has an untyped parameter in ffi/zjolt.h");
         sameScalar(
             what ++ " parameter " ++ std.fmt.comptimePrint("{d}", .{i}),
@@ -180,7 +180,7 @@ fn checkFnType(
         );
     }
 
-    const OR = ours.return_type orelse fail(what ++ " has no return type in src/c.zig");
+    const OR = ours.return_type orelse fail(what ++ " has no return type in src/c/");
     const TR = theirs.return_type orelse fail(what ++ " has no return type in ffi/zjolt.h");
     sameScalar(what ++ " return value", OR, TR);
 }
@@ -200,22 +200,22 @@ fn checkStructLayout(
     const ours = @typeInfo(Ours).@"struct";
     const theirs = switch (@typeInfo(Theirs)) {
         .@"struct" => |s| s,
-        else => fail(what ++ " is a struct in src/c.zig but not in ffi/zjolt.h"),
+        else => fail(what ++ " is a struct in src/c/ but not in ffi/zjolt.h"),
     };
 
     if (ours.fields.len != theirs.fields.len) {
         fail(what ++ " has " ++ std.fmt.comptimePrint("{d}", .{ours.fields.len}) ++
-            " fields in src/c.zig but " ++ std.fmt.comptimePrint("{d}", .{theirs.fields.len}) ++
+            " fields in src/c/ but " ++ std.fmt.comptimePrint("{d}", .{theirs.fields.len}) ++
             " in ffi/zjolt.h");
     }
 
     inline for (ours.fields) |f| {
         if (!@hasField(Theirs, f.name)) {
-            fail(what ++ " has field `" ++ f.name ++ "` in src/c.zig, which ffi/zjolt.h does not");
+            fail(what ++ " has field `" ++ f.name ++ "` in src/c/, which ffi/zjolt.h does not");
         }
         if (@offsetOf(Ours, f.name) != @offsetOf(Theirs, f.name)) {
             fail(what ++ "." ++ f.name ++ " is at byte " ++
-                std.fmt.comptimePrint("{d}", .{@offsetOf(Ours, f.name)}) ++ " in src/c.zig but " ++
+                std.fmt.comptimePrint("{d}", .{@offsetOf(Ours, f.name)}) ++ " in src/c/ but " ++
                 std.fmt.comptimePrint("{d}", .{@offsetOf(Theirs, f.name)}) ++ " in ffi/zjolt.h");
         }
         sameScalar(
@@ -253,7 +253,7 @@ fn checkEnumValues(
         }
         if (@as(i128, @field(h, cname)) != @as(i128, f.value)) {
             fail(what ++ "." ++ f.name ++ " is " ++
-                std.fmt.comptimePrint("{d}", .{f.value}) ++ " in src/c.zig but " ++ cname ++
+                std.fmt.comptimePrint("{d}", .{f.value}) ++ " in src/c/ but " ++ cname ++
                 " is " ++ std.fmt.comptimePrint("{d}", .{@field(h, cname)}) ++ " in ffi/zjolt.h");
         }
     }
@@ -285,7 +285,7 @@ fn checkMaskBits(
 
         if (@as(i128, @field(h, cname)) != @as(i128, bit)) {
             fail(what ++ "." ++ f.name ++ " is bit " ++
-                std.fmt.comptimePrint("0x{x}", .{bit}) ++ " in src/c.zig but " ++ cname ++
+                std.fmt.comptimePrint("0x{x}", .{bit}) ++ " in src/c/ but " ++ cname ++
                 " is " ++ std.fmt.comptimePrint("0x{x}", .{@field(h, cname)}) ++ " in ffi/zjolt.h");
         }
     }
@@ -359,7 +359,7 @@ fn sweepOurs() Counts {
                         const Theirs = theirDecl(cname, what);
                         if (Theirs != type) fail(cname ++ " is not a type in ffi/zjolt.h");
                         if (@typeInfo(@field(h, cname)) != .@"opaque") {
-                            fail(what ++ " is opaque in src/c.zig but not in ffi/zjolt.h");
+                            fail(what ++ " is opaque in src/c/ but not in ffi/zjolt.h");
                         }
                     },
                     .@"struct" => |s| {
@@ -395,7 +395,7 @@ fn sweepOurs() Counts {
                         const oi = @typeInfo(Ours);
                         const ti = @typeInfo(Theirs);
                         if (oi == .int and ti == .int and oi.int.signedness != ti.int.signedness) {
-                            fail(what ++ " is " ++ @typeName(Ours) ++ " in src/c.zig but " ++
+                            fail(what ++ " is " ++ @typeName(Ours) ++ " in src/c/ but " ++
                                 @typeName(Theirs) ++ " in ffi/zjolt.h");
                         }
                     },
@@ -427,7 +427,7 @@ fn sweepOurs() Counts {
                     // the extern it displaced vanishes unnoticed. A
                     // helper is allowed; one wearing a boundary name is not.
                     if (std.mem.startsWith(u8, d.name, "zjolt")) {
-                        fail("src/c.zig declares `" ++ d.name ++ "` as a Zig function, not an " ++
+                        fail("src/c/ declares `" ++ d.name ++ "` as a Zig function, not an " ++
                             "extern. The `zjolt` prefix is reserved for the C boundary here: a " ++
                             "helper on that name hides the extern it replaced from both " ++
                             "directions of this check. Rename the helper.");
@@ -455,14 +455,14 @@ fn sweepOurs() Counts {
                 const theirs_val: i128 = @intCast(@field(h, cname));
                 if (ours_val != theirs_val) {
                     fail(what ++ " is " ++ std.fmt.comptimePrint("{d}", .{ours_val}) ++
-                        " in src/c.zig but " ++ cname ++ " is " ++
+                        " in src/c/ but " ++ cname ++ " is " ++
                         std.fmt.comptimePrint("{d}", .{theirs_val}) ++ " in ffi/zjolt.h");
                 }
                 n.constants += 1;
                 continue;
             }
 
-            fail("src/c.zig declares `" ++ d.name ++ "` as a " ++ @tagName(@typeInfo(Decl)) ++
+            fail("src/c/ declares `" ++ d.name ++ "` as a " ++ @tagName(@typeInfo(Decl)) ++
                 ", which this check does not know how to compare. Add a case rather than " ++
                 "leaving it unchecked.");
         };
@@ -513,11 +513,11 @@ fn sweepTheirs() usize {
             // filter cannot reopen the hole silently.
             const Ours = @TypeOf(@field(Home, d.name));
             if (@typeInfo(Ours) != .@"fn") {
-                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++
+                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c/ declares that name " ++
                     "as a " ++ @tagName(@typeInfo(Ours)) ++ " rather than a function");
             }
             if (@typeInfo(Ours).@"fn".calling_convention == .auto) {
-                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c.zig declares that name " ++
+                fail("ffi/zjolt.h exports `" ++ d.name ++ "` but src/c/ declares that name " ++
                     "as a Zig function rather than an extern, so nothing binds the symbol");
             }
         }
@@ -532,7 +532,7 @@ fn sweepTheirs() usize {
 // they passed. What's left: assert they actually ran — a sweep matching nothing silently would be indistinguishable from one matching everything.
 //=============================================================================
 
-test "ABI: src/c.zig agrees with ffi/zjolt.h" {
+test "ABI: src/c/ agrees with ffi/zjolt.h" {
     @setEvalBranchQuota(1_000_000);
 
     const ours = comptime sweepOurs();
