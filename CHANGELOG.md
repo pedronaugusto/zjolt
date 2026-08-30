@@ -43,6 +43,23 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `setCollideKinematicVsNonDynamic`, `setEnhancedInternalEdgeRemoval`, and the
   two step-override pairs.
 - `VehicleConstraint` gained `setEngineDesc` and `setTransmissionDesc`.
+- `layersFromInstance` builds the same three layer tables from a live value
+  rather than from a type, so a layer scheme read from data at run time is
+  expressible. `layersFromType` is unchanged; both now reject a type missing
+  one of the four required declarations with a `@compileError` naming it.
+
+### Zig API — allocation
+
+- `Character.activeContactCount` and `Character.activeContacts(out)` read the
+  active contact list without allocating. `getActiveContacts(allocator)` is
+  now the convenience built on them rather than the only way to ask.
+
+### Performance
+
+- The Jolt allocator bridge asks the backing allocator to grow a block in
+  place before falling back to allocate-copy-free. Every `reallocate` used to
+  move the whole block, and Jolt reallocates its body list, its contact cache
+  and every temporary collector.
 
 ### Documentation, and what now holds it
 

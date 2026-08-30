@@ -1032,3 +1032,48 @@ fn expectVec3Near(expected: zjolt.Vec3, actual: zjolt.Vec3, tolerance: f32) !voi
     try std.testing.expectApproxEqAbs(expected.y, actual.y, tolerance);
     try std.testing.expectApproxEqAbs(expected.z, actual.z, tolerance);
 }
+
+//=============================================================================
+// Active contacts
+//=============================================================================
+
+test "active contacts are countable, readable into a caller's buffer, and refuse a short one" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const capsule = try zjolt.Shape.initCapsule(0.5, 0.3, .{});
+    defer capsule.release();
+    const character = try zjolt.Character.init(world.system, .{
+        .shape = capsule,
+        .position = zjolt.rvec3(0, 5, 0),
+    });
+    defer character.deinit();
+
+    const settings = zjolt.defaultCharacterUpdateSettings();
+    try walkForward(character, &settings, 0, 4.0);
+    try std.testing.expectEqual(zjolt.GroundState.on_ground, character.groundState());
+
+    // Standing on the floor is at least one contact, and the count is
+    // readable without a buffer at all.
+    const count = try character.activeContactCount();
+    try std.testing.expect(count > 0);
+
+    var buffer: [16]zjolt.CharacterContact = undefined;
+    const contacts = try character.activeContacts(&buffer);
+    try std.testing.expectEqual(count, @as(u32, @intCast(contacts.len)));
+    try std.testing.expectEqual(@intFromPtr(&buffer), @intFromPtr(contacts.ptr));
+
+    // A buffer that cannot hold them says so rather than truncating quietly.
+    try std.testing.expectError(
+        error.BufferTooSmall,
+        character.activeContacts(buffer[0 .. count - 1]),
+    );
+
+    // The allocating form agrees with both, and owns what it returns.
+    const owned = try character.getActiveContacts(std.testing.allocator);
+    defer std.testing.allocator.free(owned);
+    try std.testing.expectEqual(contacts.len, owned.len);
+}

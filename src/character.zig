@@ -595,23 +595,44 @@ pub const Character = struct {
         try err.check(c.zjoltCharacterRefreshContacts(self.handle, filters));
     }
 
-    /// Every contact the last update/walkStairs/etc. call found. Only
-    /// contacts with `had_collision` set are actual touches — the rest were
-    /// predictive and never became real.
-    pub fn getActiveContacts(self: Character, allocator: std.mem.Allocator) err.Error![]CharacterContact {
+    /// How many contacts the last update/walkStairs/etc. call found, without
+    /// reading any of them.
+    pub fn activeContactCount(self: Character) err.Error!u32 {
         var count: u32 = 0;
         try err.check(c.zjoltCharacterGetActiveContacts(self.handle, null, 0, &count));
+        return count;
+    }
 
-        const contacts = try allocator.alloc(CharacterContact, count);
-        errdefer allocator.free(contacts);
+    /// Every contact the last update/walkStairs/etc. call found, written into
+    /// `out` and returned as the prefix filled. Only contacts with
+    /// `had_collision` set are actual touches; the rest were predictive.
+    /// `error.BufferTooSmall` when `out` is shorter than `activeContactCount`
+    /// — `out` still receives what fits, but the slice is lost with the error.
+    /// The allocation-free form: keep one buffer per character and reuse it.
+    pub fn activeContacts(
+        self: Character,
+        out: []CharacterContact,
+    ) err.Error![]CharacterContact {
         var actual: u32 = 0;
         try err.check(c.zjoltCharacterGetActiveContacts(
             self.handle,
-            contacts.ptr,
-            @intCast(contacts.len),
+            out.ptr,
+            @intCast(out.len),
             &actual,
         ));
-        return contacts[0..actual];
+        return out[0..actual];
+    }
+
+    /// `activeContacts` into a fresh allocation, for a caller that has no
+    /// buffer to reuse. Two crossings rather than one, and one allocation per
+    /// call: prefer `activeContacts` anywhere this runs every frame.
+    pub fn getActiveContacts(
+        self: Character,
+        allocator: std.mem.Allocator,
+    ) err.Error![]CharacterContact {
+        const contacts = try allocator.alloc(CharacterContact, try self.activeContactCount());
+        errdefer allocator.free(contacts);
+        return self.activeContacts(contacts);
     }
 
     pub fn hasCollidedWithBody(self: Character, body: body_mod.BodyId) bool {
