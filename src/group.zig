@@ -9,7 +9,9 @@
 //! bodies collide when neither carries a filter, or when the first body's
 //! filter says they do (and if only the second has one, when the second's
 //! does). Filters are shared and reference counted: one per ragdoll, held by
-//! every body in it.
+//! every body in it, and each is a bit table or a callback — Jolt's
+//! `GroupFilter` is an abstract base and `GroupFilterTable` is only the one
+//! implementation it ships.
 
 const std = @import("std");
 const c = @import("c/group.zig");
@@ -65,12 +67,28 @@ pub const CollisionGroup = struct {
 pub const GroupFilter = struct {
     handle: *c.GroupFilter,
 
+    /// What `initCustom` is asked for every pair Jolt could not already
+    /// decide. Mirrors `ZJoltCustomGroupFilter`.
+    pub const CustomCallbacks = c.CustomGroupFilter;
+
     /// `num_sub_groups` sub-groups, every pair enabled. Size it to one
     /// articulated object, not to a level: the table is
     /// `(n * (n - 1)) / 2` bits.
     pub fn initTable(num_sub_groups: u32) err.Error!GroupFilter {
         var handle: *c.GroupFilter = undefined;
         try err.check(c.zjoltGroupFilterTableCreate(num_sub_groups, &handle));
+        return .{ .handle = handle };
+    }
+
+    /// Asks `callbacks.can_collide` instead of reading a table — for a rule
+    /// no table can express: a team id, a hit mask, host state. A null
+    /// `can_collide` is `error.InvalidArgument`. Jolt asks it for every pair
+    /// where either body carries a filter, and applies none of the table's
+    /// group-id rules first; `user` is borrowed and must outlive every body
+    /// holding the filter. The three table methods below then refuse it.
+    pub fn initCustom(callbacks: CustomCallbacks) err.Error!GroupFilter {
+        var handle: *c.GroupFilter = undefined;
+        try err.check(c.zjoltGroupFilterCustomCreate(&callbacks, &handle));
         return .{ .handle = handle };
     }
 
@@ -86,6 +104,13 @@ pub const GroupFilter = struct {
         return c.zjoltGroupFilterGetRefCount(self.handle);
     }
 
+    /// Which kind this is. The three table methods below apply only when
+    /// true; on a callback filter each returns `error.InvalidArgument`.
+    pub fn isTable(self: GroupFilter) bool {
+        return c.zjoltGroupFilterIsTable(self.handle);
+    }
+
+    /// 0 for a callback filter, which has no table and so no count.
     pub fn numSubGroups(self: GroupFilter) u32 {
         return c.zjoltGroupFilterGetNumSubGroups(self.handle);
     }

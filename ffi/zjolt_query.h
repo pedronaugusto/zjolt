@@ -45,15 +45,17 @@ typedef struct ZJoltBodyFilter {
   void *user;
 } ZJoltBodyFilter;
 
-/// Rejects individual shapes, once the shape's body has been accepted.
-/// Called once per SHAPE, never per triangle — reject mesh triangles by
-/// `sub_shape_id` in the hit callback instead. `sub_shape_id` names the
-/// child shape (ZJOLT_SUB_SHAPE_ID_EMPTY for a childless one);
-/// `query_sub_shape_id` names the sub-shape of the shape being cast or
-/// overlapped (ZJOLT_SUB_SHAPE_ID_EMPTY for a ray or point).
+/// Rejects individual shapes, once the shape's body has been accepted, once
+/// per SHAPE and never per triangle — reject mesh triangles by
+/// `sub_shape_id` in the hit callback instead. `shape`/`sub_shape_id` name
+/// what is collided against (EMPTY id when childless); `query_shape` and
+/// `query_sub_shape_id` name what is cast, NULL/EMPTY for a ray or a point.
+/// Both shapes are borrowed: read them, never store or release them.
 typedef struct ZJoltShapeFilter {
   bool (*should_collide)(void *user, ZJoltBodyId body,
+                         const ZJoltShape *shape,
                          ZJoltSubShapeId sub_shape_id,
+                         const ZJoltShape *query_shape,
                          ZJoltSubShapeId query_sub_shape_id);
   void *user;
 } ZJoltShapeFilter;

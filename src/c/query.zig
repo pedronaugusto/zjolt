@@ -46,7 +46,9 @@ pub const ShapeFilter = extern struct {
     should_collide: ?*const fn (
         user: ?*anyopaque,
         body: BodyId,
+        shape: ?*const Shape,
         sub_shape_id: SubShapeId,
+        query_shape: ?*const Shape,
         query_sub_shape_id: SubShapeId,
     ) callconv(.c) bool = null,
     user: ?*anyopaque = null,

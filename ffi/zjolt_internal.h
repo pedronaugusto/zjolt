@@ -529,21 +529,21 @@ class ShapeFilterAdapter final : public JPH::ShapeFilter {
  public:
   explicit ShapeFilterAdapter(const ZJoltShapeFilter &f) : filter_(f) {}
 
-  bool ShouldCollide(const JPH::Shape *,
+  bool ShouldCollide(const JPH::Shape *inShape2,
                      const JPH::SubShapeID &inSubShapeIDOfShape2) const override {
     if (filter_.should_collide == nullptr) return true;
-    return filter_.should_collide(filter_.user, ToC(mBodyID2),
-                                  ToC(inSubShapeIDOfShape2),
+    return filter_.should_collide(filter_.user, ToC(mBodyID2), ToC(inShape2),
+                                  ToC(inSubShapeIDOfShape2), nullptr,
                                   ZJOLT_SUB_SHAPE_ID_EMPTY);
   }
 
-  bool ShouldCollide(const JPH::Shape *,
+  bool ShouldCollide(const JPH::Shape *inShape1,
                      const JPH::SubShapeID &inSubShapeIDOfShape1,
-                     const JPH::Shape *,
+                     const JPH::Shape *inShape2,
                      const JPH::SubShapeID &inSubShapeIDOfShape2) const override {
     if (filter_.should_collide == nullptr) return true;
-    return filter_.should_collide(filter_.user, ToC(mBodyID2),
-                                  ToC(inSubShapeIDOfShape2),
+    return filter_.should_collide(filter_.user, ToC(mBodyID2), ToC(inShape2),
+                                  ToC(inSubShapeIDOfShape2), ToC(inShape1),
                                   ToC(inSubShapeIDOfShape1));
   }
 
@@ -1093,14 +1093,26 @@ class ObjectStreamOStream final : private ZJoltStreamBuf, public std::ostream {
 // Handle types zjolt owns (global namespace — they must match the C tag names)
 //===----------------------------------------------------------------------===//
 
-/// A collision group filter. HOLDS a GroupFilterTable rather than being
-/// one: JPH::GroupFilterTable is `final` and keeps its sub-group count
-/// private, so returning errors instead of Jolt's out-of-bounds indexing
-/// requires tracking that count here. CanCollide forwards exactly: the
-/// table compares filter POINTERS, and both bodies point at this wrapper.
-struct ZJoltGroupFilter final : public JPH::GroupFilter {
-  explicit ZJoltGroupFilter(JPH::uint sub_groups)
-      : table(sub_groups), num_sub_groups(sub_groups) {}
+/// A collision group filter this ABI owns — the base the two concrete kinds
+/// share, so one C handle type can be either. `is_table` tells them apart,
+/// and it is a flag rather than RTTI because zjolt builds Jolt with
+/// -fno-rtti: there is no dynamic_cast to ask with, and a downcast that
+/// guessed wrong would be silent. Every table entry point checks it and
+/// refuses a callback filter by name.
+struct ZJoltGroupFilter : public JPH::GroupFilter {
+  explicit ZJoltGroupFilter(bool table_kind) : is_table(table_kind) {}
+
+  const bool is_table;
+};
+
+/// HOLDS a GroupFilterTable rather than being one: JPH::GroupFilterTable is
+/// `final` and keeps its sub-group count private, so returning errors instead
+/// of Jolt's out-of-bounds indexing requires tracking that count here.
+/// CanCollide forwards exactly: the table compares filter POINTERS, and both
+/// bodies point at this wrapper.
+struct ZJoltGroupFilterTable final : public ZJoltGroupFilter {
+  explicit ZJoltGroupFilterTable(JPH::uint sub_groups)
+      : ZJoltGroupFilter(true), table(sub_groups), num_sub_groups(sub_groups) {}
 
   bool CanCollide(const JPH::CollisionGroup &group1,
                   const JPH::CollisionGroup &group2) const override {
@@ -1109,6 +1121,26 @@ struct ZJoltGroupFilter final : public JPH::GroupFilter {
 
   JPH::GroupFilterTable table;
   JPH::uint num_sub_groups;
+};
+
+/// Asks the host instead of reading a table, which is Jolt's own arrangement:
+/// GroupFilter is an abstract base a game subclasses, and the bit table is
+/// only the implementation Jolt ships. The ids go across rather than the
+/// filters: a body's filter is reachable from neither side of the C boundary
+/// without a downcast this ABI will not make. Group 1 is always the group
+/// this filter came from — @see zjolt_group.h for the order Jolt applies.
+struct ZJoltGroupFilterCustom final : public ZJoltGroupFilter {
+  explicit ZJoltGroupFilterCustom(const ZJoltCustomGroupFilter &cb)
+      : ZJoltGroupFilter(false), callbacks(cb) {}
+
+  bool CanCollide(const JPH::CollisionGroup &group1,
+                  const JPH::CollisionGroup &group2) const override {
+    return callbacks.can_collide(callbacks.user, group1.GetGroupID(),
+                                 group1.GetSubGroupID(), group2.GetGroupID(),
+                                 group2.GetSubGroupID());
+  }
+
+  ZJoltCustomGroupFilter callbacks;
 };
 
 namespace zjolt {

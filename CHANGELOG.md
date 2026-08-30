@@ -51,6 +51,14 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   The model-space matrices were computed and consumed inside the ABI and never
   readable, so a pose produced outside Jolt had no way in and a pose Jolt
   computed had no way out.
+- `zjoltGroupFilterCustomCreate`, `zjoltGroupFilterIsTable` and the
+  `ZJoltCustomGroupFilter` callback. `JPH::GroupFilter` is an abstract base a
+  game subclasses and `GroupFilterTable` is the one implementation Jolt ships;
+  only the table crossed, so a collision rule that is not a bit table — a team
+  id, a hit mask, state the host keeps elsewhere — had no crossing at all.
+  The three `zjoltGroupFilterTable*` entry points refuse a callback filter
+  with a message naming the entry point that made it, and
+  `zjoltGroupFilterGetNumSubGroups` reports 0 for one.
 
 ### C ABI — changed
 
@@ -73,6 +81,13 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `num_velocity_steps_override`, `num_position_steps_override`. Together with
   `mass_properties_override`, which every path silently dropped, seven
   `BodyCreationSettings` settings were unreachable through this ABI.
+- `ZJoltShapeFilter.should_collide` takes `const ZJoltShape *shape` and
+  `const ZJoltShape *query_shape` beside the two sub-shape ids, mirroring
+  `ZJoltSimShapeFilter`, which already carried both. The filter was handed a
+  body id and two opaque ids, so it could not decide on the shape's own type,
+  user data or material — the questions a SHAPE filter exists to answer, as
+  opposed to the body filter one level above it. `query_shape` is NULL for a
+  query with no shape of its own: a ray, a point.
 - `zjoltShapeCreateSphere` and its siblings are unchanged; `BINDING.md`'s
   walk-through, which described a three-parameter version of it, is now a
   verbatim excerpt checked by `ci/check-examples.sh`.
@@ -108,6 +123,12 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `saveBinaryState`, `restoreBinaryState`, `saveWithMaterials` and
   `restoreWithMaterials`.
 - `SkeletonPose.getJointMatrices` and `setJointMatrices`.
+- `GroupFilter.initCustom` takes a `can_collide` callback and `isTable` says
+  which kind a filter is. The three table methods return
+  `error.InvalidArgument` on a callback filter rather than casting it.
+- A `QueryFilters.shape` callback receives both shape pointers, mirroring the
+  C change; `zjolt.Shape{ .handle = ... }` reads either with the ordinary
+  shape accessors for the duration of the call.
 - `layersFromInstance` builds the same three layer tables from a live value
   rather than from a type, so a layer scheme read from data at run time is
   expressible. `layersFromType` is unchanged; both now reject a type missing

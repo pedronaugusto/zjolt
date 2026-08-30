@@ -1030,6 +1030,101 @@ test "bodies in the same group with different filter objects never collide" {
     try std.testing.expect(separation > 1.0);
 }
 
+/// Collide only when the two sub-group ids share a parity — a rule over an
+/// unbounded id space, which a fixed table cannot hold at any size.
+///
+/// Not synchronised: `World` runs a single-threaded job system, so the whole
+/// step is on the calling thread. A callback filter in a threaded system
+/// would need its own synchronisation.
+const SameParityOnly = struct {
+    calls: usize = 0,
+
+    fn canCollide(
+        user: ?*anyopaque,
+        _: u32,
+        sub_group_id1: u32,
+        _: u32,
+        sub_group_id2: u32,
+    ) callconv(.c) bool {
+        const self: *SameParityOnly = @ptrCast(@alignCast(user.?));
+        self.calls += 1;
+        return sub_group_id1 % 2 == sub_group_id2 % 2;
+    }
+};
+
+test "a callback group filter decides pairs no bit table could hold" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var counter: SameParityOnly = .{};
+    const filter = try zjolt.GroupFilter.initCustom(.{
+        .can_collide = SameParityOnly.canCollide,
+        .user = @ptrCast(&counter),
+    });
+    defer filter.release();
+
+    try std.testing.expect(!filter.isTable());
+    try std.testing.expectEqual(@as(u32, 0), filter.numSubGroups());
+
+    // Sub-groups 0 and 2 share a parity, so they collide and rest at contact.
+    // Both are past what a two-sub-group table could even index.
+    const collided = try finalXSeparation(
+        .{ .filter = filter, .group_id = 1, .sub_group_id = 0 },
+        .{ .filter = filter, .group_id = 1, .sub_group_id = 2 },
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, -0.8), collided, 0.2);
+    try std.testing.expect(counter.calls > 0);
+
+    // 0 and 1 do not, so they pass through each other.
+    const passed = try finalXSeparation(
+        .{ .filter = filter, .group_id = 1, .sub_group_id = 0 },
+        .{ .filter = filter, .group_id = 1, .sub_group_id = 1 },
+    );
+    try std.testing.expect(passed > 1.0);
+}
+
+fn alwaysCollide(_: ?*anyopaque, _: u32, _: u32, _: u32, _: u32) callconv(.c) bool {
+    return true;
+}
+
+test "the table methods refuse a callback filter rather than casting it" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const custom = try zjolt.GroupFilter.initCustom(.{ .can_collide = alwaysCollide });
+    defer custom.release();
+
+    // A callback filter has no bit table, so there is nothing for these
+    // three to read or write. The refusal names the entry point that made
+    // it, rather than a downcast reading another object's memory.
+    try std.testing.expectError(error.InvalidArgument, custom.disableCollision(0, 1));
+    try std.testing.expect(
+        std.mem.indexOf(u8, zjolt.lastError(), "zjoltGroupFilterCustomCreate") != null,
+    );
+    try std.testing.expectError(error.InvalidArgument, custom.enableCollision(0, 1));
+    try std.testing.expectError(error.InvalidArgument, custom.isCollisionEnabled(0, 1));
+
+    // A table filter answers all three, and says which kind it is.
+    const table = try zjolt.GroupFilter.initTable(2);
+    defer table.release();
+    try std.testing.expect(table.isTable());
+    try std.testing.expectEqual(@as(u32, 2), table.numSubGroups());
+    try table.disableCollision(0, 1);
+    try std.testing.expect(!try table.isCollisionEnabled(0, 1));
+}
+
+test "a callback filter without its callback is refused at creation" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    // Nothing sensible to answer with, so the refusal is here rather than on
+    // the first pair, inside a step, on a job thread.
+    try std.testing.expectError(
+        error.InvalidArgument,
+        zjolt.GroupFilter.initCustom(.{}),
+    );
+}
+
 //=============================================================================
 // Shape introspection
 //

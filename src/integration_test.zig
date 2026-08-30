@@ -1810,17 +1810,23 @@ const RejectShapesOf = struct {
     body: zjolt.BodyId,
     calls: usize = 0,
     all_sub_shapes_empty: bool = true,
+    every_shape_arrived: bool = true,
+    every_query_shape_was_null: bool = true,
 
     fn shouldCollide(
         user: ?*anyopaque,
         body: zjolt.BodyId,
+        shape: ?*const zjolt.c.core.Shape,
         sub_shape_id: zjolt.SubShapeId,
+        query_shape: ?*const zjolt.c.core.Shape,
         query_sub_shape_id: zjolt.SubShapeId,
     ) callconv(.c) bool {
         const self: *RejectShapesOf = @ptrCast(@alignCast(user.?));
         self.calls += 1;
         if (sub_shape_id != zjolt.empty_sub_shape_id) self.all_sub_shapes_empty = false;
         if (query_sub_shape_id != zjolt.empty_sub_shape_id) self.all_sub_shapes_empty = false;
+        if (shape == null) self.every_shape_arrived = false;
+        if (query_shape != null) self.every_query_shape_was_null = false;
         return body != self.body;
     }
 
@@ -1865,6 +1871,85 @@ test "a shape filter suppresses exactly the shapes it rejects" {
     // pinning down: it is the difference between this filter and a body
     // filter, and it only appears when compound shapes do.
     try std.testing.expect(reject.all_sub_shapes_empty);
+
+    // A ray has no shape of its own, so the query side is null; the shape
+    // being collided against is always there.
+    try std.testing.expect(reject.every_shape_arrived);
+    try std.testing.expect(reject.every_query_shape_was_null);
+}
+
+/// Decides on the SHAPE rather than the body, which is the whole reason the
+/// filter is handed shape pointers: a sub-type, a user data or a material is
+/// a fact about the shape, and an id cannot answer any of them.
+const RejectSubType = struct {
+    reject: zjolt.ShapeSubType,
+    query_sub_types_seen: usize = 0,
+    every_query_shape_was_a_box: bool = true,
+
+    fn shouldCollide(
+        user: ?*anyopaque,
+        _: zjolt.BodyId,
+        shape: ?*const zjolt.c.core.Shape,
+        _: zjolt.SubShapeId,
+        query_shape: ?*const zjolt.c.core.Shape,
+        _: zjolt.SubShapeId,
+    ) callconv(.c) bool {
+        const self: *RejectSubType = @ptrCast(@alignCast(user.?));
+        if (query_shape) |q| {
+            self.query_sub_types_seen += 1;
+            const asked: zjolt.Shape = .{ .handle = q };
+            if (asked.subType() != .box) self.every_query_shape_was_a_box = false;
+        }
+        const hit: zjolt.Shape = .{ .handle = shape orelse return true };
+        return hit.subType() != self.reject;
+    }
+
+    fn filters(self: *RejectSubType) zjolt.QueryFilters {
+        return .{ .shape = .{ .should_collide = shouldCollide, .user = @ptrCast(self) } };
+    }
+};
+
+test "a shape filter decides on the shape's own type, which no id carries" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var stack = try Stack.init();
+    defer stack.deinit();
+
+    // Four spheres and one box floor lie under the ray. Rejecting the SPHERE
+    // sub-type leaves the floor, and nothing in the callback was told which
+    // body was which.
+    var reject: RejectSubType = .{ .reject = .sphere };
+    const filters = reject.filters();
+
+    var buffer: [16]zjolt.RayCastHit = undefined;
+    const kept = try stack.queries().castRayAll(
+        Stack.ray_origin,
+        Stack.ray_direction,
+        null,
+        &filters,
+        &buffer,
+    );
+    try std.testing.expectEqual(@as(usize, 1), kept.len);
+    try std.testing.expectEqual(stack.world.floor, kept[0].body);
+    try std.testing.expectEqual(@as(usize, 0), reject.query_sub_types_seen);
+
+    // A cast has a shape of its own, and that one arrives too.
+    const box = try zjolt.Shape.initBox(zjolt.vec3(0.25, 0.25, 0.25), .{});
+    defer box.release();
+
+    var casting: RejectSubType = .{ .reject = .sphere };
+    const cast_filters = casting.filters();
+    var cast_buffer: [16]zjolt.ShapeCastHit = undefined;
+    const cast_kept = try stack.queries().castShapeAll(.{
+        .shape = box,
+        .position = Stack.ray_origin,
+        .direction = Stack.ray_direction,
+    }, &cast_filters, &cast_buffer);
+
+    try std.testing.expect(casting.query_sub_types_seen > 0);
+    try std.testing.expect(casting.every_query_shape_was_a_box);
+    for (cast_kept) |hit| try std.testing.expectEqual(stack.world.floor, hit.body);
 }
 
 /// Fails part way through, which is the thing a Zig callback may not simply

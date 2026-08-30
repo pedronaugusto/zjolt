@@ -343,16 +343,39 @@ static ZJoltHitAction onPointHit(void *user, const ZJoltCollidePointHit *hit) {
 static ZJoltBodyId g_rejected_body = ZJOLT_BODY_ID_INVALID;
 static uint32_t g_shape_filter_calls = 0;
 static bool g_shape_ids_were_empty = true;
+static bool g_shapes_arrived = true;
+static bool g_query_shapes_were_null = true;
 
 static bool rejectShapesOf(void *user, ZJoltBodyId body,
+                           const ZJoltShape *shape,
                            ZJoltSubShapeId sub_shape_id,
+                           const ZJoltShape *query_shape,
                            ZJoltSubShapeId query_sub_shape_id) {
   (void)user;
   ++g_shape_filter_calls;
   if (sub_shape_id != ZJOLT_SUB_SHAPE_ID_EMPTY ||
       query_sub_shape_id != ZJOLT_SUB_SHAPE_ID_EMPTY)
     g_shape_ids_were_empty = false;
+  if (shape == NULL) g_shapes_arrived = false;
+  if (query_shape != NULL) g_query_shapes_were_null = false;
   return body != g_rejected_body;
+}
+
+/* Decides on the shape's own sub-type, which the id cannot answer. */
+static uint32_t g_sub_type_filter_calls = 0;
+
+static bool rejectSpheres(void *user, ZJoltBodyId body, const ZJoltShape *shape,
+                          ZJoltSubShapeId sub_shape_id,
+                          const ZJoltShape *query_shape,
+                          ZJoltSubShapeId query_sub_shape_id) {
+  (void)user;
+  (void)body;
+  (void)sub_shape_id;
+  (void)query_shape;
+  (void)query_sub_shape_id;
+  ++g_sub_type_filter_calls;
+  if (shape == NULL) return true;
+  return zjoltShapeGetSubType(shape) != ZJOLT_SHAPE_SUB_TYPE_SPHERE;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1312,6 +1335,20 @@ int main(void) {
         filtered_hits, all_hits);
   CHECK(g_shape_ids_were_empty,
         "a shape with no children reports the empty sub-shape id");
+  CHECK(g_shapes_arrived, "the shape being collided against reaches the filter");
+  CHECK(g_query_shapes_were_null, "a ray hands the filter no query shape");
+
+  /* The pointer is usable: reject by the shape's own sub-type. Everything
+     under this ray is a sphere except the floor box. */
+  ZJoltQueryFilters sub_type_filtered;
+  memset(&sub_type_filtered, 0, sizeof(sub_type_filtered));
+  sub_type_filtered.shape.should_collide = rejectSpheres;
+  uint32_t box_hits = 0;
+  CHECK_OK(zjoltCastRayAll(system, &ray_origin, &ray_direction, NULL,
+                           &sub_type_filtered, NULL, 0, &box_hits));
+  CHECK(g_sub_type_filter_calls > 0, "the sub-type filter was consulted");
+  CHECK(box_hits < all_hits,
+        "rejecting every sphere dropped hits: %u of %u", box_hits, all_hits);
 
   /* A ray that misses everything. */
   const ZJoltRVec3 far_origin = {(ZJoltReal)1000.0, (ZJoltReal)1000.0,

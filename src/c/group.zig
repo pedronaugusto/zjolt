@@ -28,13 +28,28 @@ pub const CollisionGroup = extern struct {
     sub_group_id: u32 = collision_group_invalid,
 };
 
+pub const CustomGroupFilter = extern struct {
+    can_collide: ?*const fn (
+        user: ?*anyopaque,
+        group_id1: u32,
+        sub_group_id1: u32,
+        group_id2: u32,
+        sub_group_id2: u32,
+    ) callconv(.c) bool = null,
+    user: ?*anyopaque = null,
+};
+
 pub extern fn zjoltGroupFilterTableCreate(num_sub_groups: u32, out: **GroupFilter) Result;
+
+pub extern fn zjoltGroupFilterCustomCreate(callbacks: *const CustomGroupFilter, out: **GroupFilter) Result;
 
 pub extern fn zjoltGroupFilterAddRef(filter: *const GroupFilter) void;
 
 pub extern fn zjoltGroupFilterRelease(filter: *const GroupFilter) void;
 
 pub extern fn zjoltGroupFilterGetRefCount(filter: *const GroupFilter) u32;
+
+pub extern fn zjoltGroupFilterIsTable(filter: *const GroupFilter) bool;
 
 pub extern fn zjoltGroupFilterGetNumSubGroups(filter: *const GroupFilter) u32;
 

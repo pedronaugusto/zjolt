@@ -154,7 +154,7 @@ Physics/Collision	CalculateInnerRadius	INTERNAL	no public declaration
 Physics/Collision	CalculateLocalBounds	BOUND	zjoltShapeGetLocalBounds
 Physics/Collision	CalculateSubShapeBounds	BOUND	zjoltShapeGetLocalBounds zjoltShapeGetSubShapeTransformedShape
 Physics/Collision	CanBeUpdated	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
-Physics/Collision	CanCollide	EXTENSION	ZJoltShapeFilter ZJoltObjectLayerFilter ZJoltBodyFilter
+Physics/Collision	CanCollide	EXTENSION	ZJoltShapeFilter ZJoltObjectLayerFilter ZJoltBodyFilter ZJoltCustomGroupFilter
 Physics/Collision	CanScaleBeRotated	BOUND	zjoltShapeIsValidScale zjoltShapeMakeScaleValid
 Physics/Collision	CapsuleShape	BOUND	zjoltShapeCreateCapsule
 Physics/Collision	CapsuleShapeSettings	BOUND	zjoltShapeCreateCapsule zjoltShapeGetUserData zjoltShapeSetUserData ZJoltShape*

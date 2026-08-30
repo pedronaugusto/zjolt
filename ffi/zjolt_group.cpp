@@ -1,32 +1,42 @@
 //===----------------------------------------------------------------------===//
 // zjolt — collision groups.
 //
-// The handle itself — a thin subclass of JPH::GroupFilter that HOLDS a
-// GroupFilterTable rather than being one, and why — is declared in
-// zjolt_internal.h. It lives there rather than here because a ZJoltBodyDesc
-// carries a ZJoltCollisionGroup, so the translation units that build a body
-// need the complete type too.
+// The handle types — a ZJoltGroupFilter base and the two kinds that derive
+// from it, one holding a GroupFilterTable and one holding a callback — are
+// declared in zjolt_internal.h. They live there rather than here because a
+// ZJoltBodyDesc carries a ZJoltCollisionGroup, so the translation units that
+// build a body need the complete type too.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
 
 namespace {
 
-/// The two arguments every table mutator shares, checked in one place.
-///
-/// Both checks stand in for a Jolt assertion. Equal ids are refused rather
-/// than ignored because a sub-group never collides with itself whatever the
-/// table says, so asking to change that pair is a mistake and not a no-op.
-ZJoltResult CheckSubGroups(const ZJoltGroupFilter *filter, uint32_t sub_group1,
+/// Everything the three table entry points ask of their arguments, in one
+/// place; a caller that passes may downcast `filter` to the table. The kind
+/// goes first because a callback filter has no sub-group count to range-check
+/// against, so casting to read one would read another object's memory. Equal
+/// ids are refused rather than ignored: a sub-group never collides with itself
+/// whatever the table says, so asking to change that pair is a mistake.
+ZJoltResult CheckTableArgs(const ZJoltGroupFilter *filter, uint32_t sub_group1,
                            uint32_t sub_group2) {
+  if (!filter->is_table) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "this entry point reads or writes a bit table, and the filter given "
+        "was made by zjoltGroupFilterCustomCreate, which decides by callback "
+        "and has no table");
+  }
+  const ZJoltGroupFilterTable *table =
+      static_cast<const ZJoltGroupFilterTable *>(filter);
   if (sub_group1 == sub_group2) {
     return zjolt::SetError(
         ZJOLT_RESULT_INVALID_ARGUMENT,
         "a sub-group never collides with itself, so the two sub-group ids "
         "must differ");
   }
-  if (sub_group1 >= filter->num_sub_groups ||
-      sub_group2 >= filter->num_sub_groups) {
+  if (sub_group1 >= table->num_sub_groups ||
+      sub_group2 >= table->num_sub_groups) {
     return zjolt::SetError(
         ZJOLT_RESULT_INVALID_ARGUMENT,
         "sub-group id is outside the range this filter was created with");
@@ -58,12 +68,33 @@ ZJoltResult zjoltGroupFilterTableCreate(uint32_t num_sub_groups,
         "overflows");
   }
 
-  ZJoltGroupFilter *filter = zjolt::New<ZJoltGroupFilter>(num_sub_groups);
+  ZJoltGroupFilterTable *filter =
+      zjolt::New<ZJoltGroupFilterTable>(num_sub_groups);
   if (filter == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
 
   // Own() is spelled on the RefTarget base: the reference count lives in
   // RefTarget<GroupFilter>, not in RefTarget<ZJoltGroupFilter>, and Own's
   // static_assert is what says so.
+  *out = static_cast<ZJoltGroupFilter *>(zjolt::Own<JPH::GroupFilter>(filter));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltGroupFilterCustomCreate(
+    const ZJoltCustomGroupFilter *callbacks, ZJoltGroupFilter **out) {
+  ZJOLT_ENTER(out);
+  if (!zjolt::Present(callbacks, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  if (callbacks->can_collide == nullptr) {
+    return zjolt::SetError(
+        ZJOLT_RESULT_INVALID_ARGUMENT,
+        "a callback group filter needs can_collide; Jolt asks it for every "
+        "pair it could not already decide, and there is no default answer");
+  }
+
+  ZJoltGroupFilterCustom *filter =
+      zjolt::New<ZJoltGroupFilterCustom>(*callbacks);
+  if (filter == nullptr) return ZJOLT_RESULT_OUT_OF_MEMORY;
+
   *out = static_cast<ZJoltGroupFilter *>(zjolt::Own<JPH::GroupFilter>(filter));
   return ZJOLT_RESULT_OK;
 }
@@ -83,9 +114,15 @@ uint32_t zjoltGroupFilterGetRefCount(const ZJoltGroupFilter *filter) {
   return filter->GetRefCount();
 }
 
+bool zjoltGroupFilterIsTable(const ZJoltGroupFilter *filter) {
+  if (filter == nullptr) return false;
+  return filter->is_table;
+}
+
 uint32_t zjoltGroupFilterGetNumSubGroups(const ZJoltGroupFilter *filter) {
-  if (filter == nullptr) return 0;
-  return static_cast<uint32_t>(filter->num_sub_groups);
+  if (filter == nullptr || !filter->is_table) return 0;
+  return static_cast<uint32_t>(
+      static_cast<const ZJoltGroupFilterTable *>(filter)->num_sub_groups);
 }
 
 ZJoltResult zjoltGroupFilterTableDisableCollision(ZJoltGroupFilter *filter,
@@ -94,10 +131,11 @@ ZJoltResult zjoltGroupFilterTableDisableCollision(ZJoltGroupFilter *filter,
   ZJOLT_ENTER();
   if (!zjolt::Present(filter)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  const ZJoltResult checked = CheckSubGroups(filter, sub_group1, sub_group2);
+  const ZJoltResult checked = CheckTableArgs(filter, sub_group1, sub_group2);
   if (checked != ZJOLT_RESULT_OK) return checked;
 
-  filter->table.DisableCollision(sub_group1, sub_group2);
+  static_cast<ZJoltGroupFilterTable *>(filter)->table.DisableCollision(
+      sub_group1, sub_group2);
   return ZJOLT_RESULT_OK;
 }
 
@@ -107,10 +145,11 @@ ZJoltResult zjoltGroupFilterTableEnableCollision(ZJoltGroupFilter *filter,
   ZJOLT_ENTER();
   if (!zjolt::Present(filter)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  const ZJoltResult checked = CheckSubGroups(filter, sub_group1, sub_group2);
+  const ZJoltResult checked = CheckTableArgs(filter, sub_group1, sub_group2);
   if (checked != ZJOLT_RESULT_OK) return checked;
 
-  filter->table.EnableCollision(sub_group1, sub_group2);
+  static_cast<ZJoltGroupFilterTable *>(filter)->table.EnableCollision(
+      sub_group1, sub_group2);
   return ZJOLT_RESULT_OK;
 }
 
@@ -121,10 +160,11 @@ ZJoltResult zjoltGroupFilterTableIsCollisionEnabled(
   if (!zjolt::Present(filter, out_enabled))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  const ZJoltResult checked = CheckSubGroups(filter, sub_group1, sub_group2);
+  const ZJoltResult checked = CheckTableArgs(filter, sub_group1, sub_group2);
   if (checked != ZJOLT_RESULT_OK) return checked;
 
-  *out_enabled = filter->table.IsCollisionEnabled(sub_group1, sub_group2);
+  *out_enabled = static_cast<const ZJoltGroupFilterTable *>(filter)
+                     ->table.IsCollisionEnabled(sub_group1, sub_group2);
   return ZJOLT_RESULT_OK;
 }
 
@@ -159,8 +199,11 @@ void zjoltBodyGetCollisionGroup(const ZJoltPhysicsSystem *system,
   const JPH::CollisionGroup &group =
       system->system.GetBodyInterface().GetCollisionGroup(zjolt::ToJolt(body));
 
-  // The downcast is sound because the only filter that can reach a body
-  // through this ABI came out of zjoltGroupFilterTableCreate.
+  // The downcast is sound because the only filters that can reach a body
+  // through this ABI came out of zjoltGroupFilterTableCreate or
+  // zjoltGroupFilterCustomCreate, and both are a ZJoltGroupFilter. A restored
+  // scene carries none: every SaveBinaryState here passes
+  // inSaveGroupFilter=false.
   out->filter = static_cast<const ZJoltGroupFilter *>(group.GetGroupFilter());
   out->group_id = group.GetGroupID();
   out->sub_group_id = group.GetSubGroupID();
