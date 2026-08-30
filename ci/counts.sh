@@ -68,6 +68,19 @@ count_c_modules() {
   ls src/c/*.zig | wc -l | tr -d ' '
 }
 
+# Build options that change type LAYOUT, counted from the one place that
+# decides it: the bits ZJOLT_CONFIG_ID folds. An option added to the header's
+# handshake without a table row, or a row marked as ABI-changing with no bit
+# behind it, is the disagreement this is here to expose.
+count_abi_config_bits() {
+  sed -n '/#define ZJOLT_CONFIG_ID/,/^$/p' ffi/zjolt_core.h |
+    grep -c 'ZJOLT_CONFIG_BIT_'
+}
+
+count_abi_table_rows() {
+  grep -c '^| `-D.*Changes the ABI\.' README.md
+}
+
 #===----------------------------------------------------------------------===//
 # The guards
 #===----------------------------------------------------------------------===//

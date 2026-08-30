@@ -82,6 +82,13 @@ full_checks=$(count_full_checks)
 
 sweeps=$(count_reflective_sweeps)
 c_modules=$(count_c_modules)
+
+# One fact, two independent recomputations. The claim's number is compared
+# against the config bits; the table it describes is compared against the same
+# number, so a row marked ABI-changing with no bit behind it fails here rather
+# than in a consumer's process.
+abi_options=$(count_abi_config_bits)
+abi_rows=$(count_abi_table_rows)
 version=$(version_triple)
 
 vehicle_points=$(count_api_decls_in ffi/zjolt_vehicle.h)
@@ -117,6 +124,9 @@ claim 'README --full cross builds' README.md \
 claim 'README reflective sweeps' README.md \
   '[0-9]+ reflective sweeps' "$sweeps"
 
+claim 'README ABI-changing options' README.md \
+  'Exactly [0-9]+ rows change the ABI' "$abi_options"
+
 claim 'BINDING C declaration modules' BINDING.md \
   'list of [0-9]+ modules' "$c_modules"
 
@@ -134,6 +144,16 @@ claim 'ci/run.sh translation units' ci/run.sh \
   '[0-9]+ translation units' "$total_tu"
 claim 'ci/run.sh mutation label' ci/run.sh \
   'guard mutations \([0-9]+\)' "$all_mutations"
+
+# Not a claim in a document: the document's TABLE against the same count the
+# claim above was checked against.
+if [ "$abi_rows" != "$abi_options" ]; then
+  printf '  %s%-44s %s rows marked; %s config bits%s\n' \
+    "$RED" 'README ABI-changing table rows' "$abi_rows" "$abi_options" "$OFF" >&2
+  fails=$((fails + 1))
+else
+  printf '  %-44s %s%s%s\n' 'README ABI-changing table rows' "$DIM" "$abi_rows" "$OFF"
+fi
 
 if [ "$fails" -ne 0 ]; then
   printf '\n%sFAIL%s  %d stale number(s)\n' "$RED" "$OFF" "$fails" >&2

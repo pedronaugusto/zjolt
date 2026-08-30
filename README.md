@@ -462,9 +462,16 @@ upstream would compile perfectly and quietly start meaning something else.
 | `-Dtrack_narrowphase_stats` | `false` | Tracks Jolt's per-shape-pair narrow-phase timing stats (`JPH_TRACK_NARROWPHASE_STATS`). |
 | `-Dexternal_profile` | `false` | Routes Jolt's profile scopes to a host profiler (`JPH_EXTERNAL_PROFILE`) instead of Jolt's own. Mutually exclusive with `-Dprofile`, and wins over it. |
 
-Only the first three rows change the ABI, and those three are folded into
-`ZJOLT_CONFIG_ID` so a mismatched consumer fails at link rather than at run
-time. The rest are compile-time scope: **every entry point is declared in every
+Exactly 2 rows change the ABI — the two marked "Changes the ABI." above — and
+each contributes one bit to `ZJOLT_CONFIG_ID`, alongside the version. Nothing
+catches a mismatch at link time: the symbol names are identical either way, so
+a consumer built against a differently configured header would link cleanly
+and then read a different set of types than the library writes. `zjoltInit`
+compares the two ids and returns `ZJOLT_RESULT_CONFIG_MISMATCH` before any of
+that can happen, which is why the header's `zjoltInit` is a `static inline`
+wrapper that passes the CALLER's `ZJOLT_CONFIG_ID` rather than the library's.
+
+The rest are compile-time scope: **every entry point is declared in every
 build.** One a flag turns off still exists and returns
 `ZJOLT_RESULT_UNSUPPORTED`, so a caller never has to `#ifdef` around a
 declaration, and a Zig caller never sees a missing symbol.
