@@ -546,6 +546,90 @@ fn peakFrontSuspensionSplit(car: *Rig, roll_torque: f32, seconds: f32) !f32 {
     return peak;
 }
 
+/// Pins both friction coefficients to values that could not come from any
+/// curve or road in these rigs, so what is read back names its own source —
+/// and the two differ, so reading one offset twice would show.
+const FixedGrip = struct {
+    calls: u32 = 0,
+
+    const longitudinal: f32 = 0.75;
+    const lateral: f32 = 0.25;
+
+    fn combine(
+        user: ?*anyopaque,
+        wheel_index: u32,
+        body: zjolt.BodyId,
+        sub_shape_id: zjolt.SubShapeId,
+        out_longitudinal: *f32,
+        out_lateral: *f32,
+    ) callconv(.c) void {
+        _ = wheel_index;
+        _ = body;
+        _ = sub_shape_id;
+        const self: *FixedGrip = @ptrCast(@alignCast(user.?));
+        self.calls += 1;
+        out_longitudinal.* = longitudinal;
+        out_lateral.* = lateral;
+    }
+};
+
+test "combined friction reads the wheel type the controller actually built, wheeled as well as tracked" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(1.0);
+    defer car.deinit();
+
+    // Never stepped: no wheel has found the ground, so both are the
+    // no-contact 0 rather than anything left over from the desc.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelCombinedLongitudinalFriction(0), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelCombinedLateralFriction(0), 1e-6);
+
+    try car.settle(1.5);
+    try car.vehicle.setWheeledDriverInput(1.0, 0, 0, 0);
+    try car.settle(0.5);
+    try std.testing.expect(car.vehicle.wheelHasContact(0));
+
+    // Driving, so the wheel is slipping longitudinally and WheelWV::Update
+    // has sampled its own longitudinal curve (peak 1.2) and combined it with
+    // the floor's 1.0 as sqrt(tire * ground). Only the bound is asserted:
+    // where on the curve one step lands is not a stable number.
+    const driving_longitudinal = car.vehicle.wheelCombinedLongitudinalFriction(0);
+    try std.testing.expect(driving_longitudinal > 0.05);
+    try std.testing.expect(driving_longitudinal <= @sqrt(@as(f32, 1.2)) + 1e-3);
+
+    // Pinned by a callback, the value is exact — and it is the pair, not one
+    // number twice. WheelTV puts its pair one float earlier than WheelWV
+    // (mTrackIndex where WheelWV has mLongitudinalSlip/mLateralSlip), so the
+    // wrong cast here reads slip, not friction.
+    var grip: FixedGrip = .{};
+    try car.vehicle.setCombineFrictionCallback(.{ .combine = FixedGrip.combine, .user = &grip });
+    try car.settle(1.0 / 60.0);
+    try std.testing.expect(grip.calls > 0);
+    try std.testing.expectApproxEqAbs(FixedGrip.longitudinal, car.vehicle.wheelCombinedLongitudinalFriction(0), 1e-6);
+    try std.testing.expectApproxEqAbs(FixedGrip.lateral, car.vehicle.wheelCombinedLateralFriction(0), 1e-6);
+    try car.vehicle.setCombineFrictionCallback(null);
+
+    // A wheel index past the end is the same 0 as no contact, on either kind.
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelCombinedLongitudinalFriction(99), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), car.vehicle.wheelCombinedLateralFriction(99), 1e-6);
+
+    // The same two entry points, the other wheel type.
+    var tank = try buildTrackedCar(1.0);
+    defer tank.deinit();
+    try tank.settle(1.5);
+    try std.testing.expect(tank.vehicle.wheelHasContact(0));
+
+    var track_grip: FixedGrip = .{};
+    try tank.vehicle.setCombineFrictionCallback(.{ .combine = FixedGrip.combine, .user = &track_grip });
+    try tank.settle(1.0 / 60.0);
+    try std.testing.expect(track_grip.calls > 0);
+    try std.testing.expectApproxEqAbs(FixedGrip.longitudinal, tank.vehicle.wheelCombinedLongitudinalFriction(0), 1e-6);
+    try std.testing.expectApproxEqAbs(FixedGrip.lateral, tank.vehicle.wheelCombinedLateralFriction(0), 1e-6);
+    try tank.vehicle.setCombineFrictionCallback(null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), tank.vehicle.wheelCombinedLongitudinalFriction(99), 1e-6);
+}
+
 test "a stiffer anti-roll bar keeps the two suspensions on an axle closer together under roll" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();

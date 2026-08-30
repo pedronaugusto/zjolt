@@ -700,11 +700,31 @@ ZJOLT_API void zjoltVehicleConstraintGetWheelWorldTransform(
     ZJoltRVec3 *out_position, ZJoltQuat *out_rotation);
 
 //===----------------------------------------------------------------------===//
-// Tracked wheels — WheelTV-only state. TrackedVehicleController gives each
-// wheel a combined friction and brake impulse spread across a track's
-// wheels, rather than computed per wheel as WheeledVehicleController does
-// for WheelWV. All four return the same default (0, or -1 for the track
-// index) for a NULL/non-tracked constraint or an out-of-range wheel index.
+// Combined tire friction — on either wheel type
+//
+// WheelWV and WheelTV each declare their own combined-friction pair, at
+// different offsets, so which one to read is a question about the CONTROLLER,
+// not about the wheel. Both entry points below answer it for either kind, and
+// both return 0 for a NULL constraint or an out-of-range wheel index.
+//===----------------------------------------------------------------------===//
+
+/// Tire friction combined with whatever this wheel is standing on this step
+/// (WheelWV/WheelTV::mCombinedLongitudinalFriction, mCombinedLateralFriction),
+/// starting from the wheel's own friction CURVES sampled at this step's slip
+/// for a wheeled controller and from the flat tracked_longitudinal_friction/
+/// tracked_lateral_friction for a tracked one — @see
+/// zjoltVehicleConstraintSetCombineFrictionCallback. 0 without contact.
+ZJOLT_API float zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+ZJOLT_API float zjoltVehicleConstraintGetWheelCombinedLateralFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
+
+//===----------------------------------------------------------------------===//
+// Tracked wheels — WheelTV-only state. TrackedVehicleController spreads one
+// brake impulse across a track's wheels rather than computing one per wheel
+// as WheeledVehicleController does for WheelWV, and only it numbers a wheel's
+// track. Both return the same default (0, or -1 for the track index) for a
+// NULL/non-tracked constraint or an out-of-range wheel index.
 //===----------------------------------------------------------------------===//
 
 /// The impulse (N s) this wheel's own brakes are set up to push into the
@@ -714,17 +734,6 @@ ZJOLT_API void zjoltVehicleConstraintGetWheelWorldTransform(
 /// zjoltVehicleConstraintGetWheelBrakeImpulse, which reads WheelWV and is 0
 /// on a tracked constraint.
 ZJOLT_API float zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(
-    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
-
-/// Tire friction combined with whatever this wheel is standing on this step
-/// (WheelTV::mCombinedLongitudinalFriction/mCombinedLateralFriction) — see
-/// zjoltVehicleConstraintSetCombineFrictionCallback, which can change either
-/// from the wheel's own tracked_longitudinal_friction/tracked_lateral_friction
-/// (ZJoltVehicleWheelDesc). Both are 0 without contact: only a wheel that
-/// found the ground this step gets combined friction.
-ZJOLT_API float zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(
-    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
-ZJOLT_API float zjoltVehicleConstraintGetWheelCombinedLateralFriction(
     const ZJoltVehicleConstraint *constraint, uint32_t wheel_index);
 
 /// Which track this wheel was built into (WheelTV::mTrackIndex), fixed at

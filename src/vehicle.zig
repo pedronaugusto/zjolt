@@ -779,10 +779,32 @@ pub const VehicleConstraint = struct {
     }
 
     //=========================================================================
+    // Combined tire friction — on either wheel type
+    //
+    // WheelWV and WheelTV each carry their own combined-friction pair, at
+    // different offsets, so which to read follows the CONTROLLER kind.
+    //=========================================================================
+
+    /// Tire friction combined with whatever this wheel is standing on this
+    /// step. A wheeled controller starts from the wheel's friction CURVES
+    /// sampled at this step's slip, a tracked one from its flat
+    /// `tracked_longitudinal_friction`/`tracked_lateral_friction`
+    /// (`WheelDesc`); `setCombineFrictionCallback` combines either with the
+    /// ground and can replace it. 0 for a wheel with no contact this step.
+    pub fn wheelCombinedLongitudinalFriction(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(self.handle, wheel_index);
+    }
+
+    /// @see `wheelCombinedLongitudinalFriction`.
+    pub fn wheelCombinedLateralFriction(self: VehicleConstraint, wheel_index: u32) f32 {
+        return c.zjoltVehicleConstraintGetWheelCombinedLateralFriction(self.handle, wheel_index);
+    }
+
+    //=========================================================================
     // Tracked wheels — WheelTV-only state
     //
-    // A tracked vehicle's wheels carry state WheelWV does not. All four
-    // return the same default (0, or -1 for the track index) for a non-tracked/NULL constraint or an out-of-range wheel index.
+    // Both return the same default (0, or -1 for the track index) for a
+    // non-tracked/NULL constraint or an out-of-range wheel index.
     //=========================================================================
 
     /// This wheel's own brake impulse (WheelTV::mBrakeImpulse), spread from
@@ -791,18 +813,6 @@ pub const VehicleConstraint = struct {
     /// reads WheelWV and is 0 here.
     pub fn trackedWheelBrakeImpulse(self: VehicleConstraint, wheel_index: u32) f32 {
         return c.zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(self.handle, wheel_index);
-    }
-
-    /// Tire friction combined with whatever this wheel is standing on this
-    /// step — see `setCombineFrictionCallback`, which is what can change it
-    /// from the wheel's own `tracked_longitudinal_friction`/
-    /// `tracked_lateral_friction` (`WheelDesc`). Both are 0 without contact.
-    pub fn wheelCombinedLongitudinalFriction(self: VehicleConstraint, wheel_index: u32) f32 {
-        return c.zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(self.handle, wheel_index);
-    }
-
-    pub fn wheelCombinedLateralFriction(self: VehicleConstraint, wheel_index: u32) f32 {
-        return c.zjoltVehicleConstraintGetWheelCombinedLateralFriction(self.handle, wheel_index);
     }
 
     /// Which track this wheel was built into (WheelTV::mTrackIndex), not

@@ -153,6 +153,12 @@ const JPH::Wheel *WheelAt(const ZJoltVehicleConstraint *c, uint32_t index) {
   return impl->GetWheel(index);
 }
 
+/// This wheel's combined friction pair, read off whichever wheel type the
+/// controller built. Defined below, once the controller accessors it asks
+/// exist. False leaves both outputs untouched.
+bool CombinedFriction(const ZJoltVehicleConstraint *c, uint32_t wheel_index,
+                      float *out_longitudinal, float *out_lateral);
+
 /// NULL unless `c` actually holds a wheeled-family controller. A motorcycle
 /// IS a WheeledVehicleController (plus a lean spring), so it is accepted here
 /// too — every wheeled entry point works on one.
@@ -188,6 +194,28 @@ const JPH::TrackedVehicleController *TrackedController(
     return nullptr;
   return static_cast<const JPH::TrackedVehicleController *>(
       impl->GetController());
+}
+
+/// WheelWV and WheelTV both declare the pair, at different offsets — WheelTV
+/// puts mTrackIndex where WheelWV has mLongitudinalSlip/mLateralSlip — so the
+/// cast follows the CONTROLLER kind and never the Wheel.
+bool CombinedFriction(const ZJoltVehicleConstraint *c, uint32_t wheel_index,
+                      float *out_longitudinal, float *out_lateral) {
+  const JPH::Wheel *w = WheelAt(c, wheel_index);
+  if (w == nullptr) return false;
+  if (WheeledController(c) != nullptr) {
+    const JPH::WheelWV *wv = static_cast<const JPH::WheelWV *>(w);
+    *out_longitudinal = wv->mCombinedLongitudinalFriction;
+    *out_lateral = wv->mCombinedLateralFriction;
+    return true;
+  }
+  if (TrackedController(c) != nullptr) {
+    const JPH::WheelTV *tv = static_cast<const JPH::WheelTV *>(w);
+    *out_longitudinal = tv->mCombinedLongitudinalFriction;
+    *out_lateral = tv->mCombinedLateralFriction;
+    return true;
+  }
+  return false;
 }
 
 JPH::MotorcycleController *MotorcycleControllerOf(ZJoltVehicleConstraint *c) {
@@ -1796,6 +1824,26 @@ void zjoltVehicleConstraintGetWheelWorldTransform(
 }
 
 //===----------------------------------------------------------------------===//
+// Combined tire friction — on either wheel type
+//===----------------------------------------------------------------------===//
+
+float zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  float longitudinal = 0.0f;
+  float lateral = 0.0f;
+  CombinedFriction(constraint, wheel_index, &longitudinal, &lateral);
+  return longitudinal;
+}
+
+float zjoltVehicleConstraintGetWheelCombinedLateralFriction(
+    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
+  float longitudinal = 0.0f;
+  float lateral = 0.0f;
+  CombinedFriction(constraint, wheel_index, &longitudinal, &lateral);
+  return lateral;
+}
+
+//===----------------------------------------------------------------------===//
 // Tracked wheels — WheelTV-only state
 //===----------------------------------------------------------------------===//
 
@@ -1805,23 +1853,6 @@ float zjoltVehicleConstraintGetTrackedWheelBrakeImpulse(
   if (TrackedController(constraint) == nullptr) return 0.0f;
   const JPH::Wheel *w = WheelAt(constraint, wheel_index);
   return w != nullptr ? static_cast<const JPH::WheelTV *>(w)->mBrakeImpulse : 0.0f;
-}
-
-float zjoltVehicleConstraintGetWheelCombinedLongitudinalFriction(
-    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
-  if (TrackedController(constraint) == nullptr) return 0.0f;
-  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
-  return w != nullptr
-             ? static_cast<const JPH::WheelTV *>(w)->mCombinedLongitudinalFriction
-             : 0.0f;
-}
-
-float zjoltVehicleConstraintGetWheelCombinedLateralFriction(
-    const ZJoltVehicleConstraint *constraint, uint32_t wheel_index) {
-  if (TrackedController(constraint) == nullptr) return 0.0f;
-  const JPH::Wheel *w = WheelAt(constraint, wheel_index);
-  return w != nullptr ? static_cast<const JPH::WheelTV *>(w)->mCombinedLateralFriction
-                      : 0.0f;
 }
 
 int32_t zjoltVehicleConstraintGetWheelTrackIndex(
