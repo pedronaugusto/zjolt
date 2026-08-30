@@ -1053,3 +1053,181 @@ fn expectMat44Near(expected: zjolt.Mat44, actual: zjolt.Mat44, tolerance: f32) !
         try std.testing.expectApproxEqAbs(e, a, tolerance);
     }
 }
+
+//=============================================================================
+// Every descriptor field reaches Jolt
+//
+// The plant below sets EVERY field of a BodyDesc away from its default and
+// the comparison walks the struct's own field list, so a field added later
+// and left unwired fails here without anyone remembering to extend the test.
+// Blind spot, stated rather than papered over: a field the writer and the
+// reader BOTH drop round-trips as whatever was planted in neither, so the
+// system-side checks below name the flags Jolt itself has to act on.
+//=============================================================================
+
+test "every field of a body descriptor crosses into Jolt and back" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const shape = try zjolt.Shape.initBox(zjolt.vec3(0.5, 0.5, 0.5), .{});
+    defer shape.release();
+
+    // Nothing here is a default, and no two numeric fields share a value: a
+    // conversion that reads the wrong member shows as a wrong number rather
+    // than a plausible one.
+    const planted: body_mod.BodyDesc = .{
+        .shape = shape,
+        .object_layer = Layers.static,
+        .position = zjolt.rvec3(11, 12, 13),
+        .rotation = zjolt.quat(0, 0.6, 0, 0.8),
+        .linear_velocity = zjolt.vec3(21, 22, 23),
+        .angular_velocity = zjolt.vec3(31, 32, 33),
+        .user_data = 0xfeed_face_dead_beef,
+        .motion_type = .dynamic,
+        .motion_quality = .linear_cast,
+        .allowed_dofs = .{
+            .translation_x = true,
+            .translation_y = true,
+            .translation_z = false,
+            .rotation_x = false,
+            .rotation_y = false,
+            .rotation_z = true,
+        },
+        .override_mass_properties = .calculate_inertia,
+        .mass = 7.5,
+        .mass_properties_override = .{
+            .mass = 7.5,
+            .inertia = .{ 41, 0, 0, 0, 42, 0, 0, 0, 43 },
+        },
+        .allow_dynamic_or_kinematic = true,
+        .is_sensor = true,
+        .allow_sleeping = false,
+        .enhanced_internal_edge_removal = true,
+        .collide_kinematic_vs_non_dynamic = true,
+        .use_manifold_reduction = false,
+        .apply_gyroscopic_force = true,
+        .friction = 0.375,
+        .restitution = 0.625,
+        .linear_damping = 0.125,
+        .angular_damping = 0.25,
+        .max_linear_velocity = 111,
+        .max_angular_velocity = 222,
+        .gravity_factor = 3.5,
+        .num_velocity_steps_override = 17,
+        .num_position_steps_override = 19,
+        .inertia_multiplier = 2.5,
+    };
+
+    const scene = try zjolt.Scene.init();
+    defer scene.release();
+    try std.testing.expectEqual(@as(u32, 0), try scene.addBody(planted));
+
+    const read = try scene.body(0);
+    inline for (@typeInfo(body_mod.BodyDesc).@"struct".fields) |field| {
+        const name = field.name;
+        if (comptime std.mem.eql(u8, name, "shape")) continue;
+        if (comptime std.mem.eql(u8, name, "collision_group")) continue;
+        if (comptime std.mem.eql(u8, name, "rotation")) continue;
+        try std.testing.expectEqualDeep(
+            @field(planted, name),
+            @field(read, name),
+        );
+    }
+    // Jolt renormalises a rotation on the way in, so this one is the same
+    // rotation rather than the same bits.
+    inline for (.{ "x", "y", "z", "w" }) |lane| {
+        try std.testing.expectApproxEqAbs(
+            @field(planted.rotation, lane),
+            @field(read.rotation, lane),
+            1.0e-6,
+        );
+    }
+
+    // And the same descriptor through the OTHER writer -- a live body, not a
+    // scene entry -- read back through the accessors Jolt answers from its
+    // own state rather than from a stored copy of the desc.
+    var world = try World.init();
+    defer world.deinit();
+    const bodies = world.system.bodies();
+    const body = try bodies.createAndAdd(planted, .dont_activate);
+
+    try std.testing.expect(bodies.getApplyGyroscopicForce(body));
+    try std.testing.expect(bodies.getCollideKinematicVsNonDynamic(body));
+    try std.testing.expect(bodies.getEnhancedInternalEdgeRemoval(body));
+    try std.testing.expect(!bodies.getUseManifoldReduction(body));
+    try std.testing.expectEqual(
+        @as(u32, 17),
+        bodies.getNumVelocityStepsOverride(body),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 19),
+        bodies.getNumPositionStepsOverride(body),
+    );
+    // `mass` reached Jolt's own mass properties, not just the stored desc.
+    // Approximate because it is read back as its reciprocal.
+    try std.testing.expectApproxEqRel(
+        @as(f32, 7.5),
+        1.0 / bodies.getInverseMassUnchecked(body),
+        1.0e-6,
+    );
+}
+
+test "the three Body-flag setters change the flag they name and nothing else" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const bodies = world.system.bodies();
+    const ball = try bodies.createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 4, 0),
+    }, .activate);
+
+    // All three start at Jolt's construction-time default.
+    try std.testing.expect(!bodies.getApplyGyroscopicForce(ball));
+    try std.testing.expect(!bodies.getCollideKinematicVsNonDynamic(ball));
+    try std.testing.expect(!bodies.getEnhancedInternalEdgeRemoval(ball));
+
+    bodies.setApplyGyroscopicForce(ball, true);
+    try std.testing.expect(bodies.getApplyGyroscopicForce(ball));
+    try std.testing.expect(!bodies.getCollideKinematicVsNonDynamic(ball));
+    try std.testing.expect(!bodies.getEnhancedInternalEdgeRemoval(ball));
+
+    bodies.setCollideKinematicVsNonDynamic(ball, true);
+    bodies.setEnhancedInternalEdgeRemoval(ball, true);
+    try std.testing.expect(bodies.getCollideKinematicVsNonDynamic(ball));
+    try std.testing.expect(bodies.getEnhancedInternalEdgeRemoval(ball));
+
+    // Setting one back leaves the others where they were.
+    bodies.setApplyGyroscopicForce(ball, false);
+    try std.testing.expect(!bodies.getApplyGyroscopicForce(ball));
+    try std.testing.expect(bodies.getCollideKinematicVsNonDynamic(ball));
+    try std.testing.expect(bodies.getEnhancedInternalEdgeRemoval(ball));
+
+    // A stale id is not a crash, and the step overrides refuse Jolt's own
+    // 256 bound rather than truncating into a uint8.
+    bodies.setApplyGyroscopicForce(zjolt.invalid_body_id, true);
+    try std.testing.expectError(
+        error.InvalidArgument,
+        bodies.setNumVelocityStepsOverride(ball, 256),
+    );
+    try std.testing.expectError(
+        error.BodyNotFound,
+        bodies.setNumPositionStepsOverride(zjolt.invalid_body_id, 4),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        bodies.getNumVelocityStepsOverride(ball),
+    );
+    try bodies.setNumVelocityStepsOverride(ball, 255);
+    try std.testing.expectEqual(
+        @as(u32, 255),
+        bodies.getNumVelocityStepsOverride(ball),
+    );
+}

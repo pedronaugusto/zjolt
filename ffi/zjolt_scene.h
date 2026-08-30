@@ -73,10 +73,9 @@ ZJOLT_API uint32_t zjoltSceneGetNumConstraints(const ZJoltScene *scene);
 
 /// The body at `index`. ZJOLT_RESULT_INVALID_ARGUMENT past
 /// zjoltSceneGetNumBodies. `out->shape` is BORROWED: not ref-counted, and
-/// dies with the scene entry unless you call zjoltShapeAddRef. A body
-/// with Jolt's inertia-tensor mass mode reports CALCULATE_INERTIA
-/// instead; round-tripping through this and zjoltSceneAddBody loses that
-/// distinction.
+/// dies with the scene entry unless you call zjoltShapeAddRef. Every other
+/// field round-trips through zjoltSceneAddBody, Jolt's provided-tensor mass
+/// mode included.
 ZJOLT_API ZJoltResult zjoltSceneGetBody(const ZJoltScene *scene,
                                         uint32_t index, ZJoltBodyDesc *out);
 

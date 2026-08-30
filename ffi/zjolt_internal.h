@@ -343,6 +343,17 @@ inline ZJoltColor ToC(JPH::ColorArg c) {
   return ZJoltColor{c.r, c.g, c.b, c.a};
 }
 
+/// `min`/`max` straight across, in both directions. One home: five entry
+/// point files cross an AABox, and four of them used to carry their own copy
+/// of these two lines.
+inline JPH::AABox ToJolt(const ZJoltAABox &box) {
+  return JPH::AABox(ToJolt(box.min), ToJolt(box.max));
+}
+
+inline ZJoltAABox ToC(const JPH::AABox &box) {
+  return ZJoltAABox{ToC(box.mMin), ToC(box.mMax)};
+}
+
 inline void WriteVec3(ZJoltVec3 *out, JPH::Vec3Arg v) {
   if (out != nullptr) *out = ToC(v);
 }
@@ -1088,6 +1099,292 @@ inline JPH::CollisionGroup ToJolt(const ZJoltCollisionGroup *group) {
   out.SetGroupID(group->group_id);
   out.SetSubGroupID(group->sub_group_id);
   return out;
+}
+
+//===----------------------------------------------------------------------===//
+// ZJoltBodyDesc <-> JPH::BodyCreationSettings
+//
+// ONE conversion, not one per translation unit. A plain body, a scene entry
+// and a ragdoll part are built from the same desc, and each carried its own
+// hand-copied version of this field list before this: six
+// BodyCreationSettings fields were unreachable from all three at once, and
+// mass_properties_override was dropped by all three while three headers
+// documented it. A field added to the desc is now wired in one place or in
+// none, and src/body.zig fails to compile when the typed desc and the C one
+// stop naming the same fields.
+//===----------------------------------------------------------------------===//
+
+/// Takes the raw integer rather than the enum -- @see RawEnum. Every caller
+/// reads it straight out of a host-supplied desc, where any bit pattern can
+/// arrive; an unknown one is DYNAMIC, Jolt's own default.
+inline JPH::EMotionType ToJoltMotionType(int32_t type) {
+  switch (type) {
+    case ZJOLT_MOTION_TYPE_STATIC:
+      return JPH::EMotionType::Static;
+    case ZJOLT_MOTION_TYPE_KINEMATIC:
+      return JPH::EMotionType::Kinematic;
+    case ZJOLT_MOTION_TYPE_DYNAMIC:
+      break;
+  }
+  return JPH::EMotionType::Dynamic;
+}
+
+inline ZJoltMotionType ToCMotionType(JPH::EMotionType type) {
+  switch (type) {
+    case JPH::EMotionType::Static:
+      return ZJOLT_MOTION_TYPE_STATIC;
+    case JPH::EMotionType::Kinematic:
+      return ZJOLT_MOTION_TYPE_KINEMATIC;
+    case JPH::EMotionType::Dynamic:
+      break;
+  }
+  return ZJOLT_MOTION_TYPE_DYNAMIC;
+}
+
+/// Raw integer in, for the same reason ToJoltMotionType takes one. Jolt has
+/// exactly two qualities, so anything but LINEAR_CAST is DISCRETE.
+inline JPH::EMotionQuality ToJoltMotionQuality(int32_t quality) {
+  return quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
+             ? JPH::EMotionQuality::LinearCast
+             : JPH::EMotionQuality::Discrete;
+}
+
+inline ZJoltMotionQuality ToCMotionQuality(JPH::EMotionQuality quality) {
+  return quality == JPH::EMotionQuality::LinearCast
+             ? ZJOLT_MOTION_QUALITY_LINEAR_CAST
+             : ZJOLT_MOTION_QUALITY_DISCRETE;
+}
+
+/// Row r, column c of the row-major `mp.inertia` becomes Mat44 element (r, c).
+/// The fourth row and column stay zero except (3, 3), which Jolt's own
+/// MassProperties always carries as 1 (BodyCreationSettings.cpp:202, 209).
+inline JPH::MassProperties ToJolt(const ZJoltMassProperties &mp) {
+  JPH::MassProperties out;
+  out.mMass = mp.mass;
+  out.mInertia = JPH::Mat44::sZero();
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      out.mInertia(row, col) = mp.inertia[row * 3 + col];
+    }
+  }
+  out.mInertia(3, 3) = 1.0f;
+  return out;
+}
+
+/// The exact inverse of ToJolt above: Mat44 element (r, c) becomes row-major
+/// element [r * 3 + c]. The fourth row and column are dropped.
+inline void WriteMassProperties(ZJoltMassProperties *out,
+                                const JPH::MassProperties &mp) {
+  out->mass = mp.mMass;
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      out->inertia[row * 3 + col] = mp.mInertia.GetColumn4(col)[row];
+    }
+  }
+}
+
+/// Jolt's own construction-time defaults, read out of a default-constructed
+/// BodyCreationSettings rather than typed in, so a Jolt upgrade that changes
+/// one moves this too. Not all-zero and not all obvious.
+inline void BodyDescDefaults(ZJoltBodyDesc *desc) {
+  const JPH::BodyCreationSettings defaults;
+
+  *desc = ZJoltBodyDesc{};
+  desc->position = ToCR(defaults.mPosition);
+  desc->rotation = ToC(defaults.mRotation);
+  desc->linear_velocity = ToC(defaults.mLinearVelocity);
+  desc->angular_velocity = ToC(defaults.mAngularVelocity);
+  desc->shape = nullptr;
+  // Not all-zero: "no group" is ZJOLT_COLLISION_GROUP_INVALID, and 0 is a
+  // perfectly good group id.
+  desc->collision_group.filter = nullptr;
+  desc->collision_group.group_id = defaults.mCollisionGroup.GetGroupID();
+  desc->collision_group.sub_group_id = defaults.mCollisionGroup.GetSubGroupID();
+  desc->user_data = defaults.mUserData;
+  desc->object_layer = static_cast<ZJoltObjectLayer>(defaults.mObjectLayer);
+  desc->motion_type = ToCMotionType(defaults.mMotionType);
+  desc->motion_quality = ToCMotionQuality(defaults.mMotionQuality);
+  desc->allowed_dofs = static_cast<uint32_t>(defaults.mAllowedDOFs);
+  desc->override_mass_properties =
+      ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_MASS_AND_INERTIA;
+  desc->mass = 0.0f;
+  WriteMassProperties(&desc->mass_properties_override,
+                      defaults.mMassPropertiesOverride);
+  desc->allow_dynamic_or_kinematic = defaults.mAllowDynamicOrKinematic;
+  desc->is_sensor = defaults.mIsSensor;
+  desc->allow_sleeping = defaults.mAllowSleeping;
+  desc->enhanced_internal_edge_removal = defaults.mEnhancedInternalEdgeRemoval;
+  desc->collide_kinematic_vs_non_dynamic =
+      defaults.mCollideKinematicVsNonDynamic;
+  desc->use_manifold_reduction = defaults.mUseManifoldReduction;
+  desc->apply_gyroscopic_force = defaults.mApplyGyroscopicForce;
+  desc->friction = defaults.mFriction;
+  desc->restitution = defaults.mRestitution;
+  desc->linear_damping = defaults.mLinearDamping;
+  desc->angular_damping = defaults.mAngularDamping;
+  desc->max_linear_velocity = defaults.mMaxLinearVelocity;
+  desc->max_angular_velocity = defaults.mMaxAngularVelocity;
+  desc->gravity_factor = defaults.mGravityFactor;
+  desc->num_velocity_steps_override =
+      static_cast<uint32_t>(defaults.mNumVelocityStepsOverride);
+  desc->num_position_steps_override =
+      static_cast<uint32_t>(defaults.mNumPositionStepsOverride);
+  desc->inertia_multiplier = defaults.mInertiaMultiplier;
+}
+
+/// A body desc onto Jolt's settings, shape included. `no_shape` is the whole
+/// message for a missing shape, since a plain body, a scene body and a
+/// ragdoll part each name themselves. Every failure here is a value the host
+/// chose, so all of them report rather than assert.
+inline ZJoltResult ToJolt(const ZJoltBodyDesc &desc, const char *no_shape,
+                          JPH::BodyCreationSettings *out) {
+  if (desc.shape == nullptr) {
+    return SetError(ZJOLT_RESULT_INVALID_ARGUMENT, no_shape);
+  }
+  // Jolt stores both as a uint8 on MotionProperties and asserts the range in
+  // its setter; an assert is off in a release build, so this refuses instead.
+  if (desc.num_velocity_steps_override >= 256 ||
+      desc.num_position_steps_override >= 256) {
+    return SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                    "num_velocity_steps_override and "
+                    "num_position_steps_override must be below 256");
+  }
+
+  out->mPosition = ToJoltR(desc.position);
+  out->mRotation = ToJoltRotation(desc.rotation);
+  out->mLinearVelocity = ToJolt(desc.linear_velocity);
+  out->mAngularVelocity = ToJolt(desc.angular_velocity);
+  out->SetShape(ToJolt(desc.shape));
+  out->mCollisionGroup = ToJolt(&desc.collision_group);
+  out->mUserData = desc.user_data;
+  out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
+  out->mMotionType = ToJoltMotionType(RawEnum(desc.motion_type));
+  out->mMotionQuality = ToJoltMotionQuality(RawEnum(desc.motion_quality));
+  out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
+  out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
+  out->mIsSensor = desc.is_sensor;
+  out->mAllowSleeping = desc.allow_sleeping;
+  out->mEnhancedInternalEdgeRemoval = desc.enhanced_internal_edge_removal;
+  out->mCollideKinematicVsNonDynamic = desc.collide_kinematic_vs_non_dynamic;
+  out->mUseManifoldReduction = desc.use_manifold_reduction;
+  out->mApplyGyroscopicForce = desc.apply_gyroscopic_force;
+  out->mFriction = desc.friction;
+  out->mRestitution = desc.restitution;
+  out->mLinearDamping = desc.linear_damping;
+  out->mAngularDamping = desc.angular_damping;
+  out->mMaxLinearVelocity = desc.max_linear_velocity;
+  out->mMaxAngularVelocity = desc.max_angular_velocity;
+  out->mGravityFactor = desc.gravity_factor;
+  out->mNumVelocityStepsOverride = desc.num_velocity_steps_override;
+  out->mNumPositionStepsOverride = desc.num_position_steps_override;
+  out->mInertiaMultiplier = desc.inertia_multiplier;
+
+  switch (RawEnum(desc.override_mass_properties)) {
+    case ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA:
+      if (!(desc.mass > 0.0f)) {
+        return SetError(
+            ZJOLT_RESULT_INVALID_ARGUMENT,
+            "override_mass_properties asks for an explicit mass, so mass must "
+            "be positive");
+      }
+      out->mOverrideMassProperties =
+          JPH::EOverrideMassProperties::CalculateInertia;
+      // The tensor half goes unread in this mode, but carrying it rather
+      // than dropping it keeps the desc a faithful record of itself: what
+      // WriteBodyDesc reads back out is what was put in.
+      out->mMassPropertiesOverride = ToJolt(desc.mass_properties_override);
+      out->mMassPropertiesOverride.mMass = desc.mass;
+      break;
+    case ZJOLT_OVERRIDE_MASS_PROPERTIES_MASS_AND_INERTIA_PROVIDED:
+      if (!(desc.mass_properties_override.mass > 0.0f)) {
+        return SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                        "override_mass_properties provides the tensor "
+                        "outright, so mass_properties_override.mass must be "
+                        "positive");
+      }
+      out->mOverrideMassProperties =
+          JPH::EOverrideMassProperties::MassAndInertiaProvided;
+      out->mMassPropertiesOverride = ToJolt(desc.mass_properties_override);
+      break;
+    default:
+      out->mOverrideMassProperties =
+          JPH::EOverrideMassProperties::CalculateMassAndInertia;
+      out->mMassPropertiesOverride = ToJolt(desc.mass_properties_override);
+      break;
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+/// The shape a BodyCreationSettings holds, or null -- without building one.
+///
+/// GetShape() alone is unsafe here: if the settings carry unbuilt shape
+/// SETTINGS instead of a shape, it builds into a temporary and returns a
+/// pointer that dies with it. Nothing this ABI creates or restores is ever
+/// in that state, so this never takes that path.
+inline const JPH::Shape *ShapeOf(const JPH::BodyCreationSettings &settings) {
+  if (settings.GetShapeSettings() != nullptr) return nullptr;
+  return settings.GetShape();
+}
+
+/// Jolt's settings back into a desc: the exact inverse of ToJolt above, field
+/// for field. `out->shape` is BORROWED -- no reference is taken.
+inline void WriteBodyDesc(ZJoltBodyDesc *out,
+                          const JPH::BodyCreationSettings &settings) {
+  *out = ZJoltBodyDesc{};
+  out->position = ToCR(settings.mPosition);
+  out->rotation = ToC(settings.mRotation);
+  out->linear_velocity = ToC(settings.mLinearVelocity);
+  out->angular_velocity = ToC(settings.mAngularVelocity);
+  out->shape = ToC(ShapeOf(settings));
+  // The downcast is sound for the same reason zjoltBodyGetCollisionGroup's
+  // is: the only filter that can reach this ABI came out of
+  // zjoltGroupFilterTableCreate. A restored scene never carries one at all.
+  out->collision_group.filter = static_cast<const ZJoltGroupFilter *>(
+      settings.mCollisionGroup.GetGroupFilter());
+  out->collision_group.group_id = settings.mCollisionGroup.GetGroupID();
+  out->collision_group.sub_group_id = settings.mCollisionGroup.GetSubGroupID();
+  out->user_data = settings.mUserData;
+  out->object_layer = static_cast<ZJoltObjectLayer>(settings.mObjectLayer);
+  out->motion_type = ToCMotionType(settings.mMotionType);
+  out->motion_quality = ToCMotionQuality(settings.mMotionQuality);
+  out->allowed_dofs = static_cast<uint32_t>(settings.mAllowedDOFs);
+  out->allow_dynamic_or_kinematic = settings.mAllowDynamicOrKinematic;
+  out->is_sensor = settings.mIsSensor;
+  out->allow_sleeping = settings.mAllowSleeping;
+  out->enhanced_internal_edge_removal = settings.mEnhancedInternalEdgeRemoval;
+  out->collide_kinematic_vs_non_dynamic =
+      settings.mCollideKinematicVsNonDynamic;
+  out->use_manifold_reduction = settings.mUseManifoldReduction;
+  out->apply_gyroscopic_force = settings.mApplyGyroscopicForce;
+  out->friction = settings.mFriction;
+  out->restitution = settings.mRestitution;
+  out->linear_damping = settings.mLinearDamping;
+  out->angular_damping = settings.mAngularDamping;
+  out->max_linear_velocity = settings.mMaxLinearVelocity;
+  out->max_angular_velocity = settings.mMaxAngularVelocity;
+  out->gravity_factor = settings.mGravityFactor;
+  out->num_velocity_steps_override =
+      static_cast<uint32_t>(settings.mNumVelocityStepsOverride);
+  out->num_position_steps_override =
+      static_cast<uint32_t>(settings.mNumPositionStepsOverride);
+  out->inertia_multiplier = settings.mInertiaMultiplier;
+
+  WriteMassProperties(&out->mass_properties_override,
+                      settings.mMassPropertiesOverride);
+  switch (settings.mOverrideMassProperties) {
+    case JPH::EOverrideMassProperties::CalculateInertia:
+      out->override_mass_properties =
+          ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA;
+      out->mass = settings.mMassPropertiesOverride.mMass;
+      break;
+    case JPH::EOverrideMassProperties::MassAndInertiaProvided:
+      out->override_mass_properties =
+          ZJOLT_OVERRIDE_MASS_PROPERTIES_MASS_AND_INERTIA_PROVIDED;
+      out->mass = 0.0f;
+      break;
+    case JPH::EOverrideMassProperties::CalculateMassAndInertia:
+      break;
+  }
 }
 
 }  // namespace zjolt

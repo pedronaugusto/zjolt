@@ -77,10 +77,6 @@ ZJoltCullMode ToCCullMode(JPH::DebugRenderer::ECullMode cull_mode) {
   return static_cast<ZJoltCullMode>(cull_mode);
 }
 
-ZJoltAABox ToCAABox(const JPH::AABox &box) {
-  return ZJoltAABox{zjolt::ToC(box.mMin), zjolt::ToC(box.mMax)};
-}
-
 ZJoltDebugVertex ToCVertex(const JPH::DebugRenderer::Vertex &v) {
   return ZJoltDebugVertex{
       {v.mPosition.x, v.mPosition.y, v.mPosition.z},
@@ -280,9 +276,9 @@ class ZJoltDebugRendererImpl final : public JPH::DebugRendererSimple {
     }
 
     const ZJoltRMat44 c_matrix = zjolt::ToCR(inModelMatrix);
-    const ZJoltAABox c_world_bounds = ToCAABox(inWorldSpaceBounds);
+    const ZJoltAABox c_world_bounds = zjolt::ToC(inWorldSpaceBounds);
     const ZJoltDebugGeometry c_geometry{c_lods.data(), static_cast<uint32_t>(c_lods.size()),
-                                        selected, ToCAABox(inGeometry->mBounds)};
+                                        selected, zjolt::ToC(inGeometry->mBounds)};
     batch_callbacks_.draw_geometry(batch_callbacks_.user, &c_matrix, &c_world_bounds,
                                    inLODScaleSq, zjolt::ToC(inModelColor), &c_geometry,
                                    ToCCullMode(inCullMode),

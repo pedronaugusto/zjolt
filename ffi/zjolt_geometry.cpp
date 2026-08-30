@@ -33,12 +33,6 @@ class CSupport {
   const ZJoltConvexSupport &s_;
 };
 
-/// `min`/`max` straight across, the same crossing zjolt_math.cpp's own
-/// ToJoltAABox uses.
-JPH::AABox ToJoltAABox(const ZJoltAABox &box) {
-  return JPH::AABox(zjolt::ToJolt(box.min), zjolt::ToJolt(box.max));
-}
-
 /// Copy-out with the capacity check every buffer-form entry point in this
 /// file shares: `*out_count` is always written, and a too-small `capacity`
 /// is ZJOLT_RESULT_BUFFER_TOO_SMALL without touching `out`.
@@ -1028,7 +1022,7 @@ ZJoltResult zjoltClipPolyVsAABox(const ZJoltVec3 *polygon, uint32_t num_vertices
   in.reserve(num_vertices);
   for (uint32_t i = 0; i < num_vertices; ++i) in.push_back(zjolt::ToJolt(polygon[i]));
   JPH::Array<JPH::Vec3> out;
-  JPH::ClipPolyVsAABox(in, ToJoltAABox(*box), out);
+  JPH::ClipPolyVsAABox(in, zjolt::ToJolt(*box), out);
   return CopyOutVec3(out, out_polygon, capacity, out_count);
 }
 

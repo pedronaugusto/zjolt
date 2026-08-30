@@ -74,147 +74,12 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Descriptor conversion
 //
-// Mirrors zjolt_body.cpp's BuildCreationSettings and zjolt_softbody.cpp's BuildSoftBodyCreationSettings field for field, plus the read-back direction neither of them needs.
+// The rigid-body half is zjolt::ToJolt / zjolt::WriteBodyDesc in
+// zjolt_internal.h, shared with zjolt_body.cpp and zjolt_ragdoll.cpp. This
+// unit used to carry its own copy, and the copy was where six
+// BodyCreationSettings fields went missing. Only the soft-body half, which
+// has no second caller, lives here.
 //===----------------------------------------------------------------------===//
-
-// Takes the raw integer, not the enum — see zjolt::RawEnum in
-// zjolt_internal.h. Its callers read this straight out of a host-supplied
-// ZJoltBodyDesc, which is the entry point this value arrives from.
-JPH::EMotionType ToJoltMotionType(int32_t type) {
-  switch (type) {
-    case ZJOLT_MOTION_TYPE_STATIC:
-      return JPH::EMotionType::Static;
-    case ZJOLT_MOTION_TYPE_KINEMATIC:
-      return JPH::EMotionType::Kinematic;
-    case ZJOLT_MOTION_TYPE_DYNAMIC:
-      break;
-  }
-  return JPH::EMotionType::Dynamic;
-}
-
-ZJoltMotionType ToCMotionType(JPH::EMotionType type) {
-  switch (type) {
-    case JPH::EMotionType::Static:
-      return ZJOLT_MOTION_TYPE_STATIC;
-    case JPH::EMotionType::Kinematic:
-      return ZJOLT_MOTION_TYPE_KINEMATIC;
-    case JPH::EMotionType::Dynamic:
-      break;
-  }
-  return ZJOLT_MOTION_TYPE_DYNAMIC;
-}
-
-ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
-                                  JPH::BodyCreationSettings *out) {
-  if (desc.shape == nullptr) {
-    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
-                           "a body in a scene needs a shape");
-  }
-
-  out->mPosition = zjolt::ToJoltR(desc.position);
-  out->mRotation = zjolt::ToJoltRotation(desc.rotation);
-  out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
-  out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
-  out->SetShape(zjolt::ToJolt(desc.shape));
-  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
-  out->mUserData = desc.user_data;
-  out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
-  out->mMotionType = ToJoltMotionType(zjolt::RawEnum(desc.motion_type));
-  out->mMotionQuality =
-      zjolt::RawEnum(desc.motion_quality) == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-          ? JPH::EMotionQuality::LinearCast
-          : JPH::EMotionQuality::Discrete;
-  out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
-  out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
-  out->mIsSensor = desc.is_sensor;
-  out->mAllowSleeping = desc.allow_sleeping;
-  out->mEnhancedInternalEdgeRemoval = desc.enhanced_internal_edge_removal;
-  out->mFriction = desc.friction;
-  out->mRestitution = desc.restitution;
-  out->mLinearDamping = desc.linear_damping;
-  out->mAngularDamping = desc.angular_damping;
-  out->mMaxLinearVelocity = desc.max_linear_velocity;
-  out->mMaxAngularVelocity = desc.max_angular_velocity;
-  out->mGravityFactor = desc.gravity_factor;
-
-  if (zjolt::RawEnum(desc.override_mass_properties) ==
-      ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
-    if (!(desc.mass > 0.0f)) {
-      return zjolt::SetError(
-          ZJOLT_RESULT_INVALID_ARGUMENT,
-          "override_mass_properties asks for an explicit mass, so mass must "
-          "be positive");
-    }
-    out->mOverrideMassProperties =
-        JPH::EOverrideMassProperties::CalculateInertia;
-    out->mMassPropertiesOverride.mMass = desc.mass;
-  } else {
-    out->mOverrideMassProperties =
-        JPH::EOverrideMassProperties::CalculateMassAndInertia;
-  }
-  return ZJOLT_RESULT_OK;
-}
-
-/// The shape one body entry holds, or null — without building one.
-///
-/// GetShape() alone is unsafe here: if the entry carries unbuilt shape
-/// SETTINGS instead of a shape, it builds into a temporary and returns a
-/// pointer that dies with it. Nothing this ABI creates or restores is ever
-/// in that state, so this never takes that path.
-const JPH::Shape *ShapeOf(const JPH::BodyCreationSettings &settings) {
-  if (settings.GetShapeSettings() != nullptr) return nullptr;
-  return settings.GetShape();
-}
-
-void ReadCreationSettings(const JPH::BodyCreationSettings &settings,
-                          ZJoltBodyDesc *out) {
-  *out = ZJoltBodyDesc{};
-  out->position = zjolt::ToCR(settings.mPosition);
-  out->rotation = zjolt::ToC(settings.mRotation);
-  out->linear_velocity = zjolt::ToC(settings.mLinearVelocity);
-  out->angular_velocity = zjolt::ToC(settings.mAngularVelocity);
-  out->shape = zjolt::ToC(ShapeOf(settings));
-  // The downcast is sound for the same reason zjoltBodyGetCollisionGroup's is:
-  // the only filter that can reach a scene through this ABI came out of
-  // zjoltGroupFilterTableCreate. A restored scene never carries one at all —
-  // @see the note on group filters in zjolt_scene.h.
-  out->collision_group.filter = static_cast<const ZJoltGroupFilter *>(
-      settings.mCollisionGroup.GetGroupFilter());
-  out->collision_group.group_id = settings.mCollisionGroup.GetGroupID();
-  out->collision_group.sub_group_id = settings.mCollisionGroup.GetSubGroupID();
-  out->user_data = settings.mUserData;
-  out->object_layer = static_cast<ZJoltObjectLayer>(settings.mObjectLayer);
-  out->motion_type = ToCMotionType(settings.mMotionType);
-  out->motion_quality =
-      settings.mMotionQuality == JPH::EMotionQuality::LinearCast
-          ? ZJOLT_MOTION_QUALITY_LINEAR_CAST
-          : ZJOLT_MOTION_QUALITY_DISCRETE;
-  out->allowed_dofs = static_cast<uint32_t>(settings.mAllowedDOFs);
-  out->allow_dynamic_or_kinematic = settings.mAllowDynamicOrKinematic;
-  out->is_sensor = settings.mIsSensor;
-  out->allow_sleeping = settings.mAllowSleeping;
-  out->enhanced_internal_edge_removal = settings.mEnhancedInternalEdgeRemoval;
-  out->friction = settings.mFriction;
-  out->restitution = settings.mRestitution;
-  out->linear_damping = settings.mLinearDamping;
-  out->angular_damping = settings.mAngularDamping;
-  out->max_linear_velocity = settings.mMaxLinearVelocity;
-  out->max_angular_velocity = settings.mMaxAngularVelocity;
-  out->gravity_factor = settings.mGravityFactor;
-
-  // Jolt's third mass mode has no enumerator here. @see zjoltSceneGetBody for
-  // what a caller loses by round-tripping one.
-  if (settings.mOverrideMassProperties ==
-      JPH::EOverrideMassProperties::CalculateMassAndInertia) {
-    out->override_mass_properties =
-        ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_MASS_AND_INERTIA;
-    out->mass = 0.0f;
-  } else {
-    out->override_mass_properties =
-        ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA;
-    out->mass = settings.mMassPropertiesOverride.mMass;
-  }
-}
 
 ZJoltResult BuildSoftBodyCreationSettings(const ZJoltSoftBodyDesc &desc,
                                           JPH::SoftBodyCreationSettings *out) {
@@ -281,7 +146,7 @@ void ReadSoftBodyCreationSettings(const JPH::SoftBodyCreationSettings &settings,
 /// constraint's settings (PhysicsScene.cpp:129).
 ZJoltResult ValidateSavable(const JPH::PhysicsScene &scene) {
   for (const JPH::BodyCreationSettings &body : scene.GetBodies()) {
-    if (ShapeOf(body) == nullptr) {
+    if (zjolt::ShapeOf(body) == nullptr) {
       return zjolt::SetError(
           ZJOLT_RESULT_INVALID_ARGUMENT,
           "a body in this scene has no shape, so there is nothing to write "
@@ -407,7 +272,8 @@ ZJoltResult zjoltSceneAddBody(ZJoltScene *scene, const ZJoltBodyDesc *desc,
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyCreationSettings settings;
-  const ZJoltResult built = BuildCreationSettings(*desc, &settings);
+  const ZJoltResult built =
+      zjolt::ToJolt(*desc, "a body in a scene needs a shape", &settings);
   if (built != ZJOLT_RESULT_OK) return built;
 
   JPH::PhysicsScene *jolt = zjolt::ToJolt(scene);
@@ -548,7 +414,7 @@ ZJoltResult zjoltSceneGetBody(const ZJoltScene *scene, uint32_t index,
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "index is past the last body in this scene");
   }
-  ReadCreationSettings(jolt->GetBodies()[index], out);
+  zjolt::WriteBodyDesc(out, jolt->GetBodies()[index]);
   return ZJOLT_RESULT_OK;
 }
 
@@ -628,7 +494,7 @@ ZJoltResult zjoltSceneFixInvalidScales(ZJoltScene *scene) {
   // FixInvalidScales dereferences every body's shape without checking it
   // (PhysicsScene.cpp:52).
   for (const JPH::BodyCreationSettings &body : jolt->GetBodies()) {
-    if (ShapeOf(body) == nullptr) {
+    if (zjolt::ShapeOf(body) == nullptr) {
       return zjolt::SetError(
           ZJOLT_RESULT_INVALID_ARGUMENT,
           "a body in this scene has no shape, so there is no scale to fix");

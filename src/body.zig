@@ -89,6 +89,16 @@ pub const BodyDesc = struct {
     allow_sleeping: bool = true,
     /// Extra work to suppress ghost collisions on internal mesh edges.
     enhanced_internal_edge_removal: bool = false,
+    /// Whether a KINEMATIC body generates contacts against other kinematic
+    /// or static bodies. Meaningless for a dynamic body, which already
+    /// collides with everything its object layer allows.
+    collide_kinematic_vs_non_dynamic: bool = false,
+    /// Whether nearby contacts with this body are merged into one manifold.
+    /// Off costs performance and buys per-face contacts.
+    use_manifold_reduction: bool = true,
+    /// Whether the gyroscopic force — the Dzhanibekov "tennis racket"
+    /// effect — is applied to this body each step.
+    apply_gyroscopic_force: bool = false,
 
     friction: f32 = 0.2,
     restitution: f32 = 0,
@@ -98,37 +108,46 @@ pub const BodyDesc = struct {
     max_angular_velocity: f32 = 0.25 * std.math.pi * 60.0,
     gravity_factor: f32 = 1,
 
+    /// Solver velocity iterations for the island this body lands in, or 0
+    /// for the system's own count. An island runs the largest override among
+    /// its bodies and constraints. Must be below 256 — Jolt's own limit, not
+    /// this binding's: MotionProperties stores it in a u8.
+    num_velocity_steps_override: u32 = 0,
+    /// The same, for solver position iterations.
+    num_position_steps_override: u32 = 0,
+    /// Multiplies the inertia tensor Jolt COMPUTES from the shape, under
+    /// both `.calculate_mass_and_inertia` and `.calculate_inertia`. Not
+    /// applied to `.mass_and_inertia_provided`, taken as given.
+    inertia_multiplier: f32 = 1,
+
+    /// The two descriptors carry the same field names, so the crossing is
+    /// by name rather than by a hand-kept list: a field on one side and not
+    /// the other is a compile error here, not a value silently left at
+    /// Jolt's default. Only the two that change TYPE are named.
     fn toC(self: BodyDesc) c.BodyDesc {
         var out: c.BodyDesc = undefined;
-        // Start from Jolt's defaults so a field this wrapper does not model
-        // still gets a sensible value rather than whatever was on the stack.
         c.zjoltBodyDescInit(&out);
         out.shape = self.shape.handle;
         out.collision_group = group_mod.toC(self.collision_group);
-        out.object_layer = self.object_layer;
-        out.position = self.position;
-        out.rotation = self.rotation;
-        out.linear_velocity = self.linear_velocity;
-        out.angular_velocity = self.angular_velocity;
-        out.user_data = self.user_data;
-        out.motion_type = self.motion_type;
-        out.motion_quality = self.motion_quality;
-        out.allowed_dofs = self.allowed_dofs;
-        out.override_mass_properties = self.override_mass_properties;
-        out.mass = self.mass;
-        out.mass_properties_override = self.mass_properties_override;
-        out.allow_dynamic_or_kinematic = self.allow_dynamic_or_kinematic;
-        out.is_sensor = self.is_sensor;
-        out.allow_sleeping = self.allow_sleeping;
-        out.enhanced_internal_edge_removal = self.enhanced_internal_edge_removal;
-        out.friction = self.friction;
-        out.restitution = self.restitution;
-        out.linear_damping = self.linear_damping;
-        out.angular_damping = self.angular_damping;
-        out.max_linear_velocity = self.max_linear_velocity;
-        out.max_angular_velocity = self.max_angular_velocity;
-        out.gravity_factor = self.gravity_factor;
+        inline for (@typeInfo(BodyDesc).@"struct".fields) |field| {
+            if (comptime std.mem.eql(u8, field.name, "shape")) continue;
+            if (comptime std.mem.eql(u8, field.name, "collision_group")) continue;
+            @field(out, field.name) = @field(self, field.name);
+        }
         return out;
+    }
+
+    // The other direction of the same check: every field of the C
+    // descriptor is modelled here, so a field added to ZJoltBodyDesc and
+    // forgotten here cannot become a setting nobody can reach — which is
+    // exactly what happened to six BodyCreationSettings fields at once.
+    comptime {
+        for (@typeInfo(c.BodyDesc).@"struct".fields) |field| {
+            if (!@hasField(BodyDesc, field.name)) {
+                @compileError("BodyDesc does not model ZJoltBodyDesc." ++
+                    field.name);
+            }
+        }
     }
 };
 
@@ -868,11 +887,40 @@ pub const BodyInterface = struct {
         return c.zjoltBodyIsSensor(self.handle, body);
     }
 
+    /// Per-body solver iteration counts, the runtime half of
+    /// `BodyDesc.num_velocity_steps_override`. 0 means "use the system's".
+    /// `steps` must be below 256 (`error.InvalidArgument` otherwise), which
+    /// is Jolt's own limit. No-op on a static body, which has no motion
+    /// properties; the getters then answer 0, as they do for a stale id.
+    pub fn setNumVelocityStepsOverride(self: BodyInterface, body: BodyId, steps: u32) err.Error!void {
+        try err.check(c.zjoltBodySetNumVelocityStepsOverride(self.handle, body, steps));
+    }
+
+    pub fn getNumVelocityStepsOverride(self: BodyInterface, body: BodyId) u32 {
+        return c.zjoltBodyGetNumVelocityStepsOverride(self.handle, body);
+    }
+
+    /// As `setNumVelocityStepsOverride`, for position iterations.
+    pub fn setNumPositionStepsOverride(self: BodyInterface, body: BodyId, steps: u32) err.Error!void {
+        try err.check(c.zjoltBodySetNumPositionStepsOverride(self.handle, body, steps));
+    }
+
+    pub fn getNumPositionStepsOverride(self: BodyInterface, body: BodyId) u32 {
+        return c.zjoltBodyGetNumPositionStepsOverride(self.handle, body);
+    }
+
     /// Whether this body applies the gyroscopic force (the Dzhanibekov
     /// "tennis racket" effect) as part of the step. `false`, Jolt's own
     /// construction-time default, on a stale id.
+    ///
+    /// The setter is a no-op on a soft body, which has no such flag, and
+    /// invalidates the contact cache when it changes something.
     pub fn getApplyGyroscopicForce(self: BodyInterface, body: BodyId) bool {
         return c.zjoltBodyGetApplyGyroscopicForce(self.handle, body);
+    }
+
+    pub fn setApplyGyroscopicForce(self: BodyInterface, body: BodyId, apply: bool) void {
+        c.zjoltBodySetApplyGyroscopicForce(self.handle, body, apply);
     }
 
     /// Whether a kinematic body generates contacts against other kinematic
@@ -883,11 +931,19 @@ pub const BodyInterface = struct {
         return c.zjoltBodyGetCollideKinematicVsNonDynamic(self.handle, body);
     }
 
+    pub fn setCollideKinematicVsNonDynamic(self: BodyInterface, body: BodyId, collide: bool) void {
+        c.zjoltBodySetCollideKinematicVsNonDynamic(self.handle, body, collide);
+    }
+
     /// Whether this body gets the extra ghost-contact suppression a convex
     /// shape sliding over a mesh's internal edges needs. `false`, Jolt's own
     /// construction-time default, on a stale id.
     pub fn getEnhancedInternalEdgeRemoval(self: BodyInterface, body: BodyId) bool {
         return c.zjoltBodyGetEnhancedInternalEdgeRemoval(self.handle, body);
+    }
+
+    pub fn setEnhancedInternalEdgeRemoval(self: BodyInterface, body: BodyId, enabled: bool) void {
+        c.zjoltBodySetEnhancedInternalEdgeRemoval(self.handle, body, enabled);
     }
 
     /// Whether a contact between `body1` and `body2` gets enhanced

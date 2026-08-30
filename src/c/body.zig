@@ -61,6 +61,9 @@ pub const BodyDesc = extern struct {
     is_sensor: bool,
     allow_sleeping: bool,
     enhanced_internal_edge_removal: bool,
+    collide_kinematic_vs_non_dynamic: bool,
+    use_manifold_reduction: bool,
+    apply_gyroscopic_force: bool,
     friction: f32,
     restitution: f32,
     linear_damping: f32,
@@ -68,6 +71,9 @@ pub const BodyDesc = extern struct {
     max_linear_velocity: f32,
     max_angular_velocity: f32,
     gravity_factor: f32,
+    num_velocity_steps_override: u32,
+    num_position_steps_override: u32,
+    inertia_multiplier: f32,
 };
 
 pub const BodyLock = extern struct {
@@ -280,11 +286,19 @@ pub extern fn zjoltBodySetIsSensor(system: *PhysicsSystem, body: BodyId, is_sens
 
 pub extern fn zjoltBodyIsSensor(system: *const PhysicsSystem, body: BodyId) bool;
 
+pub extern fn zjoltBodySetNumVelocityStepsOverride(system: *PhysicsSystem, body: BodyId, steps: u32) Result;
+pub extern fn zjoltBodyGetNumVelocityStepsOverride(system: *const PhysicsSystem, body: BodyId) u32;
+pub extern fn zjoltBodySetNumPositionStepsOverride(system: *PhysicsSystem, body: BodyId, steps: u32) Result;
+pub extern fn zjoltBodyGetNumPositionStepsOverride(system: *const PhysicsSystem, body: BodyId) u32;
+
 pub extern fn zjoltBodyGetApplyGyroscopicForce(system: *const PhysicsSystem, body: BodyId) bool;
+pub extern fn zjoltBodySetApplyGyroscopicForce(system: *PhysicsSystem, body: BodyId, apply: bool) void;
 
 pub extern fn zjoltBodyGetCollideKinematicVsNonDynamic(system: *const PhysicsSystem, body: BodyId) bool;
+pub extern fn zjoltBodySetCollideKinematicVsNonDynamic(system: *PhysicsSystem, body: BodyId, collide: bool) void;
 
 pub extern fn zjoltBodyGetEnhancedInternalEdgeRemoval(system: *const PhysicsSystem, body: BodyId) bool;
+pub extern fn zjoltBodySetEnhancedInternalEdgeRemoval(system: *PhysicsSystem, body: BodyId, remove: bool) void;
 
 pub extern fn zjoltBodyIsCollisionCacheInvalid(system: *const PhysicsSystem, body: BodyId) bool;
 

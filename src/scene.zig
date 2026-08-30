@@ -37,39 +37,24 @@ pub const world_body_index: u32 = c.scene_body_world;
 /// the scene and ask the `Constraint` with `subType`.
 pub const SceneConstraint = c.SceneConstraint;
 
-/// A body descriptor read back out of a scene.
+/// A body descriptor read back out of a scene. Every field crosses by NAME,
+/// the exact inverse of `BodyDesc.toC`: a field on one side and not the other
+/// is a compile error, not a value quietly dropped on the way out.
 ///
 /// `error.BadFormat` when the entry carries no shape. Nothing this library
-/// creates or restores is in that state — a buffer whose bodies lost their
-/// shapes is refused by `Scene.restore` — so this is the honest answer for a
-/// scene that came from somewhere else entirely.
+/// creates or restores is in that state, so that is a foreign scene's answer.
 fn bodyDescFromC(raw: c.BodyDesc) err.Error!body_mod.BodyDesc {
-    return .{
+    var out: body_mod.BodyDesc = .{
         .shape = .{ .handle = raw.shape orelse return err.Error.BadFormat },
         .object_layer = raw.object_layer,
-        .position = raw.position,
-        .rotation = raw.rotation,
-        .linear_velocity = raw.linear_velocity,
-        .angular_velocity = raw.angular_velocity,
-        .user_data = raw.user_data,
         .collision_group = group_mod.fromC(raw.collision_group),
-        .motion_type = raw.motion_type,
-        .motion_quality = raw.motion_quality,
-        .allowed_dofs = raw.allowed_dofs,
-        .override_mass_properties = raw.override_mass_properties,
-        .mass = raw.mass,
-        .allow_dynamic_or_kinematic = raw.allow_dynamic_or_kinematic,
-        .is_sensor = raw.is_sensor,
-        .allow_sleeping = raw.allow_sleeping,
-        .enhanced_internal_edge_removal = raw.enhanced_internal_edge_removal,
-        .friction = raw.friction,
-        .restitution = raw.restitution,
-        .linear_damping = raw.linear_damping,
-        .angular_damping = raw.angular_damping,
-        .max_linear_velocity = raw.max_linear_velocity,
-        .max_angular_velocity = raw.max_angular_velocity,
-        .gravity_factor = raw.gravity_factor,
     };
+    inline for (@typeInfo(body_mod.BodyDesc).@"struct".fields) |field| {
+        if (comptime std.mem.eql(u8, field.name, "shape")) continue;
+        if (comptime std.mem.eql(u8, field.name, "collision_group")) continue;
+        @field(out, field.name) = @field(raw, field.name);
+    }
+    return out;
 }
 
 /// The `@constCast` matches the one in `group.zig`, and for the same reason:
@@ -207,10 +192,8 @@ pub const Scene = struct {
 
     /// The body at `index`. `error.InvalidArgument` past `bodyCount`. `shape`
     /// is BORROWED from the scene, no reference taken — `addRef` it to outlive
-    /// this entry. LOSSY for a scene loaded from a file with Jolt's third mass
-    /// mode (an inertia tensor `OverrideMassProperties` cannot spell): reports
-    /// `.calculate_inertia` with the given mass, so round-tripping via this
-    /// call and `addBody` loses the real tensor.
+    /// this entry. Every other field round-trips through `addBody`, Jolt's
+    /// provided-tensor mass mode included.
     pub fn body(self: Scene, index: u32) err.Error!body_mod.BodyDesc {
         var raw: c.BodyDesc = undefined;
         try err.check(c.zjoltSceneGetBody(self.handle, index, &raw));

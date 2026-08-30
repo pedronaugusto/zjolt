@@ -20,28 +20,10 @@ namespace {
 
 //===----------------------------------------------------------------------===//
 // Conversions this file needs and no shared internal header already owns.
-// Duplicated rather than added to zjolt_internal.h, the way zjolt_body.cpp
-// and zjolt_math.cpp each already carry their own copy of the mass-properties
-// half of this.
+// The ones that DID have a second caller -- an AABox and a MassProperties --
+// have moved to zjolt_internal.h, which is where a conversion belongs the
+// moment two units want it.
 //===----------------------------------------------------------------------===//
-
-JPH::MassProperties ToJoltMassProperties(const ZJoltMassProperties &mp) {
-  JPH::MassProperties out;
-  out.mMass = mp.mass;
-  out.mInertia = JPH::Mat44::sZero();
-  for (int row = 0; row < 3; ++row)
-    for (int col = 0; col < 3; ++col) out.mInertia(row, col) = mp.inertia[row * 3 + col];
-  out.mInertia(3, 3) = 1.0f;
-  return out;
-}
-
-JPH::AABox ToJoltAABox(const ZJoltAABox &box) {
-  return JPH::AABox(zjolt::ToJolt(box.min), zjolt::ToJolt(box.max));
-}
-
-ZJoltAABox ToCAABox(const JPH::AABox &box) {
-  return ZJoltAABox{zjolt::ToC(box.mMin), zjolt::ToC(box.mMax)};
-}
 
 ZJoltRayCastSettings ToCRayCastSettings(const JPH::RayCastSettings &s) {
   return ZJoltRayCastSettings{
@@ -148,13 +130,13 @@ class CustomConvexShape final : public JPH::ConvexShape {
   JPH::AABox GetLocalBounds() const override {
     ZJoltAABox box{};
     callbacks_.local_bounds(user_, &box);
-    return ToJoltAABox(box);
+    return zjolt::ToJolt(box);
   }
 
   JPH::MassProperties GetMassProperties() const override {
     ZJoltMassProperties props{};
     callbacks_.mass_properties(user_, &props);
-    return ToJoltMassProperties(props);
+    return zjolt::ToJolt(props);
   }
 
   float GetVolume() const override { return callbacks_.volume(user_); }
@@ -294,7 +276,7 @@ class CustomShape final : public JPH::Shape {
   JPH::AABox GetLocalBounds() const override {
     ZJoltAABox box{};
     callbacks_.local_bounds(user_, &box);
-    return ToJoltAABox(box);
+    return zjolt::ToJolt(box);
   }
 
   uint32_t GetSubShapeIDBitsRecursive() const override { return Bits(); }
@@ -306,7 +288,7 @@ class CustomShape final : public JPH::Shape {
     const ZJoltMat44 transform = zjolt::ToC(inCenterOfMassTransform);
     ZJoltAABox box{};
     callbacks_.world_space_bounds(user_, &transform, zjolt::ToC(inScale), &box);
-    return ToJoltAABox(box);
+    return zjolt::ToJolt(box);
   }
 
   float GetInnerRadius() const override { return callbacks_.inner_radius(user_); }
@@ -314,7 +296,7 @@ class CustomShape final : public JPH::Shape {
   JPH::MassProperties GetMassProperties() const override {
     ZJoltMassProperties props{};
     callbacks_.mass_properties(user_, &props);
-    return ToJoltMassProperties(props);
+    return zjolt::ToJolt(props);
   }
 
   const JPH::PhysicsMaterial *GetMaterial(const JPH::SubShapeID &inSubShapeID) const override {
@@ -473,7 +455,7 @@ class CustomShape final : public JPH::Shape {
       return;
     }
     if (!inShapeFilter.ShouldCollide(this, inSubShapeIDCreator.GetID())) return;
-    const ZJoltAABox box = ToCAABox(inBox);
+    const ZJoltAABox box = zjolt::ToC(inBox);
     const ZJoltVec3 position = zjolt::ToC(inPositionCOM);
     const ZJoltQuat rotation = zjolt::ToC(inRotation);
     ZJoltCustomShapeChild children[ZJOLT_CUSTOM_SHAPE_MAX_BATCH];
@@ -499,7 +481,7 @@ class CustomShape final : public JPH::Shape {
   void GetTrianglesStart(GetTrianglesContext &ioContext, const JPH::AABox &inBox,
                          JPH::Vec3Arg inPositionCOM, JPH::QuatArg inRotation,
                          JPH::Vec3Arg inScale) const override {
-    const ZJoltAABox box = ToCAABox(inBox);
+    const ZJoltAABox box = zjolt::ToC(inBox);
     const ZJoltVec3 position = zjolt::ToC(inPositionCOM);
     const ZJoltQuat rotation = zjolt::ToC(inRotation);
     const ZJoltVec3 scale = zjolt::ToC(inScale);

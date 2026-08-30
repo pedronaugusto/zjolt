@@ -56,6 +56,16 @@ typedef struct ZJoltBodyDesc {
   bool allow_sleeping;
   /// Extra work to suppress ghost collisions on internal mesh edges.
   bool enhanced_internal_edge_removal;
+  /// Whether a KINEMATIC body generates contacts against other kinematic or
+  /// static bodies. Meaningless for a dynamic body, which already collides
+  /// with everything its object layer allows.
+  bool collide_kinematic_vs_non_dynamic;
+  /// Whether nearby contacts with this body are merged into one manifold.
+  /// True by default; false costs performance and buys per-face contacts.
+  bool use_manifold_reduction;
+  /// Whether the gyroscopic force — the Dzhanibekov "tennis racket" effect —
+  /// is applied to this body each step.
+  bool apply_gyroscopic_force;
   float friction;
   float restitution;
   float linear_damping;
@@ -63,6 +73,19 @@ typedef struct ZJoltBodyDesc {
   float max_linear_velocity;
   float max_angular_velocity;
   float gravity_factor;
+  /// Solver velocity iterations for the island this body lands in, or 0 for
+  /// the system's own num_velocity_steps. An island runs the largest override
+  /// among its bodies and constraints, and only a dynamic body in contact is
+  /// read at all. Must be below 256 (Jolt's own limit: the value is stored as
+  /// a uint8 on MotionProperties).
+  uint32_t num_velocity_steps_override;
+  /// The same, for solver position iterations. Same 0 and same 256 bound.
+  uint32_t num_position_steps_override;
+  /// Multiplies the inertia tensor Jolt COMPUTES from the shape, under both
+  /// CALCULATE_MASS_AND_INERTIA and CALCULATE_INERTIA. Not applied under
+  /// MASS_AND_INERTIA_PROVIDED, whose tensor is taken as given. 1 leaves the
+  /// computed tensor alone; larger resists rotation more than the shape says.
+  float inertia_multiplier;
 } ZJoltBodyDesc;
 
 /// Fills `desc` with Jolt's own defaults. Call this first and then overwrite;
@@ -538,6 +561,21 @@ ZJOLT_API ZJoltResult zjoltBodySetAngularDamping(ZJoltPhysicsSystem *system,
 ZJOLT_API float zjoltBodyGetAngularDamping(const ZJoltPhysicsSystem *system,
                                            ZJoltBodyId body);
 
+/// Per-body solver iteration counts, the runtime half of
+/// ZJoltBodyDesc::num_velocity_steps_override. 0 means "use the system's".
+/// `steps` must be below 256 (ZJOLT_RESULT_INVALID_ARGUMENT otherwise), which
+/// is Jolt's own limit rather than this binding's: MotionProperties stores
+/// the value in a uint8. A stale id is ZJOLT_RESULT_BODY_NOT_FOUND; a STATIC
+/// body has no motion properties, so it is a no-op and the getters answer 0.
+ZJOLT_API ZJoltResult zjoltBodySetNumVelocityStepsOverride(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, uint32_t steps);
+ZJOLT_API uint32_t zjoltBodyGetNumVelocityStepsOverride(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+ZJOLT_API ZJoltResult zjoltBodySetNumPositionStepsOverride(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, uint32_t steps);
+ZJOLT_API uint32_t zjoltBodyGetNumPositionStepsOverride(
+    const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+
 /// Whether this body reports contacts without responding to them — a trigger
 /// volume. Unlocked counterpart of zjoltBodyIsSensorLocked; NULL system or a
 /// failed body lock answers false.
@@ -551,6 +589,12 @@ ZJOLT_API bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system,
 //
 // The three below live on Body itself (Body::mFlags), so they read
 // correctly even for a body with no motion properties; a lock is still taken.
+// Their setters exist for the same reason zjoltBodySetUseManifoldReduction
+// does — a value that can only be chosen at creation is not a setting, it is
+// a constant — and each invalidates the body's contact cache when it changes
+// something a contact already resting on this body was resolved under, which
+// is what BodyInterface::SetUseManifoldReduction does for the one flag Jolt
+// itself wraps. All three are a no-op on a soft body, which has no such flag.
 //===----------------------------------------------------------------------===//
 
 /// Whether this body applies the gyroscopic force (the Dzhanibekov "tennis
@@ -559,6 +603,8 @@ ZJOLT_API bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system,
 /// id.
 ZJOLT_API bool zjoltBodyGetApplyGyroscopicForce(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+ZJOLT_API void zjoltBodySetApplyGyroscopicForce(ZJoltPhysicsSystem *system,
+                                                ZJoltBodyId body, bool apply);
 
 /// Whether a KINEMATIC body generates contacts against other kinematic or
 /// static bodies — Body::GetCollideKinematicVsNonDynamic. Meaningless for a
@@ -567,6 +613,8 @@ ZJOLT_API bool zjoltBodyGetApplyGyroscopicForce(
 /// default, on a NULL system or a stale id.
 ZJOLT_API bool zjoltBodyGetCollideKinematicVsNonDynamic(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+ZJOLT_API void zjoltBodySetCollideKinematicVsNonDynamic(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, bool collide);
 
 /// Whether this body gets the extra ghost-contact suppression a convex shape
 /// sliding over a mesh's internal edges needs —
@@ -574,6 +622,8 @@ ZJOLT_API bool zjoltBodyGetCollideKinematicVsNonDynamic(
 /// default, on a NULL system or a stale id.
 ZJOLT_API bool zjoltBodyGetEnhancedInternalEdgeRemoval(
     const ZJoltPhysicsSystem *system, ZJoltBodyId body);
+ZJOLT_API void zjoltBodySetEnhancedInternalEdgeRemoval(
+    ZJoltPhysicsSystem *system, ZJoltBodyId body, bool remove);
 
 /// Whether this body changed in a way that invalidates cached contact
 /// results for every pair touching it — Body::IsCollisionCacheInvalid, set

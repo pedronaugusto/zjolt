@@ -50,30 +50,6 @@ ZJoltResult CheckQuatNormalized(const JPH::Quat &q, const char *why) {
   return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, why);
 }
 
-/// `min`/`max` straight across: zjolt_shape.cpp's zjoltShapeGetLocalBounds
-/// crosses a JPH::AABox the same way in the other direction.
-JPH::AABox ToJoltAABox(const ZJoltAABox &box) {
-  return JPH::AABox(zjolt::ToJolt(box.min), zjolt::ToJolt(box.max));
-}
-
-/// The reverse of zjoltShapeGetMassProperties's row-major unpacking
-/// (zjolt_shape.cpp): row r, column c of `mp.inertia` becomes Mat44 element
-/// (r, c). Duplicated from zjolt_body.cpp's own local ToJoltMassProperties
-/// rather than shared, since that one has internal linkage there too — see
-/// this file's own note on the layout, not that one's.
-JPH::MassProperties ToJoltMassProperties(const ZJoltMassProperties &mp) {
-  JPH::MassProperties out;
-  out.mMass = mp.mass;
-  out.mInertia = JPH::Mat44::sZero();
-  for (int row = 0; row < 3; ++row) {
-    for (int col = 0; col < 3; ++col) {
-      out.mInertia(row, col) = mp.inertia[row * 3 + col];
-    }
-  }
-  out.mInertia(3, 3) = 1.0f;
-  return out;
-}
-
 JPH::Vector<2> Vector2ToJolt(const ZJoltVector2 &v) {
   JPH::Vector<2> out;
   out[0] = v.x;
@@ -506,7 +482,7 @@ ZJoltResult zjoltMassPropertiesDecomposePrincipalMomentsOfInertia(
   if (!zjolt::Present(properties, out_rotation, out_diagonal))
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
-  const JPH::MassProperties jolt_properties = ToJoltMassProperties(*properties);
+  const JPH::MassProperties jolt_properties = zjolt::ToJolt(*properties);
   JPH::Mat44 rotation;
   JPH::Vec3 diagonal;
   if (!jolt_properties.DecomposePrincipalMomentsOfInertia(rotation, diagonal)) {
@@ -643,7 +619,7 @@ float zjoltRayAABox(const ZJoltVec3 *origin, const ZJoltVec3 *direction,
     return FLT_MAX;
   const JPH::Vec3 jolt_direction = zjolt::ToJolt(*direction);
   const JPH::RayInvDirection inv_direction(jolt_direction);
-  const JPH::AABox jolt_box = ToJoltAABox(*box);
+  const JPH::AABox jolt_box = zjolt::ToJolt(*box);
   return JPH::RayAABox(zjolt::ToJolt(*origin), inv_direction, jolt_box.mMin,
                        jolt_box.mMax);
 }
@@ -654,7 +630,7 @@ void zjoltRayAABoxMinMax(const ZJoltVec3 *origin, const ZJoltVec3 *direction,
   if (origin == nullptr || direction == nullptr || box == nullptr) return;
   const JPH::Vec3 jolt_direction = zjolt::ToJolt(*direction);
   const JPH::RayInvDirection inv_direction(jolt_direction);
-  const JPH::AABox jolt_box = ToJoltAABox(*box);
+  const JPH::AABox jolt_box = zjolt::ToJolt(*box);
   float min_fraction = 0.0f;
   float max_fraction = 0.0f;
   JPH::RayAABox(zjolt::ToJolt(*origin), inv_direction, jolt_box.mMin,
@@ -667,7 +643,7 @@ bool zjoltRayAABoxHits(const ZJoltVec3 *origin, const ZJoltVec3 *direction,
                        const ZJoltAABox *box) {
   if (origin == nullptr || direction == nullptr || box == nullptr)
     return false;
-  const JPH::AABox jolt_box = ToJoltAABox(*box);
+  const JPH::AABox jolt_box = zjolt::ToJolt(*box);
   return JPH::RayAABoxHits(zjolt::ToJolt(*origin), zjolt::ToJolt(*direction),
                            jolt_box.mMin, jolt_box.mMax);
 }
@@ -683,7 +659,7 @@ bool zjoltOrientedBoxOverlapsAABox(const ZJoltMat44 *orientation,
     return false;
   const JPH::OrientedBox jolt_box(zjolt::ToJolt(*orientation),
                                   zjolt::ToJolt(*half_extents));
-  return jolt_box.Overlaps(ToJoltAABox(*box), epsilon);
+  return jolt_box.Overlaps(zjolt::ToJolt(*box), epsilon);
 }
 
 bool zjoltOrientedBoxOverlapsOrientedBox(const ZJoltMat44 *orientation_a,

@@ -162,81 +162,6 @@ JPH::EActivation ToJoltActivation(int32_t activation) {
 }
 
 // Takes the raw integer, not the enum — see zjolt::RawEnum in
-// zjolt_internal.h. Its caller reads this straight out of a host-supplied
-// ZJoltBodyDesc, which is the entry point this value arrives from.
-JPH::EMotionType ToJoltMotionType(int32_t type) {
-  switch (type) {
-    case ZJOLT_MOTION_TYPE_STATIC:
-      return JPH::EMotionType::Static;
-    case ZJOLT_MOTION_TYPE_KINEMATIC:
-      return JPH::EMotionType::Kinematic;
-    case ZJOLT_MOTION_TYPE_DYNAMIC:
-      break;
-  }
-  return JPH::EMotionType::Dynamic;
-}
-
-/// Fills the BodyCreationSettings half of a ragdoll part from a flat
-/// ZJoltBodyDesc, mirroring zjolt_body.cpp's BuildCreationSettings field for
-/// field; RagdollSettings::Part is BodyCreationSettings plus mToParent,
-/// filled in separately by the caller. Called only after ValidatePart
-/// accepts `desc`, so its checks always pass here (always returns
-/// ZJOLT_RESULT_OK) — reported, not asserted, to stay correct on its own.
-ZJoltResult BuildPartBody(const ZJoltBodyDesc &desc,
-                          JPH::BodyCreationSettings *out) {
-  if (desc.shape == nullptr) {
-    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
-                           "a ragdoll part needs a shape");
-  }
-
-  out->mPosition = zjolt::ToJoltR(desc.position);
-  out->mRotation = zjolt::ToJoltRotation(desc.rotation);
-  out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
-  out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
-  out->SetShape(zjolt::ToJolt(desc.shape));
-  // Overwritten for every part by
-  // zjoltRagdollSettingsDisableParentChildCollisions if that is called, and by
-  // zjoltRagdollSettingsCreateRagdoll's group id in any case — a per-part group
-  // here is what those two build on top of.
-  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
-  out->mUserData = desc.user_data;
-  out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
-  out->mMotionType = ToJoltMotionType(zjolt::RawEnum(desc.motion_type));
-  out->mMotionQuality =
-      zjolt::RawEnum(desc.motion_quality) == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-          ? JPH::EMotionQuality::LinearCast
-          : JPH::EMotionQuality::Discrete;
-  out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
-  out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
-  out->mIsSensor = desc.is_sensor;
-  out->mAllowSleeping = desc.allow_sleeping;
-  out->mEnhancedInternalEdgeRemoval = desc.enhanced_internal_edge_removal;
-  out->mFriction = desc.friction;
-  out->mRestitution = desc.restitution;
-  out->mLinearDamping = desc.linear_damping;
-  out->mAngularDamping = desc.angular_damping;
-  out->mMaxLinearVelocity = desc.max_linear_velocity;
-  out->mMaxAngularVelocity = desc.max_angular_velocity;
-  out->mGravityFactor = desc.gravity_factor;
-
-  if (zjolt::RawEnum(desc.override_mass_properties) ==
-      ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
-    if (!(desc.mass > 0.0f)) {
-      return zjolt::SetError(
-          ZJOLT_RESULT_INVALID_ARGUMENT,
-          "override_mass_properties asks for an explicit mass, so mass must "
-          "be positive");
-    }
-    out->mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
-    out->mMassPropertiesOverride.mMass = desc.mass;
-  } else {
-    out->mOverrideMassProperties =
-        JPH::EOverrideMassProperties::CalculateMassAndInertia;
-  }
-  return ZJOLT_RESULT_OK;
-}
-
-// Takes the raw integer, not the enum — see zjolt::RawEnum in
 // zjolt_internal.h. Its one caller reads this straight out of a host-supplied
 // ZJoltRagdollConstraintDesc, which is the entry point this value arrives
 // from.
@@ -1336,8 +1261,11 @@ ZJoltResult zjoltRagdollSettingsBuild(ZJoltRagdollSettings *settings,
   s->mParts.resize(part_count);
 
   for (uint32_t i = 0; i < part_count; ++i) {
-    // Already validated above; the only way left to fail is allocation.
-    BuildPartBody(parts[i].body, &s->mParts[i]);
+    // Already validated above, so the shape check inside cannot fire; the
+    // only way left to fail is allocation. RagdollSettings::Part IS a
+    // BodyCreationSettings plus mToParent, filled in just below.
+    zjolt::ToJolt(parts[i].body, "a ragdoll part needs a shape",
+                  &s->mParts[i]);
 
     if (parts[i].to_parent != nullptr) {
       JPH::SwingTwistConstraintSettings *cs = BuildConstraint(*parts[i].to_parent);

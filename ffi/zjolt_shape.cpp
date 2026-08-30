@@ -1190,17 +1190,9 @@ void zjoltShapeGetMassProperties(const ZJoltShape *shape,
     *out = ZJoltMassProperties{};
     return;
   }
-  const JPH::MassProperties properties =
-      zjolt::ToJolt(shape)->GetMassProperties();
-  out->mass = properties.mMass;
-  // Jolt stores inertia in the upper-left 3x3 of a Mat44. Column c, row r of
-  // that matrix becomes row-major element [r][c] here.
-  for (int row = 0; row < 3; ++row) {
-    for (int col = 0; col < 3; ++col) {
-      out->inertia[row * 3 + col] =
-          properties.mInertia.GetColumn4(col)[row];
-    }
-  }
+  // Jolt stores inertia in the upper-left 3x3 of a Mat44; zjolt::ToJolt is
+  // the exact inverse of this unpacking, and lives beside it.
+  zjolt::WriteMassProperties(out, zjolt::ToJolt(shape)->GetMassProperties());
 }
 
 void zjoltShapeGetStats(const ZJoltShape *shape, ZJoltShapeStats *out) {

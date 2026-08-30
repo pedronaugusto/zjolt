@@ -21,62 +21,9 @@ JPH::EActivation ToJoltActivation(int32_t activation) {
              : JPH::EActivation::Activate;
 }
 
-JPH::EMotionType ToJoltMotionType(int32_t type) {
-  switch (type) {
-    case ZJOLT_MOTION_TYPE_STATIC:
-      return JPH::EMotionType::Static;
-    case ZJOLT_MOTION_TYPE_KINEMATIC:
-      return JPH::EMotionType::Kinematic;
-    case ZJOLT_MOTION_TYPE_DYNAMIC:
-      break;
-  }
-  return JPH::EMotionType::Dynamic;
-}
-
-ZJoltMotionType ToCMotionType(JPH::EMotionType type) {
-  switch (type) {
-    case JPH::EMotionType::Static:
-      return ZJOLT_MOTION_TYPE_STATIC;
-    case JPH::EMotionType::Kinematic:
-      return ZJOLT_MOTION_TYPE_KINEMATIC;
-    case JPH::EMotionType::Dynamic:
-      break;
-  }
-  return ZJOLT_MOTION_TYPE_DYNAMIC;
-}
-
-JPH::EMotionQuality ToJoltMotionQuality(int32_t quality) {
-  return quality == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-             ? JPH::EMotionQuality::LinearCast
-             : JPH::EMotionQuality::Discrete;
-}
-
-ZJoltMotionQuality ToCMotionQuality(JPH::EMotionQuality quality) {
-  return quality == JPH::EMotionQuality::LinearCast
-             ? ZJOLT_MOTION_QUALITY_LINEAR_CAST
-             : ZJOLT_MOTION_QUALITY_DISCRETE;
-}
-
 ZJoltBodyType ToCBodyType(JPH::EBodyType type) {
   return type == JPH::EBodyType::SoftBody ? ZJOLT_BODY_TYPE_SOFT_BODY
                                           : ZJOLT_BODY_TYPE_RIGID_BODY;
-}
-
-/// The reverse of zjoltShapeGetMassProperties's row-major unpacking
-/// (zjolt_shape.cpp): row r, column c of `mp.inertia` becomes Mat44 element
-/// (r, c). The fourth row and column stay zero except (3, 3), which Jolt's
-/// own MassProperties always carries as 1 (BodyCreationSettings.cpp:202,209).
-JPH::MassProperties ToJoltMassProperties(const ZJoltMassProperties &mp) {
-  JPH::MassProperties out;
-  out.mMass = mp.mass;
-  out.mInertia = JPH::Mat44::sZero();
-  for (int row = 0; row < 3; ++row) {
-    for (int col = 0; col < 3; ++col) {
-      out.mInertia(row, col) = mp.inertia[row * 3 + col];
-    }
-  }
-  out.mInertia(3, 3) = 1.0f;
-  return out;
 }
 
 JPH::BodyInterface *Interface(ZJoltPhysicsSystem *system) {
@@ -143,98 +90,8 @@ extern "C" {
 
 void zjoltBodyDescInit(ZJoltBodyDesc *desc) {
   if (desc == nullptr) return;
-
-  // Read out of a default-constructed BodyCreationSettings rather than typed
-  // in, so a Jolt upgrade that changes a default moves this too.
-  const JPH::BodyCreationSettings defaults;
-
-  *desc = ZJoltBodyDesc{};
-  desc->position = zjolt::ToCR(defaults.mPosition);
-  desc->rotation = zjolt::ToC(defaults.mRotation);
-  desc->linear_velocity = zjolt::ToC(defaults.mLinearVelocity);
-  desc->angular_velocity = zjolt::ToC(defaults.mAngularVelocity);
-  desc->shape = nullptr;
-  // Not all-zero: "no group" is ZJOLT_COLLISION_GROUP_INVALID, and 0 is a
-  // perfectly good group id.
-  desc->collision_group.filter = nullptr;
-  desc->collision_group.group_id = defaults.mCollisionGroup.GetGroupID();
-  desc->collision_group.sub_group_id = defaults.mCollisionGroup.GetSubGroupID();
-  desc->user_data = defaults.mUserData;
-  desc->object_layer = static_cast<ZJoltObjectLayer>(defaults.mObjectLayer);
-  desc->motion_type = ToCMotionType(defaults.mMotionType);
-  desc->motion_quality = ZJOLT_MOTION_QUALITY_DISCRETE;
-  desc->allowed_dofs = ZJOLT_ALLOWED_DOFS_ALL;
-  desc->override_mass_properties = ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_MASS_AND_INERTIA;
-  desc->mass = 0.0f;
-  desc->allow_dynamic_or_kinematic = defaults.mAllowDynamicOrKinematic;
-  desc->is_sensor = defaults.mIsSensor;
-  desc->allow_sleeping = defaults.mAllowSleeping;
-  desc->enhanced_internal_edge_removal = defaults.mEnhancedInternalEdgeRemoval;
-  desc->friction = defaults.mFriction;
-  desc->restitution = defaults.mRestitution;
-  desc->linear_damping = defaults.mLinearDamping;
-  desc->angular_damping = defaults.mAngularDamping;
-  desc->max_linear_velocity = defaults.mMaxLinearVelocity;
-  desc->max_angular_velocity = defaults.mMaxAngularVelocity;
-  desc->gravity_factor = defaults.mGravityFactor;
+  zjolt::BodyDescDefaults(desc);
 }
-
-namespace {
-
-ZJoltResult BuildCreationSettings(const ZJoltBodyDesc &desc,
-                                  JPH::BodyCreationSettings *out) {
-  out->mPosition = zjolt::ToJoltR(desc.position);
-  out->mRotation = zjolt::ToJoltRotation(desc.rotation);
-  out->mLinearVelocity = zjolt::ToJolt(desc.linear_velocity);
-  out->mAngularVelocity = zjolt::ToJolt(desc.angular_velocity);
-  // ConvertShapeSettings resolves whichever of mShapePtr/mShape SetShape
-  // just populated into one Shape, taking the same "no shape" branch for a
-  // NULL desc.shape that a pending ShapeSettings failing to build would.
-  out->SetShape(zjolt::ToJolt(desc.shape));
-  if (!out->ConvertShapeSettings().IsValid()) {
-    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
-                           "a body needs a shape");
-  }
-  out->mCollisionGroup = zjolt::ToJolt(&desc.collision_group);
-  out->mUserData = desc.user_data;
-  out->mObjectLayer = static_cast<JPH::ObjectLayer>(desc.object_layer);
-  out->mMotionType = ToJoltMotionType(zjolt::RawEnum(desc.motion_type));
-  out->mMotionQuality =
-      zjolt::RawEnum(desc.motion_quality) == ZJOLT_MOTION_QUALITY_LINEAR_CAST
-          ? JPH::EMotionQuality::LinearCast
-          : JPH::EMotionQuality::Discrete;
-  out->mAllowedDOFs = static_cast<JPH::EAllowedDOFs>(desc.allowed_dofs);
-  out->mAllowDynamicOrKinematic = desc.allow_dynamic_or_kinematic;
-  out->mIsSensor = desc.is_sensor;
-  out->mAllowSleeping = desc.allow_sleeping;
-  out->mEnhancedInternalEdgeRemoval = desc.enhanced_internal_edge_removal;
-  out->mFriction = desc.friction;
-  out->mRestitution = desc.restitution;
-  out->mLinearDamping = desc.linear_damping;
-  out->mAngularDamping = desc.angular_damping;
-  out->mMaxLinearVelocity = desc.max_linear_velocity;
-  out->mMaxAngularVelocity = desc.max_angular_velocity;
-  out->mGravityFactor = desc.gravity_factor;
-
-  if (zjolt::RawEnum(desc.override_mass_properties) ==
-      ZJOLT_OVERRIDE_MASS_PROPERTIES_CALCULATE_INERTIA) {
-    if (!(desc.mass > 0.0f)) {
-      return zjolt::SetError(
-          ZJOLT_RESULT_INVALID_ARGUMENT,
-          "override_mass_properties asks for an explicit mass, so mass must "
-          "be positive");
-    }
-    out->mOverrideMassProperties =
-        JPH::EOverrideMassProperties::CalculateInertia;
-    out->mMassPropertiesOverride.mMass = desc.mass;
-  } else {
-    out->mOverrideMassProperties =
-        JPH::EOverrideMassProperties::CalculateMassAndInertia;
-  }
-  return ZJOLT_RESULT_OK;
-}
-
-}  // namespace
 
 ZJoltResult zjoltBodyCreate(ZJoltPhysicsSystem *system,
                             const ZJoltBodyDesc *desc, ZJoltBodyId *out) {
@@ -242,7 +99,8 @@ ZJoltResult zjoltBodyCreate(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyCreationSettings settings;
-  const ZJoltResult built = BuildCreationSettings(*desc, &settings);
+  const ZJoltResult built =
+      zjolt::ToJolt(*desc, "a body needs a shape", &settings);
   if (built != ZJOLT_RESULT_OK) return built;
 
   JPH::Body *body = Interface(system)->CreateBody(settings);
@@ -277,7 +135,8 @@ ZJoltResult zjoltBodyCreateWithId(ZJoltPhysicsSystem *system,
   }
 
   JPH::BodyCreationSettings settings;
-  const ZJoltResult built = BuildCreationSettings(*desc, &settings);
+  const ZJoltResult built =
+      zjolt::ToJolt(*desc, "a body needs a shape", &settings);
   if (built != ZJOLT_RESULT_OK) return built;
 
   JPH::Body *body =
@@ -325,7 +184,8 @@ ZJoltResult zjoltBodyApplyBodyCreationSettings(ZJoltPhysicsSystem *system,
   if (!zjolt::Present(system, desc)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   JPH::BodyCreationSettings settings;
-  const ZJoltResult built = BuildCreationSettings(*desc, &settings);
+  const ZJoltResult built =
+      zjolt::ToJolt(*desc, "a body needs a shape", &settings);
   if (built != ZJOLT_RESULT_OK) return built;
 
   JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
@@ -428,7 +288,8 @@ void zjoltBodySetMotionType(ZJoltPhysicsSystem *system, ZJoltBodyId body,
   const int32_t raw_activation = zjolt::RawEnum(activation);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return;
-  iface->SetMotionType(zjolt::ToJolt(body), ToJoltMotionType(raw_type),
+  iface->SetMotionType(zjolt::ToJolt(body),
+                       zjolt::ToJoltMotionType(raw_type),
                        ToJoltActivation(raw_activation));
 }
 
@@ -436,7 +297,7 @@ ZJoltMotionType zjoltBodyGetMotionType(const ZJoltPhysicsSystem *system,
                                        ZJoltBodyId body) {
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return ZJOLT_MOTION_TYPE_STATIC;
-  return ToCMotionType(iface->GetMotionType(zjolt::ToJolt(body)));
+  return zjolt::ToCMotionType(iface->GetMotionType(zjolt::ToJolt(body)));
 }
 
 void zjoltBodySetMotionQuality(ZJoltPhysicsSystem *system, ZJoltBodyId body,
@@ -446,14 +307,16 @@ void zjoltBodySetMotionQuality(ZJoltPhysicsSystem *system, ZJoltBodyId body,
   const int32_t raw_quality = zjolt::RawEnum(quality);
   JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return;
-  iface->SetMotionQuality(zjolt::ToJolt(body), ToJoltMotionQuality(raw_quality));
+  iface->SetMotionQuality(zjolt::ToJolt(body),
+                          zjolt::ToJoltMotionQuality(raw_quality));
 }
 
 ZJoltMotionQuality zjoltBodyGetMotionQuality(const ZJoltPhysicsSystem *system,
                                              ZJoltBodyId body) {
   const JPH::BodyInterface *iface = Interface(system);
   if (iface == nullptr) return ZJOLT_MOTION_QUALITY_DISCRETE;
-  return ToCMotionQuality(iface->GetMotionQuality(zjolt::ToJolt(body)));
+  return zjolt::ToCMotionQuality(
+      iface->GetMotionQuality(zjolt::ToJolt(body)));
 }
 
 void zjoltBodySetPositionAndRotation(ZJoltPhysicsSystem *system,
@@ -718,7 +581,7 @@ ZJoltResult zjoltBodySetMassProperties(ZJoltPhysicsSystem *system,
   if (jolt_body.IsStatic()) return ZJOLT_RESULT_OK;
   jolt_body.GetMotionProperties()->SetMassProperties(
       static_cast<JPH::EAllowedDOFs>(allowed_dofs),
-      ToJoltMassProperties(*mass_properties));
+      zjolt::ToJolt(*mass_properties));
   return ZJOLT_RESULT_OK;
 }
 
@@ -1327,10 +1190,105 @@ bool zjoltBodyIsSensor(const ZJoltPhysicsSystem *system, ZJoltBodyId body) {
   return iface->IsSensor(zjolt::ToJolt(body));
 }
 
+namespace {
+
+/// A solver iteration override, which lives on MotionProperties and so is a
+/// no-op for a body that has none. Jolt stores it in a uint8 and asserts the
+/// range, which a release build does not run: the bound is checked here.
+ZJoltResult SetStepsOverride(ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                             uint32_t steps,
+                             void (JPH::MotionProperties::*set)(JPH::uint)) {
+  if (!zjolt::Present(system)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (steps >= 256) {
+    return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
+                           "steps: must be below 256");
+  }
+  JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                          zjolt::ToJolt(body));
+  if (!lock.Succeeded()) {
+    return zjolt::SetError(ZJOLT_RESULT_BODY_NOT_FOUND,
+                           "body id does not name a live body in this system");
+  }
+  JPH::Body &jolt_body = lock.GetBody();
+  if (!jolt_body.IsStatic()) {
+    (jolt_body.GetMotionProperties()->*set)(steps);
+  }
+  return ZJOLT_RESULT_OK;
+}
+
+uint32_t GetStepsOverride(const ZJoltPhysicsSystem *system, ZJoltBodyId body,
+                          JPH::uint (JPH::MotionProperties::*get)() const) {
+  if (system == nullptr) return 0;
+  JPH::BodyLockRead lock(system->system.GetBodyLockInterface(),
+                         zjolt::ToJolt(body));
+  if (!lock.Succeeded()) return 0;
+  const JPH::Body &jolt_body = lock.GetBody();
+  if (jolt_body.IsStatic()) return 0;
+  return static_cast<uint32_t>((jolt_body.GetMotionProperties()->*get)());
+}
+
+}  // namespace
+
+ZJoltResult zjoltBodySetNumVelocityStepsOverride(ZJoltPhysicsSystem *system,
+                                                 ZJoltBodyId body,
+                                                 uint32_t steps) {
+  ZJOLT_ENTER();
+  return SetStepsOverride(
+      system, body, steps,
+      &JPH::MotionProperties::SetNumVelocityStepsOverride);
+}
+
+uint32_t zjoltBodyGetNumVelocityStepsOverride(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body) {
+  return GetStepsOverride(
+      system, body, &JPH::MotionProperties::GetNumVelocityStepsOverride);
+}
+
+ZJoltResult zjoltBodySetNumPositionStepsOverride(ZJoltPhysicsSystem *system,
+                                                 ZJoltBodyId body,
+                                                 uint32_t steps) {
+  ZJOLT_ENTER();
+  return SetStepsOverride(
+      system, body, steps,
+      &JPH::MotionProperties::SetNumPositionStepsOverride);
+}
+
+uint32_t zjoltBodyGetNumPositionStepsOverride(const ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body) {
+  return GetStepsOverride(
+      system, body, &JPH::MotionProperties::GetNumPositionStepsOverride);
+}
+
 // The three flags below live on Body::mFlags rather than MotionProperties, so
 // unlike the accessors around them they read correctly for any body type --
 // a body lock is still taken, the same as every other read in this file that
 // is not mediated by BodyInterface.
+
+namespace {
+
+/// One Body::mFlags flag, changed under the body's own write lock and then
+/// followed by the contact-cache invalidation BodyInterface does for the one
+/// such flag Jolt itself wraps: a pair already resting on this body was
+/// resolved under the old value. Jolt's setters ASSERT IsRigidBody, so a soft
+/// body is left alone rather than corrupting a flag word it does not have.
+/// The invalidation happens after the lock is dropped, since it takes its own.
+void SetBodyFlag(ZJoltPhysicsSystem *system, ZJoltBodyId body, bool value,
+                 bool (JPH::Body::*get)() const,
+                 void (JPH::Body::*set)(bool)) {
+  if (system == nullptr) return;
+  {
+    JPH::BodyLockWrite lock(system->system.GetBodyLockInterface(),
+                            zjolt::ToJolt(body));
+    if (!lock.Succeeded()) return;
+    JPH::Body &jolt_body = lock.GetBody();
+    if (!jolt_body.IsRigidBody()) return;
+    if ((jolt_body.*get)() == value) return;
+    (jolt_body.*set)(value);
+  }
+  system->system.GetBodyInterface().InvalidateContactCache(zjolt::ToJolt(body));
+}
+
+}  // namespace
 
 bool zjoltBodyGetApplyGyroscopicForce(const ZJoltPhysicsSystem *system,
                                       ZJoltBodyId body) {
@@ -1339,6 +1297,12 @@ bool zjoltBodyGetApplyGyroscopicForce(const ZJoltPhysicsSystem *system,
                          zjolt::ToJolt(body));
   if (!lock.Succeeded()) return false;
   return lock.GetBody().GetApplyGyroscopicForce();
+}
+
+void zjoltBodySetApplyGyroscopicForce(ZJoltPhysicsSystem *system,
+                                      ZJoltBodyId body, bool apply) {
+  SetBodyFlag(system, body, apply, &JPH::Body::GetApplyGyroscopicForce,
+              &JPH::Body::SetApplyGyroscopicForce);
 }
 
 bool zjoltBodyGetCollideKinematicVsNonDynamic(const ZJoltPhysicsSystem *system,
@@ -1350,6 +1314,13 @@ bool zjoltBodyGetCollideKinematicVsNonDynamic(const ZJoltPhysicsSystem *system,
   return lock.GetBody().GetCollideKinematicVsNonDynamic();
 }
 
+void zjoltBodySetCollideKinematicVsNonDynamic(ZJoltPhysicsSystem *system,
+                                              ZJoltBodyId body, bool collide) {
+  SetBodyFlag(system, body, collide,
+              &JPH::Body::GetCollideKinematicVsNonDynamic,
+              &JPH::Body::SetCollideKinematicVsNonDynamic);
+}
+
 bool zjoltBodyGetEnhancedInternalEdgeRemoval(const ZJoltPhysicsSystem *system,
                                              ZJoltBodyId body) {
   if (system == nullptr) return false;
@@ -1357,6 +1328,12 @@ bool zjoltBodyGetEnhancedInternalEdgeRemoval(const ZJoltPhysicsSystem *system,
                          zjolt::ToJolt(body));
   if (!lock.Succeeded()) return false;
   return lock.GetBody().GetEnhancedInternalEdgeRemoval();
+}
+
+void zjoltBodySetEnhancedInternalEdgeRemoval(ZJoltPhysicsSystem *system,
+                                             ZJoltBodyId body, bool remove) {
+  SetBodyFlag(system, body, remove, &JPH::Body::GetEnhancedInternalEdgeRemoval,
+              &JPH::Body::SetEnhancedInternalEdgeRemoval);
 }
 
 bool zjoltBodyIsCollisionCacheInvalid(const ZJoltPhysicsSystem *system,
@@ -1721,7 +1698,7 @@ ZJoltObjectLayer zjoltBodyGetObjectLayerLocked(const ZJoltBody *body) {
 
 ZJoltMotionType zjoltBodyGetMotionTypeLocked(const ZJoltBody *body) {
   if (body == nullptr) return ZJOLT_MOTION_TYPE_STATIC;
-  return ToCMotionType(zjolt::ToJolt(body)->GetMotionType());
+  return zjolt::ToCMotionType(zjolt::ToJolt(body)->GetMotionType());
 }
 
 bool zjoltBodyIsActiveLocked(const ZJoltBody *body) {
