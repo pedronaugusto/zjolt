@@ -65,8 +65,45 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   with a message naming the entry point that made it, and
   `zjoltGroupFilterGetNumSubGroups` reports 0 for one.
 
+- `zjoltSkeletonAddJointWithParentName` and
+  `zjoltSkeletonCalculateParentJointIndices`, the second `Skeleton::AddJoint`
+  overload and the pass that resolves what it records. Only the indexed form
+  crossed, so a host importing a skeleton whose file stores parents BY NAME
+  had to resolve them itself, and `CalculateParentJointIndices` reached the
+  ABI through nothing at all.
+- `ZJOLT_MAX_FACE_VERTICES`, Jolt's own cap on a contact face
+  (`CollideShapeResult::Face` is `StaticArray<Vec3, 32>`).
+- `zjoltSimCollideCollectorGetEarlyOutFraction`,
+  `GetPositiveEarlyOutFraction`, `ResetEarlyOutFraction`,
+  `UpdateEarlyOutFraction`, `ForceEarlyOut` and `ShouldEarlyOut`. A
+  `ZJoltSimCollideFn` is handed the one `JPH::CollisionCollector` that crosses
+  this ABI and could only add hits to it: the float every collision routine
+  reads to skip work it cannot beat was unreachable, so a hook could not say
+  "I already have a contact this deep" before delegating to
+  `zjoltSimCollideDefault`. `Update` refuses a value that widens rather than
+  narrows -- Jolt asserts on that -- and `Reset` is the entry point for a seed
+  that goes either way.
+
 ### C ABI — changed
 
+- `zjoltPhysicsSystemStep` takes a `const ZJoltTempAllocator *` before the job
+  system, as `PhysicsSystem::Update` does. NULL keeps the allocator the system
+  was created with; anything else serves that one step, so a host can hand the
+  simulation a frame arena it resets afterwards. Both are per-call arguments
+  in Jolt, and this ABI passed one per call and bound the other at creation.
+- `ZJoltCollideShapeHit` and `ZJoltShapeCastHit` carry `face_on_1`,
+  `face_on_1_count`, `face_on_2` and `face_on_2_count`. `collect_faces_mode`
+  was settable on every overlap and cast, cost the work on every hit, and had
+  nowhere to deliver a face; the header said as much. The callback forms
+  deliver one now, borrowed for the callback; the forms that outlive Jolt's
+  result force NO_FACES rather than pay for a face they must discard.
+- `ZJOLT_CONSTRAINT_SUB_TYPE_OTHER` is replaced by
+  `ZJOLT_CONSTRAINT_SUB_TYPE_NONE` (0, a NULL handle),
+  `ZJOLT_CONSTRAINT_SUB_TYPE_VEHICLE` (14) and
+  `ZJOLT_CONSTRAINT_SUB_TYPE_USER_DEFINED` (15). Zero stood for both "not a
+  constraint" and "a kind this ABI does not name", so a vehicle -- which this
+  library builds -- was indistinguishable from nothing at all. Values 1..13
+  are untouched.
 - `zjoltShapeCreateHeightField` takes `materials_capacity`, Jolt's
   `mMaterialsCapacity`. Without it the material list a repaint grows is
   reallocated under any query running in parallel.
@@ -115,6 +152,12 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `RigidCharacter.Options` now cross to their C descriptor by field NAME, the
   way `BodyDesc` already did; the shared `descriptor.zig` is the one home for
   that rule, and a field on one side and not the other is a compile error.
+- `zjolt.system.simCollideEarlyOutFraction`,
+  `simCollidePositiveEarlyOutFraction`, `resetSimCollideEarlyOutFraction`,
+  `updateSimCollideEarlyOutFraction`, `forceSimCollideEarlyOut` and
+  `simCollideShouldEarlyOut`, beside `addSimCollideHit` and
+  `simCollideDefault` -- the collector a `collide` hook is given is steerable
+  now, not just addable to.
 - `zjolt.constraintList` fills a caller's buffer with every constraint in a
   system, each holding a reference of its own.
 - `RagdollSettings.setPartConstraint`, `partConstraint`,
@@ -145,10 +188,42 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 
 ### Fixed
 
+- `zjoltLiveHandleCount` counted no reference-counted object, so a shape,
+  material, group filter, skeleton, animation, scene, path, soft body
+  settings or job the host never released left the count at zero and
+  `zjoltDeinit` tore the library down anyway -- and destroying that handle
+  afterwards freed it through an allocator it was never allocated from.
+  Every reference this ABI hands out is counted now, at one home
+  (`zjolt::HostRetain` / `zjolt::HostRelease`), which is also the fix for
+  `zjoltConstraintSettingsAddRef`: it moved Jolt's count and not this one
+  while its `Release` moved both, so an AddRef/Release pair drove the total
+  NEGATIVE, and a negative total reads as "nothing outstanding". A ragdoll
+  and a skeleton mapper keep their own count and so keep moving on create
+  and on the release that destroys them; `ci/check-refcounts.sh` is what now
+  refuses a bare `AddRef` or `Release` in `ffi/`, and a pair whose two ends
+  do not account the same way.
+- Reading a `ZJoltBodyType` a host filled in was undefined behaviour. The
+  three active-body entry points loaded the parameter as an enum, which
+  aborts under UBSan for any value no enumerator names;
+  `zjolt::ToJoltBodyType` takes the raw integer, as every other enum
+  conversion in this ABI already did. `ci/run.sh`'s sanitizer arm was red.
+- A hit filled into a caller's buffer carried stack garbage in any field the
+  projector did not write: `HitStream::AddHit` left its hit
+  default-initialised. It is value-initialised now.
 - `hostStream` panicked on a zero-length read or write. An empty
   `JPH::Array`'s `data()` is NULL, and Jolt writes one per empty constraint
   list, so saving soft body shared settings through a host stream aborted in
   safe Zig before reaching the first field.
+
+- `Skeleton.addJointWithParentName` and `Skeleton.calculateParentJointIndices`.
+- `PhysicsSystem.stepWithTempAllocator`; `step` is it with no override.
+- `CollideShapeHit.faceOn1`/`faceOn2` and the same pair on `ShapeCastHit`,
+  each an empty slice when the query asked for no face or the form cannot
+  carry one.
+- `err.filled(buffer, count)` turns a two-call query's buffer and returned
+  count into a slice, refusing a count larger than the buffer instead of
+  slicing past it. Forty-five call sites did the slice by hand and trusted a
+  number that had crossed the ABI.
 
 ### Zig API — allocation
 
@@ -209,6 +284,20 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   one, and checks that the two halves still add to the whole.
 - `zjoltVehicleConstraintGetGearRatio` was documented as returning the gear
   ratio times the differential ratio. It returns the gear ratio alone.
+
+- `ci/check-headers.sh` proves every header reachable by `#include` from an
+  installed header is installed too. The step it replaces compared includes
+  against a grep for `ffi/` PATHS, so it called the generated `zjolt_config.h`
+  missing on a correct tree, counted `ffi/zjolt_internal.h` installed because
+  build.zig names it in a comment, and matched `ffi/zjolt.h` -- the umbrella --
+  on neither side. `ci/run.sh` and the hosted workflow call the one script.
+- `ci/check-comments.sh` gained a third rule: nothing that dates itself to a
+  day, a machine or one run. Rules 2 and 3 now cover build.zig, the CI and
+  tool scripts, the consumer and C smoke tests, and every document, not only
+  the declaration files.
+- `ci/run.sh --full` runs the suite and the C ABI test on the MSVC ABI when it
+  is invoked on Windows. The hosted workflow already did; the local mirror of
+  it did not, so the second ABI a Windows host has was never built there.
 
 ### Build
 
