@@ -146,11 +146,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Installed headers cover every include
-        run: |
-          comm -23 \
-            <(grep -hoE '#include "zjolt_[a-z_]+\.h"' ffi/*.h | sed 's/#include "//; s/"//' | sort -u) \
-            <(grep -oE 'ffi/zjolt_[a-z_]+\.h' build.zig | sed 's|ffi/||' | sort -u) |
-          grep . && { echo "not in build.zig's installHeader list"; exit 1; }; exit 0
+        run: ci/check-headers.sh
       - name: Comment standard
         run: ci/check-comments.sh
       - name: Coverage — every public name has a verdict

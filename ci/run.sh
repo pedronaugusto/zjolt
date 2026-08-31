@@ -79,14 +79,10 @@ section 'Hygiene'
 # be reformatted, or the next re-vendor becomes an unreadable diff.
 run 'zig fmt (src, tests, build.zig)' zig fmt --check src tests/consumer build.zig
 
-# Every header ffi/zjolt.h pulls in has to be installed with the library, or a
-# C consumer gets an umbrella header that does not resolve. The consumer test
-# catches this too, but only under --full and only after a full build.
-run 'installed headers cover every include' bash -c '
-  comm -23 \
-    <(grep -hoE "#include \"zjolt_[a-z_]+\.h\"" ffi/*.h | sed "s/#include \"//; s/\"//" | sort -u) \
-    <(grep -oE "ffi/zjolt_[a-z_]+\.h" build.zig | sed "s|ffi/||" | sort -u) |
-  grep . && { echo "not in build.zig'"'"'s installHeader list"; exit 1; }; exit 0'
+# Every header an installed header includes is installed too, or a C
+# consumer gets an umbrella that does not resolve. The consumer test catches
+# it as well, but only under --full and only after a full build.
+run 'installed headers cover every include' ci/check-headers.sh
 
 # Comment blocks stay short and stay out of the narrative register. Cheap, and
 # the kind of drift that is invisible in review until a whole file reads like a
