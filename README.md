@@ -438,9 +438,10 @@ guard nobody has checked: the entry-point preamble that turns a call made
 before `zjoltInit` into a result rather than a walk through an uninitialised
 allocator, the allocator seam, the callback error path that stashes a failure
 instead of unwinding across a Jolt callback, the analysis sweep that forces Zig
-to look at wrappers nothing calls, the coverage classifier, the host reference
-count behind `zjoltLiveHandleCount`, the comment budget, and the two guards
-over the documents —
+to look at wrappers nothing calls, the floors that stop a misuse sweep from
+quietly covering less of the ABI than it did, the coverage classifier, the
+host reference count behind `zjoltLiveHandleCount`, the comment budget, and
+the two guards over the documents —
 `ci/check-numbers.sh` and `ci/check-examples.sh`, which are mutated by editing
 a document rather than a source. The guards are listed rather than counted:
 `ci/check-numbers.sh` reads digits, so a number written in words is a number
