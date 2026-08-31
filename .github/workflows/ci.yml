@@ -81,6 +81,22 @@ jobs:
         if: runner.os == 'Windows'
         run: zig build test-c -Dtarget=x86_64-windows-msvc
 
+      # Nothing in tests/consumer passes -DZJOLT_DOUBLE_PRECISION to its C
+      # compiler, so this passes only because build.zig installs
+      # zjolt_config.h beside the headers: without it the C host reads a
+      # 4-byte ZJoltReal from a library that writes 8.
+      - name: Test — as a downstream dependency, double precision
+        working-directory: tests/consumer
+        run: zig build run -Ddouble_precision
+
+      # Resolving the installed headers from a dependent build is the one code
+      # path the in-repo suite never walks, so it needs the second Windows ABI
+      # as much as the suite does.
+      - name: Test — as a downstream dependency, Windows MSVC ABI
+        if: runner.os == 'Windows'
+        working-directory: tests/consumer
+        run: zig build run -Dtarget=x86_64-windows-msvc
+
   # Options that change the WIDTH of types in the ABI have to be executed, not
   # merely built: a compile proves the macros agree, only a run proves the
   # layouts do. That is what the ABI test in src/zjolt.zig checks, and it can

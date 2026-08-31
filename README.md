@@ -644,11 +644,11 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 
 The default is trimmed rather than complete, which is a concession to what Jolt
 is: 179 translation units per configuration, so one is tens of seconds rather
-than the couple of seconds a smaller library would take. `--full` is 32 checks
-— 24 of them run on this host, 8 cross-compiling — which is minutes from a
-cold cache; the default is under a minute once the cache is warm. Two of the
-host checks are the MSVC ABI, which only a Windows host can execute and which
-is skipped elsewhere.
+than the couple of seconds a smaller library would take. `--full` is 33 checks
+— 25 of them run on this host, 8 cross-compiling — which is minutes from a
+cold cache; the default is under a minute once the cache is warm. The host
+checks include the MSVC ABI ones, which only a Windows host can execute and
+which are skipped elsewhere.
 
 `ci/measurements.sh` recomputes every number this README states, and
 `ci/check-numbers.sh` FAILS THE BUILD when one of them disagrees with the

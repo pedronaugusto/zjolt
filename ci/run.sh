@@ -168,10 +168,17 @@ if [ $FULL -eq 1 ]; then
   # and the C runtime, so a compile is not enough. It needs the Microsoft
   # standard library, which only a Windows host has; the CI Windows runner
   # covers it wherever this is skipped.
+  #
+  # The consumer is here for the same reason it is above: resolving the
+  # installed headers from a dependent build is a code path the in-repo suite
+  # never walks, and it is the one that would notice an import library or a
+  # header spelling that only the gnu ABI has.
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
       run 'test MSVC ABI' zig build test -Dtarget=native-native-msvc
       run 'test-c MSVC ABI' zig build test-c -Dtarget=native-native-msvc
+      run 'consumer MSVC ABI' \
+        env -C tests/consumer zig build run -Dtarget=native-native-msvc
       ;;
   esac
 
