@@ -849,8 +849,8 @@ test "the library reports the build the wrapper was compiled for" {
 test "the reported instruction set is Jolt's own implication order" {
     // Jolt/Core/Core.h derives each JPH_USE_* from the wider one, so the set
     // is a chain and not a bag: AVX2 implies AVX, SSE4_2, SSE4_1, F16C,
-    // LZCNT, TZCNT and FMADD. A report that broke the chain would mean the
-    // macros this reads are not the ones Jolt compiled its vector paths with.
+    // LZCNT and TZCNT. A report that broke the chain would mean the macros
+    // this reads are not the ones Jolt compiled its vector paths with.
     const cpu = cpuFeatures();
 
     if (cpu.avx512) try std.testing.expect(cpu.avx2);
@@ -859,6 +859,16 @@ test "the reported instruction set is Jolt's own implication order" {
         try std.testing.expect(cpu.f16c);
         try std.testing.expect(cpu.lzcnt);
         try std.testing.expect(cpu.tzcnt);
+    }
+
+    // FMADD is the one link the chain alone does not carry. Core.h gates the
+    // whole derivation on JPH_CROSS_PLATFORM_DETERMINISTIC being absent, a
+    // fused multiply-add not rounding the way the separate operations do, so
+    // AVX2 implies it only with that option off — and with it on, no target
+    // may report it at all.
+    if (options.cross_platform_deterministic) {
+        try std.testing.expect(!cpu.fmadd);
+    } else if (cpu.avx2) {
         try std.testing.expect(cpu.fmadd);
     }
     if (cpu.avx) try std.testing.expect(cpu.sse4_2);

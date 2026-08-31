@@ -117,8 +117,11 @@ ZJOLT_API uint32_t zjoltConfigId(void);
 //===----------------------------------------------------------------------===//
 
 /// Bits of zjoltCpuFeatures. One per Jolt JPH_USE_* macro, spelled the same;
-/// Jolt implies the narrower ones from the wider, so AVX2 arrives with AVX,
-/// SSE4_2, SSE4_1, F16C, LZCNT, TZCNT and FMADD already set.
+/// Jolt implies the narrower from the wider, so AVX2 arrives with AVX,
+/// SSE4_2, SSE4_1, F16C, LZCNT and TZCNT set. Not with FMADD: Jolt refuses a
+/// fused multiply-add under cross-platform determinism, where it would not
+/// round as the separate operations do, so AVX2 implies it only with that
+/// option off.
 typedef enum ZJoltCpuFeature {
   ZJOLT_CPU_FEATURE_SSE = 1u << 0,
   ZJOLT_CPU_FEATURE_SSE4_1 = 1u << 1,
