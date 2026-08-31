@@ -192,6 +192,122 @@ test "CollideConvexVsTriangles reports the expected penetration axis for an over
     try std.testing.expectEqual(@as(u32, 0), miss.count);
 }
 
+test "CollideConvexVsTriangles hands its callback the two faces it was asked for" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(1, 1, 1), .{ .convex_radius = 0 });
+    defer box.release();
+
+    // The same clean face contact as the test above: a box's flat bottom
+    // against one big triangle, so both supporting faces are exact.
+    const v0 = zjolt.vec3(-50, 0, -50);
+    const v1 = zjolt.vec3(50, 0, -50);
+    const v2 = zjolt.vec3(0, 0, 50);
+
+    const Recorder = struct {
+        count: u32 = 0,
+        on_1: usize = 0,
+        on_2: usize = 0,
+
+        fn onHit(user: ?*anyopaque, hit: *const query.CollideShapeHit) callconv(.c) query.HitAction {
+            const self: *@This() = @ptrCast(@alignCast(user.?));
+            self.count += 1;
+            self.on_1 = hit.faceOn1().len;
+            self.on_2 = hit.faceOn2().len;
+            return .@"continue";
+        }
+    };
+
+    const settings = query.CollideShapeSettings{
+        .back_face_mode = .collide,
+        .collect_faces_mode = .collect_faces,
+    };
+
+    var hit: Recorder = .{};
+    var collider = try collision.CollideConvexVsTriangles.init(.{
+        .shape1 = box,
+        .position1 = zjolt.rvec3(0, -0.9, 0),
+        .position2 = zjolt.rvec3(0, 0, 0),
+    }, collision.empty_sub_shape_id, settings, Recorder.onHit, &hit);
+    defer collider.deinit();
+
+    _ = try collider.collide(v0, v1, v2, 0b111, collision.empty_sub_shape_id);
+    try std.testing.expectEqual(@as(u32, 1), hit.count);
+
+    // A box face is a quad and a triangle is a triangle. Both are borrowed
+    // for the callback only, so the lengths are recorded and the vertices are
+    // not.
+    try std.testing.expectEqual(@as(usize, 4), hit.on_1);
+    try std.testing.expectEqual(@as(usize, 3), hit.on_2);
+}
+
+test "CastConvexVsTriangles hands its callback two faces, and none when it did not ask" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const box = try zjolt.Shape.initBox(zjolt.vec3(1, 1, 1), .{ .convex_radius = 0 });
+    defer box.release();
+
+    const v0 = zjolt.vec3(-50, 0, -50);
+    const v1 = zjolt.vec3(50, 0, -50);
+    const v2 = zjolt.vec3(0, 0, 50);
+
+    const Recorder = struct {
+        count: u32 = 0,
+        fraction: f32 = undefined,
+        on_1: usize = 0,
+        on_2: usize = 0,
+
+        fn onHit(user: ?*anyopaque, hit: *const query.ShapeCastHit) callconv(.c) query.HitAction {
+            const self: *@This() = @ptrCast(@alignCast(user.?));
+            self.count += 1;
+            self.fraction = hit.fraction;
+            self.on_1 = hit.faceOn1().len;
+            self.on_2 = hit.faceOn2().len;
+            return .@"continue";
+        }
+    };
+
+    // The box's flat bottom starts at y = 2 and the sweep is 4 long, so the
+    // triangle at y = 0 is met halfway.
+    const params = collision.TrianglesCast{
+        .shape1 = box,
+        .position1 = zjolt.rvec3(0, 3, 0),
+        .direction = zjolt.vec3(0, -4, 0),
+        .position2 = zjolt.rvec3(0, 0, 0),
+    };
+
+    // The triangle's winding puts its normal along -Y, so a sweep from above
+    // arrives at its back face, exactly as in the overlap test above.
+    const base = query.ShapeCastSettings{
+        .back_face_mode_triangles = .collide,
+        .back_face_mode_convex = .collide,
+    };
+    var with_faces = base;
+    with_faces.collect_faces_mode = .collect_faces;
+
+    var asked: Recorder = .{};
+    var caster = try collision.CastConvexVsTriangles.init(params, with_faces, Recorder.onHit, &asked);
+    defer caster.deinit();
+
+    _ = try caster.cast(v0, v1, v2, 0b111, collision.empty_sub_shape_id);
+    try std.testing.expectEqual(@as(u32, 1), asked.count);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), asked.fraction, 1.0e-4);
+    try std.testing.expectEqual(@as(usize, 4), asked.on_1);
+    try std.testing.expectEqual(@as(usize, 3), asked.on_2);
+
+    // The default, which is `no_faces`: the same hit arrives carrying nothing.
+    var unasked: Recorder = .{};
+    var plain = try collision.CastConvexVsTriangles.init(params, base, Recorder.onHit, &unasked);
+    defer plain.deinit();
+
+    _ = try plain.cast(v0, v1, v2, 0b111, collision.empty_sub_shape_id);
+    try std.testing.expectEqual(@as(u32, 1), unasked.count);
+    try std.testing.expectEqual(@as(usize, 0), unasked.on_1);
+    try std.testing.expectEqual(@as(usize, 0), unasked.on_2);
+}
+
 test "CastSphereVsTriangles grazing a triangle edge reports the fraction computed by hand" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();

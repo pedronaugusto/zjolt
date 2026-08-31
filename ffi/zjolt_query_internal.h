@@ -58,16 +58,47 @@ inline JPH::RayCastSettings MakeRayCastSettings(const ZJoltRayCastSettings *sett
   return out;
 }
 
+/// Whether the form being built can hand a contact face to its caller.
+///
+/// Only the callback forms can: a face is up to ZJOLT_MAX_FACE_VERTICES
+/// vertices borrowed from Jolt's own result, and every other form outlives
+/// it. Asking for faces where they cannot be delivered is paid work thrown
+/// away, so the two builders below force NO_FACES for those.
+enum class FaceDelivery { kDelivered, kDiscarded };
+
+/// Copies the two contact faces into `scratch` -- 2 * ZJOLT_MAX_FACE_VERTICES
+/// of it -- and points the hit at them. Not a view onto Jolt's own arrays:
+/// JPH::Vec3 is sixteen bytes wide and ZJoltVec3 is twelve.
+template <class CHit>
+inline void AttachFaces(CHit *hit, const JPH::CollideShapeResult &result,
+                        ZJoltVec3 *scratch) {
+  const JPH::uint count1 = result.mShape1Face.size();
+  const JPH::uint count2 = result.mShape2Face.size();
+  for (JPH::uint i = 0; i < count1; ++i) scratch[i] = ToC(result.mShape1Face[i]);
+  for (JPH::uint i = 0; i < count2; ++i) {
+    scratch[ZJOLT_MAX_FACE_VERTICES + i] = ToC(result.mShape2Face[i]);
+  }
+  hit->face_on_1 = count1 != 0 ? scratch : nullptr;
+  hit->face_on_1_count = count1;
+  hit->face_on_2 = count2 != 0 ? scratch + ZJOLT_MAX_FACE_VERTICES : nullptr;
+  hit->face_on_2_count = count2;
+}
+
 /// A NULL settings pointer means Jolt's own defaults, which is what an
 /// untouched CollideShapeSettings already is.
 inline JPH::CollideShapeSettings MakeCollideShapeSettings(
-    const ZJoltCollideShapeSettings *settings) {
+    const ZJoltCollideShapeSettings *settings, FaceDelivery faces) {
   JPH::CollideShapeSettings out;
+  if (faces == FaceDelivery::kDiscarded) {
+    out.mCollectFacesMode = JPH::ECollectFacesMode::NoFaces;
+  }
   if (settings == nullptr) return out;
   out.mActiveEdgeMode =
       ToJoltActiveEdgeMode(zjolt::RawEnum(settings->active_edge_mode));
-  out.mCollectFacesMode =
-      ToJoltCollectFacesMode(zjolt::RawEnum(settings->collect_faces_mode));
+  if (faces == FaceDelivery::kDelivered) {
+    out.mCollectFacesMode =
+        ToJoltCollectFacesMode(zjolt::RawEnum(settings->collect_faces_mode));
+  }
   out.mCollisionTolerance = settings->collision_tolerance;
   out.mPenetrationTolerance = settings->penetration_tolerance;
   out.mActiveEdgeMovementDirection =
@@ -85,13 +116,18 @@ inline JPH::CollideShapeSettings MakeCollideShapeSettings(
 }
 
 inline JPH::ShapeCastSettings MakeShapeCastSettings(
-    const ZJoltShapeCastSettings *settings) {
+    const ZJoltShapeCastSettings *settings, FaceDelivery faces) {
   JPH::ShapeCastSettings out;
+  if (faces == FaceDelivery::kDiscarded) {
+    out.mCollectFacesMode = JPH::ECollectFacesMode::NoFaces;
+  }
   if (settings == nullptr) return out;
   out.mActiveEdgeMode =
       ToJoltActiveEdgeMode(zjolt::RawEnum(settings->active_edge_mode));
-  out.mCollectFacesMode =
-      ToJoltCollectFacesMode(zjolt::RawEnum(settings->collect_faces_mode));
+  if (faces == FaceDelivery::kDelivered) {
+    out.mCollectFacesMode =
+        ToJoltCollectFacesMode(zjolt::RawEnum(settings->collect_faces_mode));
+  }
   out.mCollisionTolerance = settings->collision_tolerance;
   out.mPenetrationTolerance = settings->penetration_tolerance;
   out.mActiveEdgeMovementDirection =

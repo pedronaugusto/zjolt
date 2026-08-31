@@ -35,6 +35,7 @@
 
 #include <cfloat>
 #include <cstdio>
+#include <type_traits>
 
 namespace {
 
@@ -55,7 +56,10 @@ class HitStream final : public Base {
       : project_(std::move(project)), sink_(std::move(sink)) {}
 
   void AddHit(const JoltHit &jolt_hit) override {
-    CHit hit;
+    // Value-initialised, not merely declared: a projection that does not
+    // write every field of a C hit would otherwise hand a caller stack
+    // garbage, and adding a field to a hit struct is how that happens.
+    CHit hit{};
     project_(&hit, jolt_hit, *this);
 
     switch (sink_(hit, jolt_hit)) {
@@ -176,8 +180,17 @@ struct ForwardToHost {
   void *on_body_user = nullptr;
 
   template <class JoltHit>
-  ZJoltHitAction operator()(const CHit &hit, const JoltHit &) const {
-    return on_hit(user, &hit);
+  ZJoltHitAction operator()(const CHit &hit, const JoltHit &jolt_hit) const {
+    // The one place a contact face can be handed out: Jolt's result is still
+    // alive here, and the host's callback is done with it before it is not.
+    if constexpr (std::is_base_of_v<JPH::CollideShapeResult, JoltHit>) {
+      ZJoltVec3 faces[2 * ZJOLT_MAX_FACE_VERTICES];
+      CHit with_faces = hit;
+      zjolt::AttachFaces(&with_faces, jolt_hit, faces);
+      return on_hit(user, &with_faces);
+    } else {
+      return on_hit(user, &hit);
+    }
   }
 
   /// @see HitStream::OnBody. `body` is never handed out past this call —
@@ -429,7 +442,8 @@ ZJoltResult CastShapeClosestImpl(const JPH::NarrowPhaseQuery &query,
                                  const ZJoltQueryFilters *filters,
                                  ZJoltShapeCastHit *out_hit,
                                  bool *out_hit_any) {
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -458,7 +472,8 @@ ZJoltResult CastShapeAllImpl(const JPH::NarrowPhaseQuery &query,
                              const ZJoltQueryFilters *filters,
                              ZJoltShapeCastHit *out_hits, uint32_t capacity,
                              uint32_t *out_count) {
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -485,7 +500,8 @@ ZJoltResult CastShapeEachImpl(const JPH::NarrowPhaseQuery &query,
                               const ZJoltQueryFilters *filters,
                               ZJoltShapeCastHitFn on_hit, void *user,
                               ZJoltOnBodyFn on_body, void *on_body_user) {
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -520,7 +536,8 @@ ZJoltResult CollideShapeClosestImpl(const JPH::NarrowPhaseQuery &query,
                                     const ZJoltQueryFilters *filters,
                                     ZJoltCollideShapeHit *out_hit,
                                     bool *out_hit_any) {
-  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   if (with_internal_edge_removal)
     jolt_settings = ForceInternalEdgeRemovalSettings(jolt_settings);
   const ZJoltResult tolerance =
@@ -563,7 +580,8 @@ ZJoltResult CollideShapeAllImpl(const JPH::NarrowPhaseQuery &query,
                                 const ZJoltQueryFilters *filters,
                                 ZJoltCollideShapeHit *out_hits,
                                 uint32_t capacity, uint32_t *out_count) {
-  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   if (with_internal_edge_removal)
     jolt_settings = ForceInternalEdgeRemovalSettings(jolt_settings);
   const ZJoltResult tolerance =
@@ -603,7 +621,8 @@ ZJoltResult CollideShapeEachImpl(
     const ZJoltCollideShapeSettings *settings,
     const ZJoltQueryFilters *filters, ZJoltCollideShapeHitFn on_hit,
     void *user, ZJoltOnBodyFn on_body, void *on_body_user) {
-  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   if (with_internal_edge_removal)
     jolt_settings = ForceInternalEdgeRemovalSettings(jolt_settings);
   const ZJoltResult tolerance =
@@ -1527,7 +1546,8 @@ ZJoltResult zjoltCollideShapeVsShapeClosest(
   }
 
   const JPH::CollideShapeSettings jolt_settings =
-      zjolt::MakeCollideShapeSettings(settings);
+      zjolt::MakeCollideShapeSettings(
+          settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -1568,7 +1588,8 @@ ZJoltResult zjoltCollideShapeVsShapeAll(
   }
 
   const JPH::CollideShapeSettings jolt_settings =
-      zjolt::MakeCollideShapeSettings(settings);
+      zjolt::MakeCollideShapeSettings(
+          settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -1613,7 +1634,8 @@ ZJoltResult zjoltCollideShapeVsShapePerLeafAll(
   }
 
   const JPH::CollideShapeSettings jolt_settings =
-      zjolt::MakeCollideShapeSettings(settings);
+      zjolt::MakeCollideShapeSettings(
+          settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -1652,7 +1674,8 @@ ZJoltResult zjoltCastShapeVsShapeClosest(
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
 
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -1692,7 +1715,8 @@ ZJoltResult zjoltCastShapeVsShapeAll(
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
 
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;

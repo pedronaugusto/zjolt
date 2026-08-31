@@ -344,6 +344,68 @@ const BodyTrace = struct {
     }
 };
 
+/// The widest face each side of a hit reported, and how many hits arrived.
+const FaceTrace = struct {
+    hits: usize = 0,
+    widest_on_1: usize = 0,
+    widest_on_2: usize = 0,
+
+    pub fn onHit(self: *FaceTrace, hit: zjolt.CollideShapeHit) zjolt.HitAction {
+        self.hits += 1;
+        self.widest_on_1 = @max(self.widest_on_1, hit.faceOn1().len);
+        self.widest_on_2 = @max(self.widest_on_2, hit.faceOn2().len);
+        return .@"continue";
+    }
+};
+
+test "a contact face reaches the callback that asked for one, and no other form" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    // A box overlapping the fixture's floor, which is a box too: two flat
+    // faces meet, so the supporting face on each side is a polygon rather
+    // than the single point a sphere would give.
+    const probe = try zjolt.Shape.initBox(zjolt.vec3(1, 1, 1), .{});
+    defer probe.release();
+    const at = zjolt.rvec3(0, 0.5, 0);
+    const with_faces: zjolt.CollideShapeSettings = .{ .collect_faces_mode = .collect_faces };
+    const queries = world.system.queries();
+
+    var asked: FaceTrace = .{};
+    try queries.collideShapeEach(
+        .{ .shape = probe, .position = at, .settings = with_faces },
+        null,
+        &asked,
+    );
+    try std.testing.expect(asked.hits > 0);
+    try std.testing.expect(asked.widest_on_1 >= 3);
+    try std.testing.expect(asked.widest_on_2 >= 3);
+
+    // The same query without the setting: same hits, no faces computed.
+    var silent: FaceTrace = .{};
+    try queries.collideShapeEach(.{ .shape = probe, .position = at }, null, &silent);
+    try std.testing.expectEqual(asked.hits, silent.hits);
+    try std.testing.expectEqual(@as(usize, 0), silent.widest_on_1);
+    try std.testing.expectEqual(@as(usize, 0), silent.widest_on_2);
+
+    // A buffer form outlives Jolt's own result, so it cannot borrow a face
+    // from it and forces NO_FACES rather than pay for one it must drop.
+    var buffer: [8]zjolt.CollideShapeHit = undefined;
+    const hits = try queries.collideShape(
+        .{ .shape = probe, .position = at, .settings = with_faces },
+        null,
+        &buffer,
+    );
+    try std.testing.expect(hits.len > 0);
+    for (hits) |hit| {
+        try std.testing.expectEqual(@as(usize, 0), hit.faceOn1().len);
+        try std.testing.expectEqual(@as(usize, 0), hit.faceOn2().len);
+    }
+}
+
 test "collideShapeEachWithBody announces each body immediately before its own hits" {
     // CollisionCollector::OnBody fires once per body, under the same lock
     // the traversal already holds, strictly before any of that body's

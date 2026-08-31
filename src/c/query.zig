@@ -138,7 +138,26 @@ pub const ShapeCastHit = extern struct {
     penetration_depth: f32,
     is_back_face_hit: bool,
     material: ?*const PhysicsMaterial,
+    face_on_1: ?[*]const Vec3,
+    face_on_1_count: u32,
+    face_on_2: ?[*]const Vec3,
+    face_on_2_count: u32,
+
+    /// The face on the shape the query supplied, borrowed for the duration of
+    /// the callback that received this hit. Empty in every form but the
+    /// streaming ones. @see zjolt_query.h.
+    pub fn faceOn1(self: @This()) []const Vec3 {
+        return if (self.face_on_1) |p| p[0..self.face_on_1_count] else &.{};
+    }
+
+    /// The face on the shape that was already there. Same borrowing rule.
+    pub fn faceOn2(self: @This()) []const Vec3 {
+        return if (self.face_on_2) |p| p[0..self.face_on_2_count] else &.{};
+    }
 };
+
+/// @see ZJOLT_MAX_FACE_VERTICES: Jolt's own cap on a contact face.
+pub const max_face_vertices: u32 = 32;
 
 pub const CollideShapeHit = extern struct {
     body: BodyId,
@@ -148,6 +167,22 @@ pub const CollideShapeHit = extern struct {
     penetration_axis: Vec3,
     penetration_depth: f32,
     material: ?*const PhysicsMaterial,
+    face_on_1: ?[*]const Vec3,
+    face_on_1_count: u32,
+    face_on_2: ?[*]const Vec3,
+    face_on_2_count: u32,
+
+    /// The face on the shape the query supplied, borrowed for the duration of
+    /// the callback that received this hit. Empty in every form but the
+    /// streaming ones. @see zjolt_query.h.
+    pub fn faceOn1(self: @This()) []const Vec3 {
+        return if (self.face_on_1) |p| p[0..self.face_on_1_count] else &.{};
+    }
+
+    /// The face on the shape that was already there. Same borrowing rule.
+    pub fn faceOn2(self: @This()) []const Vec3 {
+        return if (self.face_on_2) |p| p[0..self.face_on_2_count] else &.{};
+    }
 };
 
 pub const CollidePointHit = extern struct {

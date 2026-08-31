@@ -97,6 +97,8 @@ class ForwardCollideHit final : public JPH::CollideShapeCollector {
     c_hit.material = material_shape_ != nullptr
                          ? zjolt::ToC(material_shape_->GetMaterial(hit.mSubShapeID2))
                          : nullptr;
+    ZJoltVec3 faces[2 * ZJOLT_MAX_FACE_VERTICES];
+    zjolt::AttachFaces(&c_hit, hit, faces);
 
     switch (on_hit_(user_, &c_hit)) {
       case ZJOLT_HIT_ACTION_STOP:
@@ -137,6 +139,8 @@ class ForwardCastHit final : public JPH::CastShapeCollector {
     c_hit.penetration_depth = hit.mPenetrationDepth;
     c_hit.is_back_face_hit = hit.mIsBackFaceHit;
     c_hit.material = nullptr;
+    ZJoltVec3 faces[2 * ZJOLT_MAX_FACE_VERTICES];
+    zjolt::AttachFaces(&c_hit, hit, faces);
 
     switch (on_hit_(user_, &c_hit)) {
       case ZJOLT_HIT_ACTION_STOP:
@@ -287,7 +291,8 @@ ZJoltResult zjoltCollideConvexVsTrianglesCreate(
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "shape1 is not a convex shape");
   }
 
-  const JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  const JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -350,7 +355,8 @@ ZJoltResult zjoltCastConvexVsTrianglesCreate(
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "shape1 is not a convex shape");
   }
 
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -412,7 +418,8 @@ ZJoltResult zjoltCollideSphereVsTrianglesCreate(
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "shape1 is not a sphere");
   }
 
-  const JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  const JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -475,7 +482,8 @@ ZJoltResult zjoltCastSphereVsTrianglesCreate(
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT, "shape1 is not a sphere");
   }
 
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -547,7 +555,8 @@ ZJoltResult zjoltCollideShapeWithInternalEdgeRemoval(
         "non-uniform scale on a shape that insists on a uniform one");
   }
 
-  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;

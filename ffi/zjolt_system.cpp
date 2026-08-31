@@ -1137,7 +1137,8 @@ void zjoltSimCollideDefault(const ZJoltBody *live_body1, const ZJoltBody *live_b
   auto *jolt_collector = reinterpret_cast<JPH::CollideShapeCollector *>(collector);
   if (jolt_collector->ShouldEarlyOut()) return;
 
-  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(settings);
+  JPH::CollideShapeSettings jolt_settings = zjolt::MakeCollideShapeSettings(
+      settings, zjolt::FaceDelivery::kDelivered);
   // Per-call, not shared: JPH::ShapeFilter::mBodyID2 is mutable and Jolt's
   // own dispatch writes through it, so a filter two worker threads could
   // reach at once would race.

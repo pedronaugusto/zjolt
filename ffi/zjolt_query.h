@@ -107,6 +107,14 @@ typedef struct ZJoltShapeCastHit {
   /// The material at `sub_shape_id` on the shape that was hit (not the shape
   /// that was cast). @see ZJoltRayCastHit::material for the borrowing rule.
   const ZJoltPhysicsMaterial *material;
+  /// The colliding face on each shape, world space, valid ONLY for the
+  /// duration of the callback that received this hit -- copy what you keep.
+  /// NULL with a zero count unless faces were asked for and this form can
+  /// deliver one; @see the Contact faces section.
+  const ZJoltVec3 *face_on_1;
+  uint32_t face_on_1_count;
+  const ZJoltVec3 *face_on_2;
+  uint32_t face_on_2_count;
 } ZJoltShapeCastHit;
 
 typedef struct ZJoltCollideShapeHit {
@@ -121,6 +129,14 @@ typedef struct ZJoltCollideShapeHit {
   /// The material at `sub_shape_id` on the shape already in the system (not
   /// the shape the query passed in). @see ZJoltRayCastHit::material.
   const ZJoltPhysicsMaterial *material;
+  /// The colliding face on each shape, world space, valid ONLY for the
+  /// duration of the callback that received this hit -- copy what you keep.
+  /// NULL with a zero count unless faces were asked for and this form can
+  /// deliver one; @see the Contact faces section.
+  const ZJoltVec3 *face_on_1;
+  uint32_t face_on_1_count;
+  const ZJoltVec3 *face_on_2;
+  uint32_t face_on_2_count;
 } ZJoltCollideShapeHit;
 
 /// A shape a point was found inside. There is no contact geometry to report:
@@ -249,6 +265,23 @@ typedef enum ZJoltActiveEdgeMode {
   ZJOLT_ACTIVE_EDGE_MODE_COLLIDE_WITH_ALL = 1,
 } ZJoltActiveEdgeMode;
 
+//===----------------------------------------------------------------------===//
+// Contact faces
+//
+// The polygon each shape presents at a contact, reported in world space
+// through ZJoltCollideShapeHit::face_on_1 and its three neighbours, and the
+// same four fields on ZJoltShapeCastHit. Only the *Each forms can carry one:
+// they hand a hit to a callback while Jolt's own result is still alive, and a
+// face is up to ZJOLT_MAX_FACE_VERTICES vertices that a fixed-size hit struct
+// has no room to hold by value. The closest-hit and buffer-filling forms
+// outlive that result, so they force NO_FACES rather than compute a face they
+// would have to throw away.
+//===----------------------------------------------------------------------===//
+
+/// The most vertices a contact face can have. Jolt's own cap:
+/// CollideShapeResult::Face is StaticArray<Vec3, 32>.
+#define ZJOLT_MAX_FACE_VERTICES 32
+
 /// Whether Jolt works out the colliding FACE as well as the contact point.
 ///
 /// Note the numbering: collecting is 0 and not collecting is 1, so a
@@ -267,9 +300,7 @@ typedef enum ZJoltCollectFacesMode {
 typedef struct ZJoltCollideShapeSettings {
   /// @see ZJoltActiveEdgeMode.
   ZJoltActiveEdgeMode active_edge_mode;
-  /// Computed into Jolt's own result, but ZJoltCollideShapeHit does not carry
-  /// faces — setting this buys nothing today, only costs the work. Reach for
-  /// zjoltTransformedShapeGetSupportingFace when the face itself is wanted.
+  /// @see ZJoltCollectFacesMode and the Contact faces section.
   ZJoltCollectFacesMode collect_faces_mode;
   /// How close counts as touching inside GJK, in metres. Jolt's default is
   /// 1e-4.

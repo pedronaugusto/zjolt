@@ -546,7 +546,8 @@ ZJoltResult zjoltTransformedShapeCollideShapeAll(
     return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   const JPH::CollideShapeSettings jolt_settings =
-      zjolt::MakeCollideShapeSettings(settings);
+      zjolt::MakeCollideShapeSettings(
+          settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -580,7 +581,8 @@ ZJoltResult zjoltTransformedShapeCastShapeClosest(
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
 
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
@@ -617,7 +619,8 @@ ZJoltResult zjoltTransformedShapeCastShapeAll(
     return ZJOLT_RESULT_INVALID_ARGUMENT;
   }
 
-  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(settings);
+  const JPH::ShapeCastSettings jolt_settings = zjolt::MakeShapeCastSettings(
+      settings, zjolt::FaceDelivery::kDiscarded);
   const ZJoltResult tolerance =
       zjolt::CheckPenetrationTolerance(jolt_settings.mPenetrationTolerance);
   if (tolerance != ZJOLT_RESULT_OK) return tolerance;
