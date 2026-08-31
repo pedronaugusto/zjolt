@@ -323,8 +323,34 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `tests/c_smoke.c` does not call before init, so the reflective sweep is the
   guard that answers rather than the C test that runs first.
 
+- The three misuse sweeps hold floors of 700, 1300 and 175 probes, against 25,
+  100 and 100. The real counts are 776 result-returning, 1422 pointer-taking
+  and 192 enum-taking entry points, so most of a sweep could have disappeared
+  without tripping one, and a sweep that quietly stops matching has no other
+  output to notice. A 32nd mutation in `ci/check-abi-drift.sh` narrows the
+  predicate deciding which entry points take a pointer and asserts the null
+  sweep's floor is what fails; nothing had proved a floor could fire at all.
+- `ci/check-abi-drift.sh` applies each mutation with a program written to a
+  file and opened with `newline=''` at both ends. Reading it from stdin left
+  `python3 - <file>` ambiguous wherever `python3` dispatches on a shebang —
+  handed `tools/coverage.sh` to mutate, it ran that instead and the mutation
+  was reported as a stale anchor — and the line-ending translation rewrote
+  every file a mutation touched, which turned the ledger-example mutation
+  into a failure for a reason it never aimed at. Both were verdicts about the
+  tree drawn from a detail of the host.
+
 ### Build
 
+- The three misuse sweeps are one function per module behind a thin driver
+  rather than one function looping over every module, and which declarations
+  a sweep visits has one home instead of a copy of the filter in each of the
+  three. An `inline for` unrolls into the function that contains it, so each
+  sweep had been a single function body holding a probe for every entry point
+  in the ABI, and a compiler's peak memory is superlinear in one function's
+  size: compiling the Debug test binary peaked at 25G of resident memory,
+  which no hosted runner has, so the Debug steps of the workflow and the
+  mutations that build on them could not run there at all. The same compile
+  peaks at 882M split per module, with the same 503 tests.
 - `build.zig` writes and installs `zjolt_config.h`, carrying the two options
   that change the ABI and `ZJOLT_SHARED`; `zjolt_core.h` includes it when it
   is there. Zig propagates include paths and libraries across a link but never
