@@ -847,6 +847,46 @@ test "a ragdoll is launched as one thing by velocity or by impulse" {
 // Joint matrices in and out of a pose
 //=============================================================================
 
+test "a skeleton parented by name resolves its indices, and says so when the order is wrong" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var skeleton = try zjolt.Skeleton.init();
+    defer skeleton.release();
+
+    // The order an importer reading a file may well hand them over in: a
+    // joint's parent named before the parent itself exists.
+    const pelvis = try skeleton.addJointWithParentName("pelvis", null);
+    const hand = try skeleton.addJointWithParentName("hand", "arm");
+    const arm = try skeleton.addJointWithParentName("arm", "pelvis");
+    try std.testing.expectEqual(@as(u32, 0), pelvis);
+    try std.testing.expectEqual(@as(u32, 1), hand);
+    try std.testing.expectEqual(@as(u32, 2), arm);
+
+    // A name is not an index until it is resolved.
+    try std.testing.expectEqual(@as(?u32, null), skeleton.jointParentIndex(hand));
+    try std.testing.expectEqual(@as(?u32, null), skeleton.jointParentIndex(arm));
+
+    try skeleton.calculateParentJointIndices();
+    try std.testing.expectEqual(@as(?u32, null), skeleton.jointParentIndex(pelvis));
+    try std.testing.expectEqual(@as(?u32, arm), skeleton.jointParentIndex(hand));
+    try std.testing.expectEqual(@as(?u32, pelvis), skeleton.jointParentIndex(arm));
+
+    // The hand's parent is BELOW it in the array, which is the case the
+    // indexed `addJoint` refuses outright and this one can produce.
+    try std.testing.expect(!skeleton.areJointsCorrectlyOrdered());
+
+    // And the same three joints added in order are what a ragdoll needs.
+    var ordered = try zjolt.Skeleton.init();
+    defer ordered.release();
+    const root = try ordered.addJointWithParentName("pelvis", null);
+    const upper = try ordered.addJointWithParentName("arm", "pelvis");
+    _ = try ordered.addJointWithParentName("hand", "arm");
+    try ordered.calculateParentJointIndices();
+    try std.testing.expectEqual(@as(?u32, root), ordered.jointParentIndex(upper));
+    try std.testing.expect(ordered.areJointsCorrectlyOrdered());
+}
+
 test "a pose's joint matrices round-trip, and a short buffer is refused" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();

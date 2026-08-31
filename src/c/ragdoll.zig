@@ -65,6 +65,10 @@ pub extern fn zjoltSkeletonGetRefCount(skeleton: *const Skeleton) u32;
 
 pub extern fn zjoltSkeletonAddJoint(skeleton: *Skeleton, name: ?[*:0]const u8, parent_index: i32, out_index: *u32) Result;
 
+pub extern fn zjoltSkeletonAddJointWithParentName(skeleton: *Skeleton, name: ?[*:0]const u8, parent_name: ?[*:0]const u8, out_index: *u32) Result;
+
+pub extern fn zjoltSkeletonCalculateParentJointIndices(skeleton: *Skeleton) Result;
+
 pub extern fn zjoltSkeletonGetJointCount(skeleton: *const Skeleton) u32;
 
 pub extern fn zjoltSkeletonGetJointIndex(skeleton: *const Skeleton, name: ?[*:0]const u8) i32;

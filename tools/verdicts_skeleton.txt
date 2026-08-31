@@ -10,7 +10,6 @@
 #              tools/classify.sh computes this; nothing else may claim it.
 #   GAP        work. ci/check-coverage.sh fails while any remain.
 Skeleton	CalculateLocalSpaceJointMatrices	BOUND	zjoltSkeletonMapperMap
-Skeleton	CalculateParentJointIndices	BOUND	zjoltSkeletonAddJoint
 Skeleton	GetAnimatedJoints	BOUND	zjoltSkeletalAnimationGetAnimatedJointCount zjoltSkeletalAnimationGetAnimatedJointName zjoltSkeletalAnimationGetKeyframeCount zjoltSkeletalAnimationGetKeyframe
 Skeleton	GetChains	BOUND	zjoltSkeletonMapperGetChainCount zjoltSkeletonMapperGetChainJointCounts zjoltSkeletonMapperGetChainJointIndex1 zjoltSkeletonMapperGetChainJointIndex2
 Skeleton	GetJointMatrix	BOUND	zjoltSkeletonPoseGetJoints

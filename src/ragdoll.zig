@@ -62,6 +62,27 @@ pub const Skeleton = struct {
         return index;
     }
 
+    /// Appends one joint whose parent is named rather than indexed, for a
+    /// host importing a skeleton that stores parents that way. The parent
+    /// index stays `null` until `calculateParentJointIndices` resolves it.
+    pub fn addJointWithParentName(self: Skeleton, name: ?[:0]const u8, parent_name: ?[:0]const u8) err.Error!u32 {
+        var index: u32 = undefined;
+        try err.check(c.zjoltSkeletonAddJointWithParentName(
+            self.handle,
+            if (name) |n| n.ptr else null,
+            if (parent_name) |p| p.ptr else null,
+            &index,
+        ));
+        return index;
+    }
+
+    /// Resolves every joint's parent NAME to its index. Only joints added by
+    /// `addJointWithParentName` need it, and a name no joint has stays a
+    /// root.
+    pub fn calculateParentJointIndices(self: Skeleton) err.Error!void {
+        try err.check(c.zjoltSkeletonCalculateParentJointIndices(self.handle));
+    }
+
     pub fn jointCount(self: Skeleton) u32 {
         return c.zjoltSkeletonGetJointCount(self.handle);
     }
@@ -86,7 +107,8 @@ pub const Skeleton = struct {
 
     /// True if every joint's parent index is below its own — the
     /// precondition every ragdoll and pose operation has on a skeleton.
-    /// `addJoint` cannot build one that fails this.
+    /// `addJoint` cannot build one that fails this; `addJointWithParentName`
+    /// can, which is what this is for.
     pub fn areJointsCorrectlyOrdered(self: Skeleton) bool {
         return c.zjoltSkeletonAreJointsCorrectlyOrdered(self.handle);
     }

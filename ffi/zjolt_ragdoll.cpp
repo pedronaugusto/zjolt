@@ -389,6 +389,27 @@ ZJoltResult zjoltSkeletonAddJoint(ZJoltSkeleton *skeleton, const char *name,
   return ZJOLT_RESULT_OK;
 }
 
+ZJoltResult zjoltSkeletonAddJointWithParentName(ZJoltSkeleton *skeleton,
+                                                const char *name,
+                                                const char *parent_name,
+                                                uint32_t *out_index) {
+  ZJOLT_ENTER(zjolt::OutIsEmptyAs(out_index, (uint32_t)0xffffffffu));
+  if (!zjolt::Present(skeleton, out_index)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+
+  JPH::Skeleton *s = zjolt::ToJolt(skeleton);
+  *out_index = s->AddJoint(
+      JPH::string_view(name != nullptr ? name : ""),
+      JPH::string_view(parent_name != nullptr ? parent_name : ""));
+  return ZJOLT_RESULT_OK;
+}
+
+ZJoltResult zjoltSkeletonCalculateParentJointIndices(ZJoltSkeleton *skeleton) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(skeleton)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  zjolt::ToJolt(skeleton)->CalculateParentJointIndices();
+  return ZJOLT_RESULT_OK;
+}
+
 uint32_t zjoltSkeletonGetJointCount(const ZJoltSkeleton *skeleton) {
   if (skeleton == nullptr) return 0;
   return static_cast<uint32_t>(zjolt::ToJolt(skeleton)->GetJointCount());

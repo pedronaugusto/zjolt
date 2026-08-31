@@ -34,7 +34,7 @@ cross-check makes any drift between the header and the Zig side a build
 failure, and there are no compatibility aliases anywhere, so there is exactly
 one spelling of everything.
 
-Working today: every Jolt subsystem, across **1449 C entry points** — shapes,
+Working today: every Jolt subsystem, across **1451 C entry points** — shapes,
 bodies, the step, queries, constraints, both character kinds, vehicles,
 ragdolls, soft bodies, hair, state save and restore, and debug draw. See
 [Scope](#scope) for what that covers and what is deliberately left out.
@@ -185,7 +185,7 @@ difference that matters is not spelling:
 
 |  | joltc | zjolt |
 |---|---|---|
-| entry points returning an error code | none | 774 |
+| entry points returning an error code | none | 776 |
 | entry points returning `void` | the large majority | 381 |
 | build-configuration handshake | none | `zjoltAbiLayout` + config id |
 | public headers | one | 25, one per subsystem, behind one umbrella |
@@ -675,7 +675,7 @@ measurement said so.
 
 ## Scope
 
-Every Jolt subsystem is bound: **1449 C entry points** across **25 headers**,
+Every Jolt subsystem is bound: **1451 C entry points** across **25 headers**,
 each one mirrored by a Zig wrapper that a reflective cross-check pairs at build
 time. Not one entry point is stranded — `tools/zig_surface_exceptions.txt` is
 empty, and `ci/check-coverage.sh` fails both if an entry point loses its Zig
@@ -761,9 +761,9 @@ with a fresh run. No number here is typed by hand.
 
 The claimed areas hold **2682 public Jolt names** — every method, every free
 function, and every public data member of a `*Settings` type, which is an API
-no method reaches. **1359 are spelled out by an entry point** of a matching
-name. The other **1323 carry a recorded verdict** in `tools/verdicts_*.txt`,
-one line each with its evidence: **605 `BOUND`** (the effect is reachable, by
+no method reaches. **1360 are spelled out by an entry point** of a matching
+name. The other **1322 carry a recorded verdict** in `tools/verdicts_*.txt`,
+one line each with its evidence: **604 `BOUND`** (the effect is reachable, by
 another name), **198 `EXTENSION`** (a seam the host implements instead),
 **214 `INTERNAL`** (not public in Jolt either — recomputed by
 `tools/classify.sh`, never asserted), **190 `LANGUAGE`** (Zig has it already),

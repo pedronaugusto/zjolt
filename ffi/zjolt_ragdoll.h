@@ -79,6 +79,21 @@ ZJOLT_API ZJoltResult zjoltSkeletonAddJoint(ZJoltSkeleton *skeleton,
                                             int32_t parent_index,
                                             uint32_t *out_index);
 
+/// Appends one joint whose parent is NAMED, for a host importing a skeleton
+/// that stores parents that way. The index stays -1 until
+/// zjoltSkeletonCalculateParentJointIndices resolves it; `parent_name` NULL
+/// or empty means a root joint.
+ZJOLT_API ZJoltResult zjoltSkeletonAddJointWithParentName(
+    ZJoltSkeleton *skeleton, const char *name, const char *parent_name,
+    uint32_t *out_index);
+
+/// Resolves every joint's parent NAME to its index —
+/// Skeleton::CalculateParentJointIndices. A joint added by index already
+/// carries its answer; one added by name has -1 until this runs. A name no
+/// joint has leaves -1, which is a root.
+ZJOLT_API ZJoltResult zjoltSkeletonCalculateParentJointIndices(
+    ZJoltSkeleton *skeleton);
+
 /// 0 if `skeleton` is NULL.
 ZJOLT_API uint32_t zjoltSkeletonGetJointCount(const ZJoltSkeleton *skeleton);
 
@@ -97,8 +112,8 @@ ZJOLT_API const char *zjoltSkeletonGetJointName(const ZJoltSkeleton *skeleton,
 
 /// True if every joint's parent index is below its own — the precondition
 /// every ragdoll and pose operation below has on the skeleton it is given.
-/// `zjoltSkeletonAddJoint` cannot build a skeleton that fails this, so the
-/// only way to reach false is a skeleton restored or built some other way.
+/// `zjoltSkeletonAddJoint` cannot build a skeleton that fails this;
+/// `zjoltSkeletonAddJointWithParentName` can, and so can a restore.
 /// False if `skeleton` is NULL.
 ZJOLT_API bool zjoltSkeletonAreJointsCorrectlyOrdered(
     const ZJoltSkeleton *skeleton);
