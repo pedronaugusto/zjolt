@@ -188,6 +188,14 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 
 ### Fixed
 
+- `-Ddebug_renderer=true` did not compile. `PolyhedronSubmergedVolumeCalculator`
+  takes a world origin as one more constructor parameter under
+  `JPH_DEBUG_RENDERER`, and `ffi/zjolt_shape.cpp` passed the six it takes
+  without it, so the whole library failed to build in a configuration the
+  hosted workflow declares. It is passed as Jolt's own
+  `JPH_IF_DEBUG_RENDERER(, ...)` now, zero being the origin this ABI carries.
+  With the option on, ten tests that only run when Jolt collects debug-draw
+  geometry execute for the first time: 500 of 503 rather than 490.
 - `zjoltLiveHandleCount` counted no reference-counted object, so a shape,
   material, group filter, skeleton, animation, scene, path, soft body
   settings or job the host never released left the count at zero and
@@ -338,6 +346,14 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   every file a mutation touched, which turned the ledger-example mutation
   into a failure for a reason it never aimed at. Both were verdicts about the
   tree drawn from a detail of the host.
+
+- `ci/check-mirror.sh` compares the build-option combinations `ci/run.sh`
+  executes against those `.github/workflows/ci.yml` executes, and refuses a
+  difference. The header of `ci/run.sh` promised the two matched, nothing held
+  the promise, and the workflow was a configuration ahead — which is how the
+  debug-renderer break above survived. `ci/run.sh --full` also builds that
+  configuration now, and mutation 33 of `ci/check-abi-drift.sh` proves the new
+  guard fires.
 
 ### Build
 
