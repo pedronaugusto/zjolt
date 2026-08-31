@@ -323,6 +323,33 @@ test "FlushDenormalsGuard enters and leaves without error" {
     defer guard.deinit();
 }
 
+/// Through a volatile load and out of line, so no optimize mode can fold the
+/// multiply at compile time and answer with a denormal the FPU never saw.
+noinline fn halved(x: *const volatile f32) f32 {
+    return x.* * 0.5;
+}
+
+test "FlushDenormalsGuard flushes a denormal result to zero, and stops when it leaves" {
+    switch (@import("builtin").target.cpu.arch) {
+        .x86, .x86_64, .aarch64, .aarch64_be, .arm, .armeb, .thumb, .thumbeb => {},
+        // No floating-point control word to set; the guard is a no-op there
+        // and there is nothing to assert.
+        else => return error.SkipZigTest,
+    }
+
+    // The smallest normal f32; half of it is a denormal, which is exactly
+    // what flush-to-zero replaces.
+    const smallest_normal: f32 = std.math.floatMin(f32);
+    try std.testing.expect(halved(&smallest_normal) > 0.0);
+
+    var guard = FlushDenormalsGuard.init();
+    const flushed = halved(&smallest_normal);
+    guard.deinit();
+
+    try std.testing.expectEqual(@as(f32, 0.0), flushed);
+    try std.testing.expect(halved(&smallest_normal) > 0.0);
+}
+
 test "FlushDenormalsGuard nests LIFO" {
     var outer = FlushDenormalsGuard.init();
     {
