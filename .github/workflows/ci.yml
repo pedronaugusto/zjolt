@@ -34,7 +34,7 @@ jobs:
         with:
           version: ${{ env.ZIG_VERSION }}
 
-      # Only our own sources: libs/JoltPhysics is vendored verbatim and
+      # Only this package's sources: libs/JoltPhysics is vendored verbatim and
       # reformatting it would make the next re-vendor an unreadable diff.
       - name: Formatting
         run: zig fmt --check src tests/consumer build.zig

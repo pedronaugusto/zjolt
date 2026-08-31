@@ -2,14 +2,18 @@
 #
 # Refuses comment blocks that have stopped being reference documentation.
 # Length per block, not density: a header where every declaration carries two
-# crisp lines is correct at any percentage. Two rules, and this file is the
-# only statement of either:
+# crisp lines is correct at any percentage. Three rules, and this file is the
+# only statement of any of them:
 #
 #   1. At most MAX_DECL lines directly above one declaration, MAX_HEADER for
 #      the block at the top of a file or under a //===---===// banner.
-#   2. No narrative register. The grep below is the list; it rejects the
-#      first person, an appeal to what something used to be, and the phrases
-#      that introduce an aside rather than a fact.
+#   2. No narrative register: the first person, an appeal to a former state,
+#      and the phrases that introduce an aside rather than a fact.
+#   3. Nothing that dates itself -- to a day, a machine, or one run of
+#      something. A reader a year later cannot tell what it referred to.
+#
+# Rule 1 covers the declaration files, where a block sits above one name.
+# Rules 2 and 3 cover every hand-written file, documents included.
 #
 #   ci/check-comments.sh [--list]
 
@@ -29,6 +33,29 @@ else RED=; GREEN=; OFF=; fi
 MAX_DECL=6      # comment lines directly above one declaration
 MAX_HEADER=14   # the block at the top of a file
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+
+REGISTER='\bwe\b|\bour\b|\bus\b|\bnote that\b|\bworth (stating|noting|saying)\b|\bused to be\b|\bthey used to\b|\bit used to\b|\bthe reason (is|it)\b|\bwhich is why\b|\bthat is why\b|\bturns out\b|\bin practice this\b|\bdo not be\b|\byou might (think|expect)\b|\bit is tempting\b'
+DATED='\bat the time of writing\b|\bas of (today|now|this writing)\b|\bon (this|my) (machine|laptop|box)\b|\b(on|in|during) the first run\b'
+
+# `$1` is the comment marker for the file's language; a document has none, so
+# every line of it is prose.
+voice() {
+  local marker="$1" f="$2"
+  [ -f "$f" ] || return 0
+  grep -nEi "^[[:space:]]*($marker).*($REGISTER)" "$f" | sed "s|^|$f:|" >> "$work/voice"
+  grep -nEi "^[[:space:]]*($marker).*($DATED)" "$f" | sed "s|^|$f:|" >> "$work/dated"
+}
+
+for f in build.zig tests/c_smoke.c tests/consumer/build.zig tests/consumer/src/*.zig; do
+  voice '//|///|//!' "$f"
+done
+for f in ci/*.sh tools/*.sh; do
+  voice '#' "$f"
+done
+for f in *.md docs/*.md; do
+  [ -f "$f" ] || continue
+  grep -nEi "$DATED" "$f" | sed "s|^|$f:|" >> "$work/dated"
+done
 
 for f in ffi/*.h ffi/*.cpp src/*.zig src/c/*.zig; do
   [ -f "$f" ] || continue
@@ -51,9 +78,7 @@ for f in ffi/*.h ffi/*.cpp src/*.zig src/c/*.zig; do
     END { if (run > MD) printf "%s:%d: %d trailing comment lines\n", F, start, run }
   ' "$f" >> "$work/long" || { echo "check-comments: awk failed on $f" >&2; exit 2; }
 
-  # Narrative register. These read as a person talking, not as documentation.
-  grep -nEi '^[[:space:]]*(//|///|//!).*(\bwe\b|\bour\b|\bus\b|\bnote that\b|\bworth (stating|noting|saying)\b|\bused to be\b|\bthey used to\b|\bit used to\b|\bthe reason (is|it)\b|\bwhich is why\b|\bthat is why\b|\bturns out\b|\bin practice this\b|\bdo not be\b|\byou might (think|expect)\b|\bit is tempting\b)' "$f" |
-    sed "s|^|$f:|" >> "$work/voice"
+  voice '//|///|//!' "$f"
 done
 
 fails=0
@@ -69,6 +94,12 @@ if [ -s "$work/voice" ]; then
   printf '%s%d narrative comment line(s) — the register list is in ci/check-comments.sh%s\n' "$RED" "$n" "$OFF" >&2
   fails=$((fails + 1))
 fi
+if [ -s "$work/dated" ]; then
+  head -30 "$work/dated" | sed 's/^/  /' >&2
+  n=$(grep -c . "$work/dated")
+  printf '%s%d line(s) dated to a day, a machine or one run%s\n' "$RED" "$n" "$OFF" >&2
+  fails=$((fails + 1))
+fi
 
 [ "$fails" -ne 0 ] && exit 1
-printf '%sOK%s  no over-long or narrative comment blocks\n' "$GREEN" "$OFF"
+printf '%sOK%s  no over-long, narrative or self-dating comments\n' "$GREEN" "$OFF"

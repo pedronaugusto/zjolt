@@ -662,11 +662,12 @@ so is a sentence that is wrong around a number that is right.
 Compiling proves the sources and build graph are portable; only an executed
 configuration proves behaviour, which is why the two are separate jobs.
 
-That table describes the matrix, not a promise: **the badge at the top of this
-file is the authority on whether those runs have actually happened and
-passed.** At the time of writing the suite has been executed by hand on
-macOS/aarch64 only, and the Windows MSVC configuration has never been executed
-at all.
+That table describes the matrix CI runs, not a promise that it has run: **the
+badge at the top of this file is the authority on whether those jobs have
+happened and passed.** `ci/run.sh` is that matrix locally — it executes the
+suite on whichever host it is invoked from and cross-compiles the rest — and a
+document cannot report which hosts have run it without going stale the moment
+one more does.
 
 Also not claimed: nothing here has been benchmarked. The bulk read-back path
 exists because 2N ABI crossings per frame is the wrong shape, not because a

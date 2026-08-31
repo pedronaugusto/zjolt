@@ -75,8 +75,8 @@ printf '%szjolt local CI%s  %s%s%s\n' "$BOLD" "$OFF" "$DIM" "$(zig version)" "$O
 section 'Hygiene'
 #-----------------------------------------------------------------------------
 
-# Only our own Zig sources: libs/JoltPhysics is vendored verbatim and must not
-# be reformatted, or the next re-vendor becomes an unreadable diff.
+# Only this package's Zig sources: libs/JoltPhysics is vendored verbatim and
+# must not be reformatted, or the next re-vendor becomes an unreadable diff.
 run 'zig fmt (src, tests, build.zig)' zig fmt --check src tests/consumer build.zig
 
 # Every header an installed header includes is installed too, or a C
@@ -109,7 +109,7 @@ section 'Tests — native'
 
 # The C sanitizer is opt-in — a library must not force its runtime into a
 # consumer's link — so zjolt's own Debug run asks for it explicitly. This is
-# the run that would catch undefined behaviour in our own C++.
+# the run that catches undefined behaviour in this package's own C++.
 run 'test Debug (UBSan on)' zig build test -Doptimize=Debug -Dsanitize_c=true
 
 # The C boundary on its own, with no Zig in the picture.
@@ -138,7 +138,7 @@ if [ $FULL -eq 1 ]; then
 
   # Mutation test for the ABI cross-check itself — see the script's own header
   # for why a check that guards everything else needs one. It rebuilds once per
-  # mutation, which is why it is here and not in the default run.
+  # mutation, so it belongs here rather than in the default run.
   run 'guard mutations (26)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
