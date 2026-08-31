@@ -20,7 +20,7 @@ system and no clock attached.
   production: a test compares the two by reflection, with nothing listed by
   hand. 13 kinds of deliberate drift are verified to fail it, including a
   field swap that leaves every offset in the struct unchanged, and
-  18 mutations for the other guards do the same, each naming the test that
+  19 mutations for the other guards do the same, each naming the test that
   has to catch it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
@@ -447,7 +447,7 @@ a document rather than a source. The guards are listed rather than counted:
 nothing checks. Each of those declares
 the signal that must appear, so a mutation that fails for an unrelated reason
 is reported as a wrong failure rather than counted as the guard doing its job.
-31 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
+32 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
 that count and this sentence drift apart. It runs under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee

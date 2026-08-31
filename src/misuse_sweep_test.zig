@@ -400,12 +400,13 @@ test "every entry point refuses a call made before init" {
 
     const refused = try sweepBeforeInit();
 
-    // A sweep that matched nothing would pass silently, which is the failure
-    // mode this floor exists to make impossible. It is a floor, not the count:
-    // it should never need lowering, and raising it is optional. Most of the
-    // ABI does not return a result — it returns the value, and refuses by
-    // clearing an out-parameter — so this floor is well under the total.
-    try std.testing.expect(refused >= 25);
+    // A floor, not the count: a sweep that matched nothing, or that stopped
+    // part way, would otherwise pass silently. It has to sit close under the
+    // real count to catch the second of those — far under it, most of the
+    // sweep can go missing and still clear the bar. The real count is in the
+    // high hundreds; most of the ABI does not return a result at all, but
+    // returns the value and refuses by clearing an out-parameter.
+    try std.testing.expect(refused >= 700);
 }
 
 test "every entry point survives null pointers" {
@@ -421,7 +422,11 @@ test "every entry point survives null pointers" {
     defer core.zjoltDeinit();
 
     const survived = try sweepNulls();
-    try std.testing.expect(survived >= 100);
+
+    // A floor close under the real count, for the reason the sweep above
+    // states. Nearly every entry point in the ABI takes a pointer, so this is
+    // the widest of the three sweeps.
+    try std.testing.expect(survived >= 1300);
 }
 
 test "every entry point refuses an out-of-range enum" {
@@ -444,11 +449,11 @@ test "every entry point refuses an out-of-range enum" {
 
     const probed = try sweepEnumOutOfRange(world.system.handle);
 
-    // A floor, not the count, same as the two sweeps above: most enum
-    // parameters here are reached (a system handle covers body/batch/ soft-body
-    // creation, and every settings struct this sweep can poison directly needs
-    // no handle) — but constraints, characters, ragdolls and vehicles are gated
-    // on handles this sweep does not build. It is over 100 today; 100 leaves
-    // room without being so low a regression could hide under it.
-    try std.testing.expect(probed >= 100);
+    // A floor close under the real count, same as the two sweeps above. This
+    // is the narrowest of the three: most enum parameters are reached (a
+    // system handle covers body, batch and soft-body creation, and a settings
+    // struct this sweep poisons directly needs no handle at all), but
+    // constraints, characters, ragdolls and vehicles are gated behind handles
+    // this sweep does not build.
+    try std.testing.expect(probed >= 175);
 }

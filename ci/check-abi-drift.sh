@@ -15,7 +15,7 @@
 # notably the field swap, which leaves every offset in the struct unchanged and
 # so defeats any positional or offsets-only comparison.
 #
-# 18 of the mutations aim at the other guards instead — the entry-point
+# 19 of the mutations aim at the other guards instead — the entry-point
 # preamble, the allocator seam, the callback error path, the analysis sweep,
 # the coverage classifier, the host reference count, the comment budget, and
 # the two guards over the documents. Only the total is written down, because it is the only one
@@ -273,6 +273,19 @@ expect 'every entry point refuses a call made before init' \
   ZJOLT_ENTER(out);' \
 'ZJoltResult zjoltShapeCreateEmpty(const ZJoltVec3 *center_of_mass,
                                   ZJoltShape **out) {'
+
+# The sweeps' own floors. Each sweep asserts it probed at least a stated
+# number of entry points, because a sweep that quietly stops matching passes
+# in silence — there is nothing in its output to notice. Narrow the predicate
+# deciding which entry points take a pointer at all: the null sweep goes on
+# working and simply covers far less of the ABI, and its floor is the only
+# thing left that can tell.
+expect "every entry point survives null pointers' failed" \
+  "a sweep predicate narrowed so the sweep quietly covers less" \
+  src/misuse_sweep_test.zig \
+'        if (info == .pointer) return true;
+        if (info == .optional and @typeInfo(info.optional.child) == .pointer) return true;' \
+'        if (info == .optional and @typeInfo(info.optional.child) == .pointer) return true;'
 
 # The allocator seam. Every Jolt allocation is supposed to go through the
 # host allocator. Leave Jolt on its own and nothing crashes — the numbers
