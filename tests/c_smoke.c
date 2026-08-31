@@ -1226,7 +1226,7 @@ int main(void) {
 
   for (int i = 0; i < 240; ++i) {
     uint32_t step_error = 0;
-    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, &step_error));
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, &step_error));
     CHECK(step_error == ZJOLT_UPDATE_ERROR_NONE, "step %d reported errors", i);
   }
 
@@ -1561,7 +1561,7 @@ int main(void) {
                                       (ZJoltReal)0.0};
   zjoltBodyMoveKinematic(system, platform_id, &platform_target, &identity,
                          1.0f / 60.0f);
-  CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+  CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
   ZJoltRVec3 platform_now;
   zjoltBodyGetPositionAndRotation(system, platform_id, &platform_now, NULL);
   CHECK(platform_now.y > (ZJoltReal)3.0,
@@ -1937,7 +1937,7 @@ int main(void) {
     zjoltBodyGetCenterOfMassPosition(system, soft_id, &com_before);
 
     for (int i = 0; i < 60; ++i)
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
 
     ZJoltRVec3 com_after;
     memset(&com_after, 0, sizeof(com_after));
@@ -2028,7 +2028,7 @@ int main(void) {
               ZJOLT_RESULT_INVALID_ARGUMENT,
           "a rigid body has no soft body motion properties");
 
-    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
 
     zjoltBodyDestroy(system, soft_id);
     zjoltSoftBodySharedSettingsRelease(cloth);
@@ -2389,7 +2389,7 @@ int main(void) {
     const ZJoltVec3 spin = {0.0f, 0.0f, 5.0f};
     for (int i = 0; i < 60; ++i) {
       zjoltBodySetAngularVelocity(system, arm_id, &spin);
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
 
     float angle = 0.0f;
@@ -2487,7 +2487,7 @@ int main(void) {
     const ZJoltVec3 twist_spin = {0.0f, 0.0f, 6.0f};
     for (int i = 0; i < 60; ++i) {
       zjoltBodySetAngularVelocity(system, arm_id, &twist_spin);
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
 
     float twist_lambda = 0.0f;
@@ -2529,7 +2529,7 @@ int main(void) {
     zjoltBodySetAngularVelocity(system, arm_id, &stop);
     zjoltBodySetLinearVelocity(system, arm_id, &stop);
     for (int i = 0; i < 18; ++i) {
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
 
     /* Gravity pulls across the slider axis, so the AXIS pair is carrying the
@@ -2553,7 +2553,7 @@ int main(void) {
     const ZJoltVec3 push = {4.0f, 0.0f, 0.0f};
     for (int i = 0; i < 60; ++i) {
       zjoltBodySetLinearVelocity(system, arm_id, &push);
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
 
     float travel = 0.0f;
@@ -2870,7 +2870,7 @@ int main(void) {
     CHECK(rod_count == 3, "the rope has its three rods");
 
     for (int i = 0; i < 30; ++i)
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
 
     ZJoltSoftBodyRodState rod_states[3];
     CHECK_OK(
@@ -2982,7 +2982,7 @@ int main(void) {
                                        &unmeasured_id));
 
     for (int i = 0; i < 60; ++i)
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
 
     float measured_volume = 0.0f;
     float unmeasured_volume = 0.0f;
@@ -3160,7 +3160,7 @@ int main(void) {
     CHECK_OK(zjoltSoftBodySetContactListener(system, &soft_listener));
 
     for (int i = 0; i < 150; ++i)
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
 
     CHECK(g_soft_validates > 0, "the soft body validate callback fired");
     CHECK(g_soft_default_settings == g_soft_validates,
@@ -3180,7 +3180,7 @@ int main(void) {
 
     CHECK_OK(zjoltSoftBodySetContactListener(system, NULL));
     int validates_before = g_soft_validates;
-    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     CHECK(g_soft_validates == validates_before,
           "a cleared listener stops being called");
 
@@ -3269,7 +3269,7 @@ int main(void) {
                                           &vehicle));
 
     for (int i = 0; i < 120; ++i) {
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
     CHECK(zjoltVehicleConstraintHasWheelContact(vehicle, 0),
           "the vehicle settled onto the floor");
@@ -3318,7 +3318,7 @@ int main(void) {
     CHECK(zjoltVehicleConstraintGetDifferential(vehicle, 1, &diff_out),
           "reread after the refusal");
     CHECK_NEAR(diff_out.engine_torque_ratio, 0.75f, 1e-5f);
-    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
 
     CHECK(zjoltVehicleConstraintGetDifferentialLimitedSlipRatio(vehicle) > 1.0f,
           "the vehicle-level limited slip ratio starts above 1");
@@ -3390,7 +3390,7 @@ int main(void) {
       CHECK(read_back.on_step == onVehiclePreStep,
             "exactly what was installed comes back out");
     }
-    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     CHECK(g_vehicle_pre == 1 && g_vehicle_post_collide == 1 &&
               g_vehicle_post_step == 1,
           "each step callback fired once");
@@ -3405,7 +3405,7 @@ int main(void) {
     CHECK_OK(zjoltVehicleConstraintSetPostCollideCallback(vehicle, NULL));
     CHECK_OK(zjoltVehicleConstraintSetPostStepCallback(vehicle, NULL));
     g_vehicle_pre = 0;
-    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+    CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     CHECK(g_vehicle_pre == 0, "a cleared callback stops firing");
 
     /* Tire friction callbacks. */
@@ -3424,7 +3424,7 @@ int main(void) {
     CHECK_OK(zjoltVehicleConstraintSetWheeledDriverInput(vehicle, 1.0f, 0.0f,
                                                          0.0f, 0.0f));
     for (int i = 0; i < 30; ++i) {
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
     CHECK(g_combine_calls > 0, "the combine-friction callback ran");
     CHECK(g_combine_saw_floor, "and was told which body the wheel is on");
@@ -3458,7 +3458,7 @@ int main(void) {
             "the wheel filters read back");
     }
     for (int i = 0; i < 10; ++i) {
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
     CHECK(g_wheel_filter_rejections > 0, "the wheel body filter was consulted");
     CHECK(!zjoltVehicleConstraintHasWheelContact(vehicle, 0),
@@ -3470,7 +3470,7 @@ int main(void) {
 
     CHECK_OK(zjoltVehicleConstraintSetWheelFilters(vehicle, NULL));
     for (int i = 0; i < 10; ++i) {
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
     CHECK(zjoltVehicleConstraintHasWheelContact(vehicle, 0),
           "clearing the filters puts the floor back");
@@ -3491,7 +3491,7 @@ int main(void) {
               ZJOLT_VEHICLE_COLLISION_TESTER_KIND_CAST_SPHERE,
           "and reports the one it was swapped to");
     for (int i = 0; i < 10; ++i) {
-      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, jobs, NULL));
+      CHECK_OK(zjoltPhysicsSystemStep(system, 1.0f / 60.0f, 1, NULL, jobs, NULL));
     }
     CHECK(zjoltVehicleConstraintHasWheelContact(vehicle, 0),
           "the swapped-in tester finds the same floor");

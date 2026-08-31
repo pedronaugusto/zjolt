@@ -366,7 +366,7 @@ pub extern fn zjoltPhysicsSystemTryGetBodyNoLock(system: *const PhysicsSystem, b
 
 pub extern fn zjoltPhysicsSystemGetActiveBodiesUnsafe(system: *const PhysicsSystem, body_type: body.BodyType, out_ids: *?[*]const BodyId, out_count: *u32) void;
 
-pub extern fn zjoltPhysicsSystemStep(system: *PhysicsSystem, delta_time: f32, collision_steps: i32, job_system: *JobSystem, out_error: ?*UpdateError) Result;
+pub extern fn zjoltPhysicsSystemStep(system: *PhysicsSystem, delta_time: f32, collision_steps: i32, temp_allocator: ?*const TempAllocator, job_system: *JobSystem, out_error: ?*UpdateError) Result;
 
 pub extern fn zjoltPhysicsSystemGetMaxBodies(system: *const PhysicsSystem) u32;
 

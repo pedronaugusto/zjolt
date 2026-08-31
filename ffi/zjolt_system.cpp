@@ -570,6 +570,19 @@ ZJoltResult ValidateHostTempAllocator(const ZJoltTempAllocator *temp_allocator) 
   return ZJOLT_RESULT_OK;
 }
 
+/// The step itself, once the scratch it runs on is settled -- a system's own
+/// or one supplied for this call.
+ZJoltResult RunStep(ZJoltPhysicsSystem *system, float delta_time,
+                    int32_t collision_steps, JPH::TempAllocator &temp,
+                    ZJoltJobSystem *job_system, uint32_t *out_error) {
+  const JPH::EPhysicsUpdateError error =
+      system->system.Update(delta_time, collision_steps, &temp,
+                            job_system->impl);
+  system->has_stepped = true;
+  if (out_error != nullptr) *out_error = static_cast<uint32_t>(error);
+  return ZJOLT_RESULT_OK;
+}
+
 void DestroyMallocFallbackTemp(JPH::TempAllocator *impl) {
   zjolt::Delete(static_cast<ZJoltTempAllocatorAdapter *>(impl));
 }
@@ -1210,6 +1223,7 @@ void zjoltSimCollideDefault(const ZJoltBody *live_body1, const ZJoltBody *live_b
 
 ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
                                    float delta_time, int32_t collision_steps,
+                                   const ZJoltTempAllocator *temp_allocator,
                                    ZJoltJobSystem *job_system,
                                    uint32_t *out_error) {
   ZJOLT_ENTER(zjolt::OutIsEmptyAs(out_error,
@@ -1223,12 +1237,17 @@ ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
   // should see nothing happen rather than an abort.
   if (!(delta_time > 0.0f)) return ZJOLT_RESULT_OK;
 
-  const JPH::EPhysicsUpdateError error = system->system.Update(
-      delta_time, collision_steps, system->temp_allocator, job_system->impl);
-  system->has_stepped = true;
-
-  if (out_error != nullptr) *out_error = static_cast<uint32_t>(error);
-  return ZJOLT_RESULT_OK;
+  if (temp_allocator == nullptr) {
+    return RunStep(system, delta_time, collision_steps,
+                   *system->temp_allocator, job_system, out_error);
+  }
+  const ZJoltResult valid = ValidateHostTempAllocator(temp_allocator);
+  if (valid != ZJOLT_RESULT_OK) return valid;
+  // Lives for this step only, so a host can hand the simulation a frame
+  // arena it resets afterwards without the system holding on to it.
+  ZJoltHostTempAllocatorAdapter per_step(*temp_allocator);
+  return RunStep(system, delta_time, collision_steps, per_step, job_system,
+                 out_error);
 }
 
 //===----------------------------------------------------------------------===//

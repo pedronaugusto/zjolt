@@ -175,6 +175,10 @@ typedef struct ZJoltBodyActivationListener {
 //
 // Jolt asks for a TempAllocator at every step. This library's default is a fixed block (temp_allocator_size)
 // falling back to malloc; supply ZJoltTempAllocator for a frame arena or a hard ceiling instead.
+//
+// Two places take one, mirroring Jolt: ZJoltPhysicsSystemDesc::temp_allocator sets the system's own, and
+// zjoltPhysicsSystemStep takes one for that step alone. NULL there means the system's; a non-NULL one is
+// borrowed, not adopted, and does not appear in zjoltPhysicsSystemGetTempAllocatorStats.
 //===----------------------------------------------------------------------===//
 
 typedef enum ZJoltTempAllocatorKind {

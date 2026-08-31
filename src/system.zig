@@ -1151,11 +1151,25 @@ pub const PhysicsSystem = struct {
         collision_steps: i32,
         job_system: JobSystem,
     ) err.Error!UpdateError {
+        return self.stepWithTempAllocator(delta_time, collision_steps, job_system, null);
+    }
+
+    /// `step` with this step's scratch supplied, as `PhysicsSystem::Update`
+    /// takes it: `null` uses the allocator the system was created with, and
+    /// anything else serves this step alone.
+    pub fn stepWithTempAllocator(
+        self: PhysicsSystem,
+        delta_time: f32,
+        collision_steps: i32,
+        job_system: JobSystem,
+        temp_allocator: ?*const c.TempAllocator,
+    ) err.Error!UpdateError {
         var update_error: UpdateError = .none;
         try err.check(c.zjoltPhysicsSystemStep(
             self.handle,
             delta_time,
             collision_steps,
+            temp_allocator,
             job_system.handle,
             &update_error,
         ));

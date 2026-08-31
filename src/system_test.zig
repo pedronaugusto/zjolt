@@ -272,6 +272,46 @@ test "a host temp allocator backs the step, and usage returns to zero after it" 
     try std.testing.expectEqual(@as(usize, 0), stats.usage);
 }
 
+test "a temp allocator handed to one step serves that step and no other" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var system_wide: CountingTempAllocator = .{};
+    const configured = system_mod.hostTempAllocator(CountingTempAllocator, &system_wide);
+
+    var rig = try Rig.init(.{
+        .layers = undefined,
+        .temp_allocator_kind = .host,
+        .temp_allocator = &configured,
+    });
+    defer rig.deinit();
+    _ = try rig.dropBall(3);
+
+    const dt: f32 = 1.0 / 60.0;
+    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
+    defer jobs.deinit();
+
+    _ = try rig.system.step(dt, 1, jobs);
+    const configured_after_first = system_wide.allocations;
+    try std.testing.expect(configured_after_first > 0);
+
+    // A frame arena the caller resets afterwards, which the system never
+    // learns about.
+    var this_step: CountingTempAllocator = .{};
+    const arena = system_mod.hostTempAllocator(CountingTempAllocator, &this_step);
+    _ = try rig.system.stepWithTempAllocator(dt, 1, jobs, &arena);
+
+    try std.testing.expect(this_step.allocations > 0);
+    try std.testing.expectEqual(@as(usize, 0), this_step.live);
+    try std.testing.expectEqual(configured_after_first, system_wide.allocations);
+
+    // And the system's own is back in use on the next step, unchanged by the
+    // one that borrowed someone else's.
+    _ = try rig.system.step(dt, 1, jobs);
+    try std.testing.expect(system_wide.allocations > configured_after_first);
+    try std.testing.expectEqual(@as(usize, 0), system_wide.live);
+}
+
 //=============================================================================
 // Simulation shape filter
 //=============================================================================
