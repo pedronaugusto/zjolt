@@ -1,0 +1,9 @@
+# The vendored upstream is compared byte for byte against a fresh clone by
+# ci/verify-vendor.sh. Line-ending translation on checkout -- git's default on
+# Windows -- rewrites every line and makes that comparison meaningless, so
+# this tree is binary as far as git's text handling goes.
+libs/JoltPhysics/** -text
+
+# Everything else this repository holds is LF on every platform, so no diff
+# and no gate ever reads a line ending as a change.
+* text=auto eol=lf

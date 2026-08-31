@@ -54,7 +54,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 printf '%sfetching %s at %s%s\n' "$DIM" "$UPSTREAM_URL" "$UPSTREAM_TAG" "$OFF"
-git clone --quiet --depth 1 --branch "$UPSTREAM_TAG" "$UPSTREAM_URL" \
+# Line endings off on both sides of the comparison. "Unmodified" means the
+# bytes git stores, and a checkout that translates them -- the default on
+# Windows -- makes every line of every file differ. `.gitattributes` holds
+# the local half of that; this holds the reference half.
+git -c core.autocrlf=false -c core.eol=lf \
+  clone --quiet --depth 1 --branch "$UPSTREAM_TAG" "$UPSTREAM_URL" \
   "$work/upstream" 2>/dev/null || fail "clone failed"
 
 # A tag can be moved; the commit cannot. Check the SHA, not the label.
