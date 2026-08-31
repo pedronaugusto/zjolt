@@ -99,46 +99,75 @@ const Counts = struct {
 };
 
 //=============================================================================
-// The sweeps
+// What each sweep walks, and the shape all three are written in
+//
+// `ownedEntryPoints` is the one statement of which declarations a sweep
+// visits; each sweep adds only its own predicate on top of it.
+//
+// Each sweep is one function PER MODULE behind a thin driver, rather than one
+// function looping over `c.modules`. An `inline for` unrolls into the function
+// containing it, so the single-loop shape put a probe for every entry point in
+// the ABI into one function body, and a compiler's peak memory is superlinear
+// in the size of a single function: the null sweep alone cost about ten times
+// more to compile that way, enough that a Debug build of this test binary
+// stopped fitting in an ordinary machine. Nothing here enforces the shape --
+// the Debug steps of .github/workflows/ci.yml do, by running on one.
 //=============================================================================
+
+/// Every entry point `m` is responsible for: each declaration in it with a C
+/// calling convention that no earlier module in `c.modules` already declares,
+/// minus the lifecycle exclusions above. A re-export is dropped rather than
+/// swept once per module re-exporting it, which would inflate the count each
+/// sweep's floor is measured against.
+fn ownedEntryPoints(comptime m: type, comptime mi: usize) []const []const u8 {
+    @setEvalBranchQuota(1_000_000);
+    comptime var names: []const []const u8 = &.{};
+    inline for (@typeInfo(m).@"struct".decls) |d| {
+        const Decl = @TypeOf(@field(m, d.name));
+        if (@typeInfo(Decl) != .@"fn") continue;
+        if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
+        if (isExcluded(d.name)) continue;
+        comptime var earlier = false;
+        inline for (c.modules, 0..) |other, oi| {
+            if (oi < mi and @hasDecl(other, d.name)) earlier = true;
+        }
+        if (earlier) continue;
+        names = names ++ [_][]const u8{d.name};
+    }
+    return names;
+}
 
 /// Every result-returning entry point must refuse a call made before init.
 ///
-/// This is what `ZJOLT_ENTER` promises, and until now nothing checked that it
-/// was actually written at the top of each one. An entry point that forgets it
-/// reaches Jolt with no factory registered and no allocator installed.
+/// This is what `ZJOLT_ENTER` promises, and until this sweep existed nothing
+/// checked that it was actually written at the top of each one. An entry point
+/// that forgets it reaches Jolt with no factory registered and no allocator
+/// installed.
 fn sweepBeforeInit() !usize {
+    var refused: usize = 0;
+    inline for (c.modules, 0..) |m, mi| refused += try sweepBeforeInitModule(m, mi);
+    return refused;
+}
+
+fn sweepBeforeInitModule(comptime m: type, comptime mi: usize) !usize {
     @setEvalBranchQuota(1_000_000);
     var refused: usize = 0;
 
-    inline for (c.modules, 0..) |m, mi| {
-        inline for (@typeInfo(m).@"struct".decls) |d| {
-            // Skip what an earlier module re-exported: calling the same extern
-            // once per module that re-exports it would inflate the count this
-            // test's floor is measured against.
-            comptime var earlier = false;
-            inline for (c.modules, 0..) |other, oi| {
-                if (oi < mi and @hasDecl(other, d.name)) earlier = true;
-            }
-            if (earlier) continue;
-            const Decl = @TypeOf(@field(m, d.name));
-            if (@typeInfo(Decl) != .@"fn") continue;
-            if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
-            if (@typeInfo(Decl).@"fn".return_type != core.Result) continue;
-            if (comptime isExcluded(d.name)) continue;
+    inline for (comptime ownedEntryPoints(m, mi)) |name| {
+        const Decl = @TypeOf(@field(m, name));
+        if (@typeInfo(Decl).@"fn".return_type != core.Result) continue;
 
-            const got = @call(.auto, @field(m, d.name), hostileArgs(Decl));
-            if (got != .not_initialized) {
-                std.debug.print(
-                    "\n{s} returned .{s} before zjoltInit; every result-returning " ++
-                        "entry point must open with ZJOLT_ENTER and return " ++
-                        ".not_initialized\n",
-                    .{ d.name, @tagName(got) },
-                );
-                return error.EntryPointMissingInitGuard;
-            }
-            refused += 1;
+        const got = @call(.auto, @field(m, name), hostileArgs(Decl));
+        if (got != .not_initialized) {
+            std.debug.print(
+                "\n{s} returned .{s} before zjoltInit; every result-returning " ++
+                    "entry point must open with ZJOLT_ENTER and return " ++
+                    ".not_initialized\n",
+                .{ name, @tagName(got) },
+            );
+            return error.EntryPointMissingInitGuard;
         }
+        refused += 1;
     }
 
     return refused;
@@ -149,36 +178,29 @@ fn sweepBeforeInit() !usize {
 /// Void-returning ones can only be observed not to crash — a hand-written `if
 /// (x == nullptr) return;`, and this is what notices when one is missing.
 fn sweepNulls() !usize {
+    var survived: usize = 0;
+    inline for (c.modules, 0..) |m, mi| survived += try sweepNullsModule(m, mi);
+    return survived;
+}
+
+fn sweepNullsModule(comptime m: type, comptime mi: usize) !usize {
     @setEvalBranchQuota(1_000_000);
     var survived: usize = 0;
 
-    inline for (c.modules, 0..) |m, mi| {
-        inline for (@typeInfo(m).@"struct".decls) |d| {
-            // Skip what an earlier module re-exported: calling the same extern
-            // once per module that re-exports it would inflate the count this
-            // test's floor is measured against.
-            comptime var earlier = false;
-            inline for (c.modules, 0..) |other, oi| {
-                if (oi < mi and @hasDecl(other, d.name)) earlier = true;
-            }
-            if (earlier) continue;
-            const Decl = @TypeOf(@field(m, d.name));
-            if (@typeInfo(Decl) != .@"fn") continue;
-            if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
-            if (comptime isExcluded(d.name)) continue;
-            if (comptime !takesPointer(Decl)) continue;
+    inline for (comptime ownedEntryPoints(m, mi)) |name| {
+        const Decl = @TypeOf(@field(m, name));
+        if (comptime !takesPointer(Decl)) continue;
 
-            const result = @call(.auto, @field(m, d.name), hostileArgs(Decl));
+        const result = @call(.auto, @field(m, name), hostileArgs(Decl));
 
-            if (@TypeOf(result) == core.Result and result == .ok) {
-                std.debug.print(
-                    "\n{s} returned .ok when every pointer it was given was null\n",
-                    .{d.name},
-                );
-                return error.EntryPointAcceptedNull;
-            }
-            survived += 1;
+        if (@TypeOf(result) == core.Result and result == .ok) {
+            std.debug.print(
+                "\n{s} returned .ok when every pointer it was given was null\n",
+                .{name},
+            );
+            return error.EntryPointAcceptedNull;
         }
+        survived += 1;
     }
 
     return survived;
@@ -338,29 +360,26 @@ fn enumHostileArgs(
 /// batch, correctly — nothing there for the garbage activation to apply to). A
 /// crash is the only failure this sweep can tell apart from correct behaviour.
 fn sweepEnumOutOfRange(system: *core.PhysicsSystem) !usize {
+    var probed: usize = 0;
+    inline for (c.modules, 0..) |m, mi| probed += try sweepEnumOutOfRangeModule(m, mi, system);
+    return probed;
+}
+
+fn sweepEnumOutOfRangeModule(
+    comptime m: type,
+    comptime mi: usize,
+    system: *core.PhysicsSystem,
+) !usize {
     @setEvalBranchQuota(1_000_000);
     var probed: usize = 0;
 
-    inline for (c.modules, 0..) |m, mi| {
-        inline for (@typeInfo(m).@"struct".decls) |d| {
-            // Skip what an earlier module re-exported: calling the same extern
-            // once per module that re-exports it would inflate the count this
-            // test's floor is measured against.
-            comptime var earlier = false;
-            inline for (c.modules, 0..) |other, oi| {
-                if (oi < mi and @hasDecl(other, d.name)) earlier = true;
-            }
-            if (earlier) continue;
-            const Decl = @TypeOf(@field(m, d.name));
-            if (@typeInfo(Decl) != .@"fn") continue;
-            if (@typeInfo(Decl).@"fn".calling_convention == .auto) continue;
-            if (comptime isExcluded(d.name)) continue;
-            if (comptime !takesEnum(Decl)) continue;
+    inline for (comptime ownedEntryPoints(m, mi)) |name| {
+        const Decl = @TypeOf(@field(m, name));
+        if (comptime !takesEnum(Decl)) continue;
 
-            var storage = poisonedStorage(Decl);
-            _ = @call(.auto, @field(m, d.name), enumHostileArgs(Decl, &storage, system));
-            probed += 1;
-        }
+        var storage = poisonedStorage(Decl);
+        _ = @call(.auto, @field(m, name), enumHostileArgs(Decl, &storage, system));
+        probed += 1;
     }
 
     return probed;
