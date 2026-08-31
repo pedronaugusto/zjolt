@@ -108,6 +108,11 @@ run 'documented numbers' ci/check-numbers.sh
 # names. It was wrong in all four panels at once before this existed.
 run 'documented examples' ci/check-examples.sh
 
+# And the local roster against the hosted one, option by option. The header of
+# this file promises they match; nothing held that promise, and the workflow
+# was a configuration ahead.
+run 'ci and this roster build the same options' ci/check-mirror.sh
+
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------
@@ -144,7 +149,7 @@ if [ $FULL -eq 1 ]; then
   # Mutation test for the ABI cross-check itself — see the script's own header
   # for why a check that guards everything else needs one. It rebuilds once per
   # mutation, so it belongs here rather than in the default run.
-  run 'guard mutations (32)' ci/check-abi-drift.sh
+  run 'guard mutations (33)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
   section 'Tests — build configurations'
@@ -161,6 +166,13 @@ if [ $FULL -eq 1 ]; then
     zig build test -Dcross_platform_deterministic=true
   run 'test asserts off' zig build test -Denable_asserts=false
   run 'build shared library' zig build -Dshared=true
+
+  # Jolt's debug-draw geometry collection is off by default, since a release
+  # build should not carry it, but two of this package's tests only run with
+  # it on. Leaving it off here would mean an option that is declared and never
+  # built, and half of those tests never executed at all.
+  run 'test debug renderer' zig build test -Ddebug_renderer=true
+  run 'test-c debug renderer' zig build test-c -Ddebug_renderer=true
 
   # The second ABI a Windows host has. Zig's default for Windows is gnu, so
   # every step above builds that one and the MSVC branches in build.zig go

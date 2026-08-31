@@ -134,7 +134,7 @@ jobs:
 
   # The ABI cross-check is the one test here that cannot test itself: a
   # refactor that quietly makes it vacuous looks exactly like a passing build.
-  # This mutates the sources 32 ways and asserts each is refused. It is not
+  # This mutates the sources 33 ways and asserts each is refused. It is not
   # platform-specific — the comparison is between two declarations of the same
   # header — so one host is enough, and it is its own job because it rebuilds
   # once per mutation.
@@ -148,15 +148,16 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
       - run: ci/check-abi-drift.sh
 
-  # The six guards that back this package's claims about itself: every public
+  # The seven guards that back this package's claims about itself: every public
   # Jolt name in the claimed areas has a verdict and every exclusion is
   # recomputed from Jolt's own headers; every header the umbrella includes is
   # installed, or a C consumer gets one that does not resolve; comment blocks
   # stay short and stay out of the narrative register; every count a document
   # states is recomputed and compared; every code example is a verbatim
-  # excerpt of the file it names; and the arithmetic behind
-  # zjoltLiveHandleCount has one home and agrees at both ends of every
-  # AddRef/Release pair. All six are cheap and none needs a build, so they
+  # excerpt of the file it names; the arithmetic behind zjoltLiveHandleCount
+  # has one home and agrees at both ends of every AddRef/Release pair; and
+  # ci/run.sh builds the same option combinations this file does, which its
+  # own header promises and nothing else holds. All seven are cheap and none needs a build, so they
   # share one job and run before the matrix has finished.
   hygiene:
     name: hygiene
@@ -175,6 +176,8 @@ jobs:
         run: ci/check-examples.sh
       - name: Host refcount accounting
         run: ci/check-refcounts.sh
+      - name: Local roster mirrors this workflow
+        run: ci/check-mirror.sh
 
   # Compile-only coverage of the targets the suite cannot execute on. These
   # prove the sources and build graph are portable; the `test` job above is

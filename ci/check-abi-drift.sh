@@ -15,7 +15,7 @@
 # notably the field swap, which leaves every offset in the struct unchanged and
 # so defeats any positional or offsets-only comparison.
 #
-# 19 of the mutations aim at the other guards instead — the entry-point
+# 20 of the mutations aim at the other guards instead — the entry-point
 # preamble, the allocator seam, the callback error path, the analysis sweep,
 # the coverage classifier, the host reference count, the comment budget, and
 # the two guards over the documents. Only the total is written down, because it is the only one
@@ -447,6 +447,18 @@ expect 'comment characters in one block' \
 # counting while its Release does not drives the total NEGATIVE, which reads
 # as "nothing outstanding". Both mutations are one line of C++.
 #-----------------------------------------------------------------------------
+BUILD='ci/check-mirror.sh'
+
+# The mirror between the two rosters. `ci/run.sh` says it mirrors the workflow
+# so a failure can be reproduced locally, and it had fallen a configuration
+# behind. The workflow is the side mutated here rather than ci/run.sh: bash
+# reads a script as it runs it, and this check is a step of that very script.
+expect 'the workflow builds and ci/run.sh does not' \
+  "a configuration added to one roster and not the other" \
+  .github/workflows/ci.yml \
+  '        run: zig build test -Ddebug_renderer=true' \
+  '        run: zig build test -Ddebug_renderer=true -Dshared=true'
+
 BUILD='ci/check-refcounts.sh'
 
 expect 'moves outside zjolt::HostRetain' \
