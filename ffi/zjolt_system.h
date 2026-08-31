@@ -461,16 +461,60 @@ ZJOLT_API void zjoltSimCollideDefault(
     const ZJoltSimCollideShapeFilter *shape_filter,
     ZJoltSimCollideCollector *collector);
 
+//===----------------------------------------------------------------------===//
+// The collector's early out -- how a ZJoltSimCollideFn narrows the search
+//
+// Every collector carries one float, and Jolt's collision routines read it to skip work that cannot beat
+// what is already collected. For the collide-shape collector a ZJoltSimCollideFn is given, that float is
+// MINUS the penetration depth: smaller is deeper and better, FLT_MAX accepts anything, and -FLT_MAX means
+// nothing can improve on what is held (JPH::CollisionCollectorTraitsCollideShape).
+//
+// Seeding it before zjoltSimCollideDefault is how a hook says "I already have a contact this deep" and has
+// Jolt's own pass skip everything shallower. zjoltSimCollideAddHit does not move it: a collector decides
+// for itself what a hit is worth, and the ones Jolt installs here already do.
+//===----------------------------------------------------------------------===//
+
+/// The collector's current early-out value. FLT_MAX -- accept anything -- if
+/// `collector` is NULL.
+ZJOLT_API float zjoltSimCollideCollectorGetEarlyOutFraction(
+    const ZJoltSimCollideCollector *collector);
+
+/// The same value floored at FLT_MIN, which is what a shape cast reads
+/// because it spends negative values on penetration. FLT_MAX if NULL.
+ZJOLT_API float zjoltSimCollideCollectorGetPositiveEarlyOutFraction(
+    const ZJoltSimCollideCollector *collector);
+
+/// Sets the early-out value outright, in either direction. This is the seed;
+/// zjoltSimCollideCollectorUpdateEarlyOutFraction is the narrowing.
+ZJOLT_API void zjoltSimCollideCollectorResetEarlyOutFraction(
+    ZJoltSimCollideCollector *collector, float fraction);
+
+/// Narrows the early-out value. ZJOLT_RESULT_INVALID_ARGUMENT and no change
+/// if `fraction` is above the current one: Jolt asserts that never happens,
+/// and a host must not be able to trip an assert inside the library.
+ZJOLT_API ZJoltResult zjoltSimCollideCollectorUpdateEarlyOutFraction(
+    ZJoltSimCollideCollector *collector, float fraction);
+
+/// Drives the early-out value to its stop-now end, so the routine gives up as
+/// soon as it can.
+ZJOLT_API void zjoltSimCollideCollectorForceEarlyOut(
+    ZJoltSimCollideCollector *collector);
+
+/// True when the collector accepts no further hit -- what
+/// zjoltSimCollideAddHit and zjoltSimCollideDefault check before doing work.
+ZJOLT_API bool zjoltSimCollideCollectorShouldEarlyOut(
+    const ZJoltSimCollideCollector *collector);
+
 /// Advances the simulation by `delta_time`, split into `collision_steps`
 /// sub-steps (1 is normal; raise for fast bodies, not by shortening the frame).
-///
+/// `temp_allocator` serves this step alone; NULL uses the system's own, @see
+/// the scratch-allocator section above.
 /// `out_error` receives a ZJoltUpdateError mask (may be NULL); non-zero means a
 /// limit in ZJoltPhysicsSystemDesc is too low, not that the step failed.
-ZJOLT_API ZJoltResult zjoltPhysicsSystemStep(ZJoltPhysicsSystem *system,
-                                             float delta_time,
-                                             int32_t collision_steps,
-                                             ZJoltJobSystem *job_system,
-                                             uint32_t *out_error);
+ZJOLT_API ZJoltResult zjoltPhysicsSystemStep(
+    ZJoltPhysicsSystem *system, float delta_time, int32_t collision_steps,
+    const ZJoltTempAllocator *temp_allocator, ZJoltJobSystem *job_system,
+    uint32_t *out_error);
 
 /// The ceiling this system was created with, which cannot grow. 0 if `system`
 /// is NULL.

@@ -201,7 +201,6 @@ Physics/Collision	EncodeSubShapeID	BOUND	ZJoltSubShapeId
 Physics/Collision	EnsureSubShapeBoundsCapacity	BOUND	zjoltShapeMutableCompoundAddChild
 Physics/Collision	FindCollidingPairs	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
 Physics/Collision	Flush	EXTENSION	ZJoltStream ZJoltStreamBuf
-Physics/Collision	ForceEarlyOut	BOUND	ZJOLT_HIT_ACTION_STOP
 Physics/Collision	FrameSync	BOUND	zjoltPhysicsSystemStep
 Physics/Collision	FromSettings	BOUND	zjoltShapeCreateStaticCompound zjoltShapeCreateMutableCompound
 Physics/Collision	GetBit	BOUND	zjoltGroupFilterTableDisableCollision zjoltGroupFilterTableEnableCollision zjoltGroupFilterTableIsCollisionEnabled
@@ -215,7 +214,6 @@ Physics/Collision	GetCompoundUserData	BOUND	zjoltShapeCompoundGetChildUserData
 Physics/Collision	GetContext	EXTENSION	ZJoltHitAction ZJoltRayCastHitFn ZJoltOnBodyFn
 Physics/Collision	GetCurrentRoot	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
 Physics/Collision	GetDescription	EXTENSION	ZJoltTraceFn ZJoltAssertFailedFn
-Physics/Collision	GetEarlyOutFraction	BOUND	ZJoltCollideShapeHit ZJoltRayCastHit ZJoltShapeCastHit
 Physics/Collision	GetEdgeFlags	INTERNAL	no public declaration
 Physics/Collision	GetGroupFilter	BOUND	zjoltBodyGetCollisionGroup
 Physics/Collision	GetGroupID	BOUND	zjoltBodyGetCollisionGroup
@@ -237,7 +235,6 @@ Physics/Collision	GetNumResults	BOUND	zjoltShapeGetIntersectingSubShapes
 Physics/Collision	GetNumSubShapes	BOUND	zjoltShapeCompoundGetNumChildren
 Physics/Collision	GetPointOnRay	ZIG	src/math.zig:ray.pointOnRay
 Physics/Collision	GetPositionCOM	BOUND	zjoltBodyGetCenterOfMassPosition
-Physics/Collision	GetPositiveEarlyOutFraction	EXTENSION	ZJoltHitAction ZJoltRayCastHitFn ZJoltOnBodyFn
 Physics/Collision	GetRangeBlock	BOUND	zjoltShapeGetTrianglesStart zjoltShapeGetTrianglesNext
 Physics/Collision	GetScale	BOUND	zjoltShapeCreateScaled
 Physics/Collision	GetScaled	BOUND	zjoltShapeCreateScaled
@@ -315,7 +312,6 @@ Physics/Collision	RayAABox4	ZIG	src/math.zig:ray.aabox4
 Physics/Collision	RayCastT	BOUND	zjoltCastRayClosest zjoltCastRayAll zjoltCastRayEach ZJoltRVec3 ZJoltVec3
 Physics/Collision	RemoveBodies	BOUND	zjoltBodyRemoveBatch
 Physics/Collision	RemoveShape	BOUND	zjoltShapeMutableCompoundRemoveChild
-Physics/Collision	ResetEarlyOutFraction	EXTENSION	ZJoltHitAction ZJoltRayCastHitFn ZJoltOnBodyFn
 Physics/Collision	RestoreMaterialState	BOUND	zjoltShapeRestore
 Physics/Collision	RestoreSubShapeState	BOUND	zjoltShapeRestore
 Physics/Collision	Reversed	EXTENSION	ZJoltHitAction ZJoltRayCastHitFn ZJoltOnBodyFn
@@ -349,7 +345,6 @@ Physics/Collision	ShapeCastT	BOUND	zjoltCastShapeClosest zjoltCastShapeAll zjolt
 Physics/Collision	ShapeCastType	BOUND	ZJoltShapeCastSettings zjoltTransformedShapeCastShape
 Physics/Collision	ShouldAbort	EXTENSION	ZJOLT_HIT_ACTION_STOP
 Physics/Collision	ShouldCollide	EXTENSION	ZJoltShapeFilter ZJoltObjectLayerFilter ZJoltBroadPhaseLayerFilter
-Physics/Collision	ShouldEarlyOut	BOUND	zjolt ZJoltHitAction ZJOLT_HIT_ACTION_STOP ZJOLT_HIT_ACTION_NARROW
 Physics/Collision	ShouldVisitBlock	BOUND	zjoltShapeGetIntersectingSubShapes
 Physics/Collision	ShouldVisitNode	BOUND	zjoltShapeGetTrianglesStart zjoltShapeGetTrianglesNext
 Physics/Collision	ShouldVisitSubShape	BOUND	zjoltShapeGetIntersectingSubShapes
@@ -381,7 +376,6 @@ Physics/Collision	TriangleVertices	BOUND	zjoltShapeCreateMesh
 Physics/Collision	TryCreateNewRoot	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
 Physics/Collision	TryInsertLeaf	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
 Physics/Collision	UnlockModifications	BOUND	zjoltPhysicsSystemStep
-Physics/Collision	UpdateEarlyOutFraction	EXTENSION	ZJoltHitAction ZJoltRayCastHitFn ZJoltOnBodyFn
 Physics/Collision	UpdateFinalize	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
 Physics/Collision	UpdatePenetration	ZIG	src/c/softbody.zig:CollideSoftBodyVertexIterator.updatePenetration
 Physics/Collision	UpdatePrepare	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)

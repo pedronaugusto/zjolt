@@ -1104,6 +1104,54 @@ void zjoltPhysicsSystemGetSimCollideBodyVsBody(const ZJoltPhysicsSystem *system,
   *out = system != nullptr ? GetSimCollideEntry(system) : ZJoltSimCollideBodyVsBody{};
 }
 
+float zjoltSimCollideCollectorGetEarlyOutFraction(
+    const ZJoltSimCollideCollector *collector) {
+  if (collector == nullptr) return FLT_MAX;
+  return reinterpret_cast<const JPH::CollideShapeCollector *>(collector)
+      ->GetEarlyOutFraction();
+}
+
+float zjoltSimCollideCollectorGetPositiveEarlyOutFraction(
+    const ZJoltSimCollideCollector *collector) {
+  if (collector == nullptr) return FLT_MAX;
+  return reinterpret_cast<const JPH::CollideShapeCollector *>(collector)
+      ->GetPositiveEarlyOutFraction();
+}
+
+void zjoltSimCollideCollectorResetEarlyOutFraction(
+    ZJoltSimCollideCollector *collector, float fraction) {
+  if (collector == nullptr) return;
+  reinterpret_cast<JPH::CollideShapeCollector *>(collector)
+      ->ResetEarlyOutFraction(fraction);
+}
+
+ZJoltResult zjoltSimCollideCollectorUpdateEarlyOutFraction(
+    ZJoltSimCollideCollector *collector, float fraction) {
+  ZJOLT_ENTER();
+  if (!zjolt::Present(collector)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  auto *jolt_collector = reinterpret_cast<JPH::CollideShapeCollector *>(collector);
+  // Jolt's own UpdateEarlyOutFraction asserts the value only ever narrows.
+  // Checking here is what keeps a host from reaching that assert; Reset is
+  // the entry point for a value that goes the other way.
+  if (!(fraction <= jolt_collector->GetEarlyOutFraction())) {
+    return ZJOLT_RESULT_INVALID_ARGUMENT;
+  }
+  jolt_collector->UpdateEarlyOutFraction(fraction);
+  return ZJOLT_RESULT_OK;
+}
+
+void zjoltSimCollideCollectorForceEarlyOut(ZJoltSimCollideCollector *collector) {
+  if (collector == nullptr) return;
+  reinterpret_cast<JPH::CollideShapeCollector *>(collector)->ForceEarlyOut();
+}
+
+bool zjoltSimCollideCollectorShouldEarlyOut(
+    const ZJoltSimCollideCollector *collector) {
+  if (collector == nullptr) return false;
+  return reinterpret_cast<const JPH::CollideShapeCollector *>(collector)
+      ->ShouldEarlyOut();
+}
+
 void zjoltSimCollideAddHit(ZJoltSimCollideCollector *collector, ZJoltBodyId body2,
                            const ZJoltSimCollideHit *hit) {
   if (collector == nullptr || hit == nullptr) return;

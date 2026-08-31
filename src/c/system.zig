@@ -336,6 +336,18 @@ pub extern fn zjoltPhysicsSystemSetSimCollideBodyVsBody(system: *PhysicsSystem, 
 
 pub extern fn zjoltPhysicsSystemGetSimCollideBodyVsBody(system: *const PhysicsSystem, out: *SimCollideBodyVsBody) void;
 
+pub extern fn zjoltSimCollideCollectorGetEarlyOutFraction(collector: *const SimCollideCollector) f32;
+
+pub extern fn zjoltSimCollideCollectorGetPositiveEarlyOutFraction(collector: *const SimCollideCollector) f32;
+
+pub extern fn zjoltSimCollideCollectorResetEarlyOutFraction(collector: *SimCollideCollector, fraction: f32) void;
+
+pub extern fn zjoltSimCollideCollectorUpdateEarlyOutFraction(collector: *SimCollideCollector, fraction: f32) Result;
+
+pub extern fn zjoltSimCollideCollectorForceEarlyOut(collector: *SimCollideCollector) void;
+
+pub extern fn zjoltSimCollideCollectorShouldEarlyOut(collector: *const SimCollideCollector) bool;
+
 pub extern fn zjoltSimCollideAddHit(collector: *SimCollideCollector, body2: BodyId, hit: *const SimCollideHit) void;
 
 pub extern fn zjoltSimCollideDefault(

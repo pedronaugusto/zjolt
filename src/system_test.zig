@@ -758,6 +758,121 @@ test "addSimCollideHit's synthetic hit reaches the real contact pipeline" {
     try std.testing.expect(system.wereBodiesInContact(ball, floor));
 }
 
+/// The same synthetic contact, with the collector's early out driven to its
+/// stop-now end first. Everything else is identical, so whether the contact
+/// reaches the pipeline is the one variable between this and the test above.
+const EarlyOutProbe = struct {
+    ball: zjolt.BodyId,
+    floor: zjolt.BodyId,
+    pairs_seen: u32 = 0,
+    initial_fraction: f32 = 0,
+    after_reset: f32 = 0,
+    after_update: f32 = 0,
+    widening_rejected: bool = false,
+    should_early_out_before: bool = true,
+    should_early_out_after: bool = false,
+
+    pub fn collide(
+        self: *EarlyOutProbe,
+        body1: zjolt.Body,
+        body2: zjolt.Body,
+        transform1: zjolt.Mat44,
+        transform2: zjolt.Mat44,
+        settings: *zjolt.CollideShapeSettings,
+        shape_filter: *const system_mod.SimCollideShapeFilter,
+        collector: *system_mod.SimCollideCollector,
+    ) void {
+        _ = transform1;
+        _ = transform2;
+        _ = settings;
+        _ = shape_filter;
+        const id1 = body1.id();
+        const id2 = body2.id();
+        const is_ball_floor = (id1 == self.ball and id2 == self.floor) or
+            (id1 == self.floor and id2 == self.ball);
+        if (!is_ball_floor) return;
+
+        self.pairs_seen += 1;
+        self.initial_fraction = system_mod.simCollideEarlyOutFraction(collector);
+        self.should_early_out_before = system_mod.simCollideShouldEarlyOut(collector);
+
+        system_mod.resetSimCollideEarlyOutFraction(collector, -0.25);
+        self.after_reset = system_mod.simCollideEarlyOutFraction(collector);
+
+        // Widening is what Jolt asserts against, so it has to come back as an
+        // error and leave the value alone.
+        system_mod.updateSimCollideEarlyOutFraction(collector, 1.0) catch |e| {
+            self.widening_rejected = e == error.InvalidArgument;
+        };
+        system_mod.updateSimCollideEarlyOutFraction(collector, -0.5) catch {};
+        self.after_update = system_mod.simCollideEarlyOutFraction(collector);
+
+        system_mod.forceSimCollideEarlyOut(collector);
+        self.should_early_out_after = system_mod.simCollideShouldEarlyOut(collector);
+
+        // Identical to the hit the test above adds, and this one must not land.
+        system_mod.addSimCollideHit(collector, id2, .{
+            .sub_shape_id1 = zjolt.sub_shape_id_empty,
+            .sub_shape_id2 = zjolt.sub_shape_id_empty,
+            .contact_point_on_1 = zjolt.vec3(0, 0, 0),
+            .contact_point_on_2 = zjolt.vec3(0, 0, 0),
+            .penetration_axis = zjolt.vec3(0, 1, 0),
+            .penetration_depth = 0.01,
+        });
+    }
+};
+
+test "the sim collide collector's early out reads, seeds, narrows and stops the pair" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    const opts: zjolt.PhysicsSystem.Options = .{ .layers = zjolt.layersFromType(Layers), .max_bodies = 8 };
+    const system = try zjolt.PhysicsSystem.init(opts);
+    defer system.deinit();
+    system.setGravity(zjolt.gravity_earth);
+
+    const floor_shape = try zjolt.Shape.initBox(zjolt.vec3(50, 0.5, 50), .{});
+    defer floor_shape.release();
+    const floor = try system.bodies().createAndAdd(.{
+        .shape = floor_shape,
+        .object_layer = Layers.static,
+        .motion_type = .static,
+        .position = zjolt.rvec3(0, -0.5, 0),
+    }, .dont_activate);
+    system.optimizeBroadPhase();
+
+    const ball_shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer ball_shape.release();
+    const ball = try system.bodies().createAndAdd(.{
+        .shape = ball_shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(0, 5, 0),
+    }, .activate);
+
+    var ctx = EarlyOutProbe{ .ball = ball, .floor = floor };
+    const hook = system_mod.simCollideBodyVsBody(EarlyOutProbe, &ctx);
+    try system.setSimCollideBodyVsBody(&hook);
+
+    const jobs = try zjolt.JobSystem.initSingleThreaded(zjolt.c.core.max_physics_jobs);
+    defer jobs.deinit();
+    const dt: f32 = 1.0 / 60.0;
+    var elapsed: f32 = 0;
+    while (elapsed < 2.0 and ctx.pairs_seen == 0) : (elapsed += dt) {
+        _ = try system.step(dt, 1, jobs);
+    }
+
+    try std.testing.expect(ctx.pairs_seen > 0);
+    // A fresh collide-shape collector starts at "accept anything".
+    try std.testing.expectEqual(std.math.floatMax(f32), ctx.initial_fraction);
+    try std.testing.expect(!ctx.should_early_out_before);
+    try std.testing.expectEqual(@as(f32, -0.25), ctx.after_reset);
+    try std.testing.expect(ctx.widening_rejected);
+    try std.testing.expectEqual(@as(f32, -0.5), ctx.after_update);
+    try std.testing.expect(ctx.should_early_out_after);
+    // The hit the previous test proves does reach the pipeline, refused here.
+    try std.testing.expect(!system.wereBodiesInContact(ball, floor));
+}
+
 test "a layer scheme held in fields is installed and consulted, through the same three tables" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();

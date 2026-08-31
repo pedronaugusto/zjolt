@@ -665,6 +665,46 @@ pub fn addSimCollideHit(
     c.zjoltSimCollideAddHit(collector, body2, &hit);
 }
 
+/// The collector's early-out value: minus the penetration depth of the best
+/// hit it holds, so smaller is deeper. `std.math.floatMax(f32)` accepts
+/// anything. @see the C header's section on it for the whole rule.
+pub fn simCollideEarlyOutFraction(collector: *const SimCollideCollector) f32 {
+    return c.zjoltSimCollideCollectorGetEarlyOutFraction(collector);
+}
+
+/// The same value floored at `std.math.floatMin(f32)`, which is what a shape
+/// cast reads because it spends negative values on penetration.
+pub fn simCollidePositiveEarlyOutFraction(collector: *const SimCollideCollector) f32 {
+    return c.zjoltSimCollideCollectorGetPositiveEarlyOutFraction(collector);
+}
+
+/// Seeds the early-out value, in either direction.
+pub fn resetSimCollideEarlyOutFraction(
+    collector: *SimCollideCollector,
+    fraction: f32,
+) void {
+    c.zjoltSimCollideCollectorResetEarlyOutFraction(collector, fraction);
+}
+
+/// Narrows the early-out value. `error.InvalidArgument`, and no change, if
+/// `fraction` is above the current one -- Jolt asserts that never happens.
+pub fn updateSimCollideEarlyOutFraction(
+    collector: *SimCollideCollector,
+    fraction: f32,
+) !void {
+    try err.check(c.zjoltSimCollideCollectorUpdateEarlyOutFraction(collector, fraction));
+}
+
+/// Drives the early-out value to its stop-now end.
+pub fn forceSimCollideEarlyOut(collector: *SimCollideCollector) void {
+    c.zjoltSimCollideCollectorForceEarlyOut(collector);
+}
+
+/// True when the collector accepts no further hit.
+pub fn simCollideShouldEarlyOut(collector: *const SimCollideCollector) bool {
+    return c.zjoltSimCollideCollectorShouldEarlyOut(collector);
+}
+
 /// Runs Jolt's own default body-vs-body collide for this pair, reporting
 /// through the same `collector` the `collide` callback was given. Null
 /// `settings` takes Jolt's own defaults.
