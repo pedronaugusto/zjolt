@@ -39,7 +39,7 @@ pub const six_dof_axis_count: u32 = 6;
 pub const six_dof_translation_axis_count: u32 = 3;
 
 pub const ConstraintSubType = enum(c_int) {
-    other = 0,
+    none = 0,
     fixed = 1,
     point = 2,
     hinge = 3,
@@ -53,6 +53,8 @@ pub const ConstraintSubType = enum(c_int) {
     rack_and_pinion = 11,
     pulley = 12,
     custom = 13,
+    vehicle = 14,
+    user_defined = 15,
 };
 
 pub const ConstraintSpace = enum(c_int) {

@@ -251,6 +251,8 @@ ZJoltConstraintSubType ToCSubType(JPH::EConstraintSubType sub_type) {
       return ZJOLT_CONSTRAINT_SUB_TYPE_RACK_AND_PINION;
     case JPH::EConstraintSubType::Pulley:
       return ZJOLT_CONSTRAINT_SUB_TYPE_PULLEY;
+    case JPH::EConstraintSubType::Vehicle:
+      return ZJOLT_CONSTRAINT_SUB_TYPE_VEHICLE;
     case JPH::EConstraintSubType::User1:
       // The only C++ type in this library that claims a User* slot — see
       // ZJoltCustomConstraint below.
@@ -258,9 +260,9 @@ ZJoltConstraintSubType ToCSubType(JPH::EConstraintSubType sub_type) {
     default:
       break;
   }
-  // Vehicle, and the three remaining User* slots. Named rather than guessed
-  // at.
-  return ZJOLT_CONSTRAINT_SUB_TYPE_OTHER;
+  // The three User* slots this library does not claim. A real constraint of
+  // a type registered outside it, which is a different fact from NONE.
+  return ZJOLT_CONSTRAINT_SUB_TYPE_USER_DEFINED;
 }
 
 //===----------------------------------------------------------------------===//
@@ -924,7 +926,7 @@ ZJoltResult zjoltPhysicsSystemGetConstraints(const ZJoltPhysicsSystem *system,
 
 ZJoltConstraintSubType zjoltConstraintGetSubType(
     const ZJoltConstraint *constraint) {
-  if (constraint == nullptr) return ZJOLT_CONSTRAINT_SUB_TYPE_OTHER;
+  if (constraint == nullptr) return ZJOLT_CONSTRAINT_SUB_TYPE_NONE;
   return ToCSubType(zjolt::ToJolt(constraint)->GetSubType());
 }
 

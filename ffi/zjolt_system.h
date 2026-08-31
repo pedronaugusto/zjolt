@@ -57,8 +57,10 @@ typedef struct ZJoltObjectLayerPairFilter {
 //===----------------------------------------------------------------------===//
 // Listeners
 //
-// IMPORTANT: contact callbacks run on Jolt's job threads, in parallel, inside zjoltPhysicsSystemStep — re-entrant, no calls back into the system.
-// Activation callbacks run under the body manager's lock, serialised.
+// IMPORTANT: contact callbacks run on Jolt's job threads, in parallel,
+// inside zjoltPhysicsSystemStep — re-entrant, no calls back into the
+// system. Activation callbacks run under the body manager's lock,
+// serialised.
 //===----------------------------------------------------------------------===//
 
 /// One contact manifold, projected into plain data.

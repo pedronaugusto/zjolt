@@ -154,7 +154,8 @@ pub const JobSystem = struct {
 // Collision layers
 //
 // Jolt asks the host three questions during the broad phase; this turns
-// a plain Zig type answering them into the three C tables the library wants, so a host writes no `callconv(.c)` or vtable of its own.
+// a plain Zig type answering them into the three C tables the library
+// wants, so a host writes no `callconv(.c)` or vtable of its own.
 //=============================================================================
 
 pub const Layers = struct {

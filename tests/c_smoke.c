@@ -745,6 +745,11 @@ int main(void) {
   CHECK(zjoltShapeGetSubType(sphere) == ZJOLT_SHAPE_SUB_TYPE_SPHERE,
         "sphere sub type");
 
+  /* NONE is the absence of a constraint, not a kind of one. It has to differ
+     from every real kind, or a null handle and a vehicle give one answer. */
+  CHECK(zjoltConstraintGetSubType(NULL) == ZJOLT_CONSTRAINT_SUB_TYPE_NONE,
+        "a null constraint handle has no sub type");
+
   ZJoltMassProperties mass;
   zjoltShapeGetMassProperties(sphere, &mass);
   CHECK(mass.mass > 0.0f, "a sphere has mass");

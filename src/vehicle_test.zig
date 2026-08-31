@@ -222,6 +222,19 @@ test "forward input accelerates the chassis along its forward axis and spins the
 // Wheeled: automatic transmission
 //=============================================================================
 
+test "a vehicle names itself through the generic constraint view" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var car = try buildWheeledCar(2);
+    defer car.deinit();
+
+    // A vehicle and a NULL handle must not answer alike: one is a constraint
+    // and the other is the absence of one. @see ZJoltConstraintSubType.
+    const view = car.vehicle.asConstraint().?;
+    try std.testing.expectEqual(zjolt.ConstraintSubType.vehicle, view.subType());
+}
+
 test "the automatic transmission shifts up as engine RPM climbs, and the reported gear follows" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
     defer zjolt.deinit();

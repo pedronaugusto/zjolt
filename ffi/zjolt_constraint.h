@@ -44,12 +44,12 @@ typedef struct ZJoltConstraint ZJoltConstraint;
 
 /// Which kind of joint a handle actually is. Every accessor below checks
 /// this first, so asking a hinge for its slider position is a returned
-/// error, not a reinterpreted object.
-///
-/// OTHER covers what this ABI cannot produce: Jolt's vehicle constraint,
-/// and three of the four `User*` slots for external constraint types.
+/// error, not a reinterpreted object. Two values are not ones Jolt defines:
+/// NONE (zero; not a constraint, e.g. from a NULL handle) and USER_DEFINED
+/// (a real constraint from one of the three `User*` slots this ABI does not
+/// claim).
 typedef enum ZJoltConstraintSubType {
-  ZJOLT_CONSTRAINT_SUB_TYPE_OTHER = 0,
+  ZJOLT_CONSTRAINT_SUB_TYPE_NONE = 0,
   ZJOLT_CONSTRAINT_SUB_TYPE_FIXED = 1,
   ZJOLT_CONSTRAINT_SUB_TYPE_POINT = 2,
   ZJOLT_CONSTRAINT_SUB_TYPE_HINGE = 3,
@@ -64,6 +64,10 @@ typedef enum ZJoltConstraintSubType {
   ZJOLT_CONSTRAINT_SUB_TYPE_PULLEY = 12,
   /// A constraint created by zjoltConstraintCreateCustom.
   ZJOLT_CONSTRAINT_SUB_TYPE_CUSTOM = 13,
+  /// Jolt's vehicle constraint, which zjoltVehicleConstraintCreate builds
+  /// and zjoltVehicleConstraintAsConstraint hands back through this API.
+  ZJOLT_CONSTRAINT_SUB_TYPE_VEHICLE = 14,
+  ZJOLT_CONSTRAINT_SUB_TYPE_USER_DEFINED = 15,
 } ZJoltConstraintSubType;
 
 /// Which space a descriptor's points and axes are expressed in.
