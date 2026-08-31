@@ -80,7 +80,7 @@ pub const BroadPhase = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Bodies whose bounding box the box sweeps through. The box stays axis
@@ -102,7 +102,7 @@ pub const BroadPhase = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     //=========================================================================
@@ -126,7 +126,7 @@ pub const BroadPhase = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     pub fn countBoxOverlaps(
@@ -168,7 +168,7 @@ pub const BroadPhase = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Bodies whose bounding box contains the point.
@@ -187,7 +187,7 @@ pub const BroadPhase = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// More precise than passing the oriented box's own axis-aligned bounds to
@@ -208,7 +208,7 @@ pub const BroadPhase = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Bounding box of every body in the broad phase.

@@ -892,7 +892,7 @@ pub const RagdollSettings = struct {
             @intCast(out.len),
             &count,
         ));
-        return out[0..count];
+        return err.filled(out, count);
     }
 
     /// Builds the constraint-index -> body-index-pair table
@@ -931,7 +931,7 @@ pub const RagdollSettings = struct {
             @intCast(out.len),
             &count,
         ));
-        return out[0..count];
+        return err.filled(out, count);
     }
 
     /// Spawns one body per part and one constraint per non-root part, in
@@ -1020,7 +1020,7 @@ pub const Ragdoll = struct {
             @intCast(out.len),
             &count,
         ));
-        return out[0..count];
+        return err.filled(out, count);
     }
 
     /// The settings this ragdoll was spawned from. Borrowed — the ragdoll's

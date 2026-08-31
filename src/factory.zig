@@ -59,5 +59,5 @@ pub fn getAllClassesAlloc(
         @intCast(buffer.len),
         &count,
     ));
-    return buffer[0..count];
+    return err.filled(buffer, count);
 }

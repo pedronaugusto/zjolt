@@ -1148,7 +1148,7 @@ pub const Shape = struct {
             out_vertices,
             &count,
         ));
-        return out_vertices[0..count];
+        return err.filled(out_vertices, count);
     }
 
     pub const SubShapeTransformedShapeOptions = struct {
@@ -1283,11 +1283,12 @@ pub const Shape = struct {
             raw.len,
             &count,
         ));
+        const found = try err.filled(raw[0..], count);
         if (count > buffer.len) return err.Error.BufferTooSmall;
-        for (raw[0..count], 0..) |m, i| {
+        for (found, 0..) |m, i| {
             buffer[i] = if (m) |handle| .{ .handle = handle } else null;
         }
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     //=========================================================================
@@ -1735,11 +1736,11 @@ pub const TriangleWalk = struct {
         ));
 
         if (out_materials) |materials| {
-            for (raw_materials[0..count], 0..) |m, i| {
+            for (try err.filled(raw_materials[0..], count), 0..) |m, i| {
                 materials[i] = if (m) |handle| .{ .handle = handle } else null;
             }
         }
-        return out_vertices[0 .. @as(usize, count) * 3];
+        return err.filled(out_vertices, @as(usize, count) * 3);
     }
 };
 

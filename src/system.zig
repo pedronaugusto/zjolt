@@ -1152,7 +1152,7 @@ pub const PhysicsSystem = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     pub fn countBodies(self: PhysicsSystem) err.Error!u32 {
@@ -1172,7 +1172,7 @@ pub const PhysicsSystem = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Reads many body transforms under a single lock.

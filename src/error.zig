@@ -1,4 +1,5 @@
-//! Translation between the C result enum and a Zig error set.
+//! Translation between the C layer's two out-parameters and Zig: its
+//! result enum to an error set, and its count to a slice.
 
 const std = @import("std");
 const c = @import("c/core.zig");
@@ -60,6 +61,25 @@ pub fn check(result: c.Result) Error!void {
     };
 }
 
+/// The tail of a two-call query: the prefix of `buffer` the count names.
+///
+/// The count crosses the ABI, so it is checked rather than trusted. The C
+/// layer returns `ZJOLT_RESULT_BUFFER_TOO_SMALL` instead of overrunning a
+/// buffer; nothing on this side can see that it did, and `buffer[0..count]`
+/// on a count past the end is undefined in a release build.
+pub fn filled(buffer: anytype, count: usize) Error!Slice(@TypeOf(buffer)) {
+    if (count > buffer.len) return Error.BufferTooSmall;
+    return buffer[0..count];
+}
+
+/// `[]T` for either shape a caller's buffer arrives in -- a slice, or a
+/// pointer to a fixed array -- keeping the element type and its constness.
+fn Slice(comptime Buffer: type) type {
+    const ptr = @typeInfo(Buffer).pointer;
+    const child = if (ptr.size == .one) @typeInfo(ptr.child).array.child else ptr.child;
+    return if (ptr.is_const) []const child else []child;
+}
+
 /// Borrowed, static description of a result, for logging.
 pub fn name(result: c.Result) [:0]const u8 {
     return std.mem.span(c.zjoltResultName(result));
@@ -86,6 +106,20 @@ pub fn lastError() [:0]const u8 {
 //=============================================================================
 
 const result_fields = @typeInfo(c.Result).@"enum".fields;
+
+test "filled refuses a count its buffer cannot hold and hands back the prefix otherwise" {
+    var buffer: [4]u32 = .{ 1, 2, 3, 4 };
+
+    try std.testing.expectEqual(@as(usize, 0), (try filled(buffer[0..], 0)).len);
+    try std.testing.expectEqualSlices(u32, &.{ 1, 2 }, try filled(buffer[0..], 2));
+    try std.testing.expectEqualSlices(u32, &buffer, try filled(buffer[0..], 4));
+    try std.testing.expectError(Error.BufferTooSmall, filled(buffer[0..], 5));
+
+    // Both shapes a buffer arrives in, and a const one stays const.
+    try std.testing.expect(@TypeOf(try filled(&buffer, 1)) == []u32);
+    const view: []const u32 = &buffer;
+    try std.testing.expect(@TypeOf(try filled(view, 1)) == []const u32);
+}
 
 test "check turns ok into success and every other result into an error of its own" {
     var seen: [result_fields.len]anyerror = undefined;

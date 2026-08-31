@@ -556,7 +556,7 @@ pub fn getVertexStates(
         @intCast(buffer.len),
         &count,
     ));
-    return buffer[0..count];
+    return err.filled(buffer, count);
 }
 
 //=============================================================================
@@ -845,7 +845,7 @@ pub fn getRodStates(
         @intCast(buffer.len),
         &count,
     ));
-    return buffer[0..count];
+    return err.filled(buffer, count);
 }
 
 //=============================================================================
@@ -1078,7 +1078,7 @@ pub const Manifold = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     pub fn countSensorContacts(self: Manifold) err.Error!u32 {
@@ -1104,7 +1104,7 @@ pub const Manifold = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 };
 

@@ -199,7 +199,7 @@ pub const TransformedShape = struct {
             out_vertices,
             &count,
         ));
-        return out_vertices[0..count];
+        return err.filled(out_vertices, count);
     }
 
     //=========================================================================
@@ -359,7 +359,7 @@ pub const TransformedShape = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     //=========================================================================
@@ -402,7 +402,7 @@ pub const TransformedShape = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     //=========================================================================
@@ -473,7 +473,7 @@ pub const TransformedShape = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     //=========================================================================
@@ -574,7 +574,7 @@ pub const TransformedShape = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 };
 
@@ -626,11 +626,11 @@ pub const TriangleWalk = struct {
         ));
 
         if (out_materials) |materials| {
-            for (raw_materials[0..count], 0..) |m, i| {
+            for (try err.filled(raw_materials[0..], count), 0..) |m, i| {
                 materials[i] = if (m) |handle| .{ .handle = handle } else null;
             }
         }
-        return out_vertices[0 .. @as(usize, count) * 3];
+        return err.filled(out_vertices, @as(usize, count) * 3);
     }
 };
 

@@ -681,7 +681,7 @@ pub const Character = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// How many overlaps `checkCollision` would report, without a buffer to
@@ -1595,7 +1595,7 @@ pub const RigidCharacter = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// How many overlaps `checkCollision` would report, without a buffer to

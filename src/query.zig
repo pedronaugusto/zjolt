@@ -250,7 +250,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Visits every hit along the ray as it is found, in one traversal
@@ -369,7 +369,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Every hit along the sweep, streamed. @see `castRayEach`.
@@ -480,7 +480,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Everything overlapping the shape, streamed. This is the form worth
@@ -577,7 +577,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     pub fn collideShapeWithInternalEdgeRemovalEach(
@@ -697,7 +697,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// Every shape containing the point, streamed. `.narrow` does nothing
@@ -926,7 +926,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// @see `castRayEach`.
@@ -1019,7 +1019,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// @see `castShapeEach`.
@@ -1110,7 +1110,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// @see `collideShapeEach`.
@@ -1200,7 +1200,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// @see `collideShapeWithInternalEdgeRemovalEach`.
@@ -1260,7 +1260,7 @@ pub const Queries = struct {
             @intCast(buffer.len),
             &count,
         ));
-        return buffer[0..count];
+        return err.filled(buffer, count);
     }
 
     /// @see `collidePointEach`.
@@ -1412,7 +1412,7 @@ pub fn collideShapeVsShapeAll(
         @intCast(buffer.len),
         &count,
     ));
-    return buffer[0..count];
+    return err.filled(buffer, count);
 }
 
 /// Like `collideShapeVsShapeAll`, but AT MOST ONE (the DEEPEST) hit per
@@ -1444,7 +1444,7 @@ pub fn collideShapeVsShapePerLeafAll(
         @intCast(buffer.len),
         &count,
     ));
-    return buffer[0..count];
+    return err.filled(buffer, count);
 }
 
 /// The nearest hit as `pair.cast` sweeps along `pair.direction` into
@@ -1530,7 +1530,7 @@ pub fn castShapeVsShapeAll(
         @intCast(buffer.len),
         &count,
     ));
-    return buffer[0..count];
+    return err.filled(buffer, count);
 }
 
 //=============================================================================
@@ -1559,7 +1559,10 @@ pub fn pruneContactPoints(
         points_on_2.ptr,
         &count,
     ));
-    return .{ .on_1 = points_on_1[0..count], .on_2 = points_on_2[0..count] };
+    return .{
+        .on_1 = try err.filled(points_on_1, count),
+        .on_2 = try err.filled(points_on_2, count),
+    };
 }
 
 test "pruneContactPoints keeps the four points that form the widest polygon" {
