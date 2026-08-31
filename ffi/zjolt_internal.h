@@ -333,7 +333,10 @@ inline ZJoltConstraintSettings *ToC(JPH::ConstraintSettings *settings) {
 
 inline JPH::BodyID ToJolt(ZJoltBodyId id) { return JPH::BodyID(id); }
 
-inline JPH::EBodyType ToJolt(ZJoltBodyType type) {
+/// Takes the raw integer rather than the enum -- @see RawEnum. A host can
+/// put any bit pattern in an enum parameter; an unknown one is a rigid body,
+/// which is what Jolt's own default EBodyType is.
+inline JPH::EBodyType ToJoltBodyType(int32_t type) {
   return type == ZJOLT_BODY_TYPE_SOFT_BODY ? JPH::EBodyType::SoftBody
                                            : JPH::EBodyType::RigidBody;
 }
