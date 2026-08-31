@@ -1605,7 +1605,11 @@ ZJoltResult zjoltShapeGetSubmergedVolume(
 
 struct ZJoltPolyhedronSubmergedVolumeCalculator {
   /// Constructed before `calc` below (declaration order), and outlives it:
-  /// Jolt's own class only borrows a pointer into this for its lifetime.
+  /// Jolt's own class only borrows a pointer into this. The world origin a
+  /// debug-renderer build asks for is zero: this ABI carries none, so cut
+  /// geometry draws around the origin of the caller's own space, and a C
+  /// signature growing a parameter under one build option would make the
+  /// boundary configuration-dependent, which only the width options are.
   std::vector<JPH::PolyhedronSubmergedVolumeCalculator::Point> points;
   uint32_t num_points;
   JPH::PolyhedronSubmergedVolumeCalculator calc;
@@ -1617,7 +1621,8 @@ struct ZJoltPolyhedronSubmergedVolumeCalculator {
       : points(count),
         num_points(count),
         calc(transform, positions, sizeof(JPH::Vec3),
-             static_cast<int>(count), surface, points.data()) {}
+             static_cast<int>(count), surface, points.data()
+                 JPH_IF_DEBUG_RENDERER(, JPH::RVec3::sZero())) {}
 };
 
 ZJoltResult zjoltPolyhedronSubmergedVolumeCalculatorCreate(
