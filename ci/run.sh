@@ -157,6 +157,19 @@ if [ $FULL -eq 1 ]; then
   run 'test asserts off' zig build test -Denable_asserts=false
   run 'build shared library' zig build -Dshared=true
 
+  # The second ABI a Windows host has. Zig's default for Windows is gnu, so
+  # every step above builds that one and the MSVC branches in build.zig go
+  # unbuilt -- and the two ABIs disagree about struct layout, name mangling
+  # and the C runtime, so a compile is not enough. It needs the Microsoft
+  # standard library, which only a Windows host has; the CI Windows runner
+  # covers it wherever this is skipped.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      run 'test MSVC ABI' zig build test -Dtarget=native-native-msvc
+      run 'test-c MSVC ABI' zig build test-c -Dtarget=native-native-msvc
+      ;;
+  esac
+
   #---------------------------------------------------------------------------
   section 'Cross-compilation'
   #---------------------------------------------------------------------------
