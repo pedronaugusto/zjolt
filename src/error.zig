@@ -74,3 +74,39 @@ pub fn name(result: c.Result) [:0]const u8 {
 pub fn lastError() [:0]const u8 {
     return std.mem.span(c.zjoltLastError());
 }
+
+//=============================================================================
+// Tests
+//
+// Reflective over `c.Result` on purpose: a result added to the C enum is
+// covered without anyone editing this. The exhaustive switch already makes an
+// unhandled result a compile error; what this holds is the part no compiler
+// sees -- that no two results collapse onto one error, and that no error in
+// the set is unreachable. `zjolt.zig` holds the same walk over `resultName`.
+//=============================================================================
+
+const result_fields = @typeInfo(c.Result).@"enum".fields;
+
+test "check turns ok into success and every other result into an error of its own" {
+    var seen: [result_fields.len]anyerror = undefined;
+    var count: usize = 0;
+
+    inline for (result_fields) |field| {
+        const result: c.Result = @enumFromInt(field.value);
+        if (result == .ok) {
+            try check(result);
+        } else if (check(result)) |_| {
+            return error.FailingResultReportedSuccess;
+        } else |e| {
+            for (seen[0..count]) |earlier| try std.testing.expect(earlier != e);
+            seen[count] = e;
+            count += 1;
+        }
+    }
+
+    // Both directions. The first says every failing result produced an error;
+    // the second says every error in the set was produced by one, which is
+    // what makes an error nothing can raise a failure rather than dead code.
+    try std.testing.expectEqual(result_fields.len - 1, count);
+    try std.testing.expectEqual(@typeInfo(Error).error_set.?.len, count);
+}

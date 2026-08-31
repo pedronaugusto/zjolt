@@ -640,8 +640,48 @@ test "worldSpaceBounds tracks the placement" {
 //=============================================================================
 // Broad phase
 //
-// `BroadPhase.bounds()` tracks every add/remove immediately, verified directly here: even with `optimizeBroadPhase` never called, bounds and queries are correct — it is a tree-balance operation, not a correctness dependency, worth pinning down since every OTHER test in this package calls it out of habit. These two tests check the bounds match what is actually in the system unconditionally.
+// `BroadPhase.bounds()` tracks every add/remove immediately, verified directly here: even with `optimizeBroadPhase` never called, bounds and queries are correct — it is a tree-balance operation, not a correctness dependency, worth pinning down since every OTHER test in this package calls it out of habit.
+//
+// Everything below it queries BOUNDING BOXES, never bodies: the broad phase holds one box per body and nothing else. Several of these tests assert the gap that follows from it — a point outside the sphere but inside its box is a hit — because a caller who reads them as body tests gets answers that look wrong.
 //=============================================================================
+
+/// Three spheres in a row, far enough above whatever the fixture already
+/// holds that no query here can reach the floor by accident. Placed relative
+/// to the broad phase's own bounds, not at a fixed height a bigger floor
+/// could reach.
+const Row = struct {
+    shape: zjolt.Shape,
+    y: f32,
+    near: zjolt.BodyId,
+    mid: zjolt.BodyId,
+    far: zjolt.BodyId,
+
+    fn init(system: zjolt.PhysicsSystem) !Row {
+        const y = system.broadPhase().bounds().max.y + 20;
+        const shape = try zjolt.Shape.initSphere(0.5, .{});
+        errdefer shape.release();
+
+        const xs = [_]f32{ 0, 5, 50 };
+        var ids: [3]zjolt.BodyId = undefined;
+        for (&ids, &xs) |*id, x| {
+            id.* = try system.bodies().createAndAdd(.{
+                .shape = shape,
+                .object_layer = Layers.moving,
+                .position = zjolt.rvec3(x, y, 0),
+            }, .dont_activate);
+        }
+        system.optimizeBroadPhase();
+        return .{ .shape = shape, .y = y, .near = ids[0], .mid = ids[1], .far = ids[2] };
+    }
+
+    fn deinit(self: Row) void {
+        self.shape.release();
+    }
+};
+
+fn holds(ids: []const zjolt.BodyId, id: zjolt.BodyId) bool {
+    return std.mem.indexOfScalar(zjolt.BodyId, ids, id) != null;
+}
 
 test "the broad phase's bounds cover every body added" {
     try zjolt.init(.{ .allocator = std.testing.allocator });
@@ -653,28 +693,32 @@ test "the broad phase's bounds cover every body added" {
     const shape = try zjolt.Shape.initSphere(0.5, .{});
     defer shape.release();
 
-    // Two bodies placed far apart and far from the fixture's floor (which
-    // spans -50..50 in x and z), so the floor's own extent cannot be
-    // mistaken for covering them.
+    // Outside what the fixture already spans, on every axis. A body inside
+    // the floor's own extent is covered by the floor, and the assertions
+    // below would then hold with no body added at all.
+    const before = world.system.broadPhase().bounds();
+    const low = zjolt.rvec3(before.min.x - 40, before.min.y - 20, before.min.z - 15);
+    const high = zjolt.rvec3(before.max.x + 60, before.max.y + 30, before.max.z + 25);
+
     _ = try world.system.bodies().createAndAdd(.{
         .shape = shape,
         .object_layer = Layers.moving,
-        .position = zjolt.rvec3(-40, 30, 0),
+        .position = low,
     }, .dont_activate);
     _ = try world.system.bodies().createAndAdd(.{
         .shape = shape,
         .object_layer = Layers.moving,
-        .position = zjolt.rvec3(60, -20, 15),
+        .position = high,
     }, .dont_activate);
     world.system.optimizeBroadPhase();
 
     const bounds = world.system.broadPhase().bounds();
-    try std.testing.expect(bounds.min.x <= -40.5);
-    try std.testing.expect(bounds.max.x >= 60.5);
-    try std.testing.expect(bounds.min.y <= -20.5);
-    try std.testing.expect(bounds.max.y >= 30.5);
-    try std.testing.expect(bounds.min.z <= -0.5);
-    try std.testing.expect(bounds.max.z >= 15.5);
+    try std.testing.expect(bounds.min.x <= low.x + 0.5);
+    try std.testing.expect(bounds.min.y <= low.y + 0.5);
+    try std.testing.expect(bounds.min.z <= low.z + 0.5);
+    try std.testing.expect(bounds.max.x >= high.x - 0.5);
+    try std.testing.expect(bounds.max.y >= high.y - 0.5);
+    try std.testing.expect(bounds.max.z >= high.z - 0.5);
 }
 
 test "the broad phase's bounds shrink again once the body stretching them is gone" {
@@ -712,6 +756,268 @@ test "the broad phase's bounds shrink again once the body stretching them is gon
     const shrunk = world.system.broadPhase().bounds();
     try std.testing.expect(shrunk.max.x < grown.max.x);
     try std.testing.expectApproxEqAbs(before.max.x, shrunk.max.x, 1.0);
+}
+
+test "an axis-aligned overlap reports the boxes it covers, and the count-only form agrees" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const row = try Row.init(world.system);
+    defer row.deinit();
+    const broad = world.system.broadPhase();
+
+    // Reaches x = 6, so it covers the spheres at 0 and 5 and not the one at
+    // 50; one metre either side of the row on Y, so it cannot reach the floor.
+    const box: zjolt.AABox = .{
+        .min = zjolt.vec3(-1, row.y - 1, -1),
+        .max = zjolt.vec3(6, row.y + 1, 1),
+    };
+
+    var buffer: [16]zjolt.BodyId = undefined;
+    const hits = try broad.collideBox(box, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 2), hits.len);
+    try std.testing.expect(holds(hits, row.near));
+    try std.testing.expect(holds(hits, row.mid));
+    try std.testing.expect(!holds(hits, row.far));
+
+    // The count-only form is the first half of the two-call protocol, so it
+    // has to answer with what the second half would fill in.
+    try std.testing.expectEqual(@as(u32, 2), try broad.countBoxOverlaps(box, null));
+}
+
+test "an overlap buffer smaller than the answer fails instead of truncating" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const row = try Row.init(world.system);
+    defer row.deinit();
+    const broad = world.system.broadPhase();
+
+    const box: zjolt.AABox = .{
+        .min = zjolt.vec3(-1, row.y - 1, -1),
+        .max = zjolt.vec3(6, row.y + 1, 1),
+    };
+
+    var one: [1]zjolt.BodyId = undefined;
+    try std.testing.expectError(error.BufferTooSmall, broad.collideBox(box, null, &one));
+
+    // And a buffer of exactly the counted size is enough, which is what makes
+    // the failure above a size check rather than an off-by-one.
+    var two: [2]zjolt.BodyId = undefined;
+    const hits = try broad.collideBox(box, null, &two);
+    try std.testing.expectEqual(@as(usize, 2), hits.len);
+}
+
+test "the sphere and point overlaps test the bounding box, not the body inside it" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const row = try Row.init(world.system);
+    defer row.deinit();
+    const broad = world.system.broadPhase();
+    var buffer: [16]zjolt.BodyId = undefined;
+
+    // A corner of the near sphere's bounding box. 0.4 on each axis is 0.69
+    // from the centre, so the point is outside a sphere of radius 0.5 and
+    // inside its box — and the broad phase answers for the box.
+    const corner = zjolt.rvec3(0.4, row.y + 0.4, 0.4);
+    const at_corner = try broad.collidePoint(corner, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 1), at_corner.len);
+    try std.testing.expectEqual(row.near, at_corner[0]);
+
+    // Just outside the box on X, and nothing is reported.
+    const outside = zjolt.rvec3(0.6, row.y, 0);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        (try broad.collidePoint(outside, null, &buffer)).len,
+    );
+
+    // Same story for a sphere: 0.7 from the box, so 0.3 misses and 0.8 hits.
+    const center = zjolt.rvec3(1.2, row.y, 0);
+    try std.testing.expectEqual(
+        @as(usize, 0),
+        (try broad.collideSphere(center, 0.3, null, &buffer)).len,
+    );
+    const wide = try broad.collideSphere(center, 0.8, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 1), wide.len);
+    try std.testing.expectEqual(row.near, wide[0]);
+}
+
+test "a broad-phase ray reports every box it enters and nothing past the end of it" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const floor_top = world.system.broadPhase().bounds().max.y;
+    const row = try Row.init(world.system);
+    defer row.deinit();
+    const broad = world.system.broadPhase();
+
+    const origin = zjolt.rvec3(0, row.y + 20, 0);
+    var buffer: [16]zjolt.BroadPhaseCastHit = undefined;
+
+    // Straight down the near sphere's axis, ending below the floor. The
+    // spheres at x = 5 and x = 50 are off the ray entirely.
+    const through = zjolt.vec3(0, floor_top - 2 - (row.y + 20), 0);
+    const hits = try broad.castRay(origin, through, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 2), hits.len);
+    try std.testing.expectEqual(@as(u32, 2), try broad.countRayHits(origin, through, null));
+
+    var saw_near = false;
+    var saw_floor = false;
+    for (hits) |hit| {
+        try std.testing.expect(hit.fraction >= 0 and hit.fraction <= 1);
+        if (hit.body == row.near) saw_near = true;
+        if (hit.body == world.floor) saw_floor = true;
+    }
+    try std.testing.expect(saw_near and saw_floor);
+
+    // The same ray, stopped between the sphere and the floor. `direction`
+    // carries the length, so the floor is now out of reach.
+    const short = zjolt.vec3(0, row.y - 2 - (row.y + 20), 0);
+    const near_only = try broad.castRay(origin, short, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 1), near_only.len);
+    try std.testing.expectEqual(row.near, near_only[0].body);
+}
+
+test "a swept box reports what its own width passes through, not just what a ray would" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const floor_top = world.system.broadPhase().bounds().max.y;
+    const row = try Row.init(world.system);
+    defer row.deinit();
+    const broad = world.system.broadPhase();
+
+    const top = row.y + 20;
+    const down = zjolt.vec3(0, floor_top - 2 - top, 0);
+    var buffer: [16]zjolt.BroadPhaseCastHit = undefined;
+
+    const narrow: zjolt.AABox = .{
+        .min = zjolt.vec3(-0.2, top - 0.2, -0.2),
+        .max = zjolt.vec3(0.2, top + 0.2, 0.2),
+    };
+    const narrow_hits = try broad.castBox(narrow, down, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 2), narrow_hits.len);
+
+    // Widened to reach x = 5 and swept along the same line. The extra hit is
+    // the sphere the narrow sweep passed beside, which is what says the box's
+    // extent is carried through the sweep rather than only its centre.
+    const wide: zjolt.AABox = .{
+        .min = zjolt.vec3(-0.2, top - 0.2, -0.2),
+        .max = zjolt.vec3(5.2, top + 0.2, 0.2),
+    };
+    const wide_hits = try broad.castBox(wide, down, null, &buffer);
+    try std.testing.expectEqual(@as(usize, 3), wide_hits.len);
+
+    var saw_mid = false;
+    var saw_far = false;
+    for (wide_hits) |hit| {
+        if (hit.body == row.mid) saw_mid = true;
+        if (hit.body == row.far) saw_far = true;
+    }
+    try std.testing.expect(saw_mid);
+    try std.testing.expect(!saw_far);
+}
+
+test "an oriented box rejects a body that its own axis-aligned bounds accept" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const shape = try zjolt.Shape.initSphere(0.5, .{});
+    defer shape.release();
+
+    const y = world.system.broadPhase().bounds().max.y + 20;
+    const rotation = try zjolt.Quat.fromAxisAngle(zjolt.vec3(0, 1, 0), std.math.pi / 4.0);
+    const box: zjolt.OrientedBox = .{
+        .center = zjolt.rvec3(0, y, 0),
+        .rotation = rotation,
+        .half_extent = zjolt.vec3(4, 1, 0.5),
+    };
+
+    // A slab turned 45 degrees about Y. `inside` sits along its long axis;
+    // `outside` sits off the end of its short one, four metres clear of it,
+    // and yet inside the axis-aligned bounds the turn spreads out.
+    const inside = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(2, y, -2),
+    }, .dont_activate);
+    const outside = try world.system.bodies().createAndAdd(.{
+        .shape = shape,
+        .object_layer = Layers.moving,
+        .position = zjolt.rvec3(3, y, 3),
+    }, .dont_activate);
+    world.system.optimizeBroadPhase();
+
+    // The oriented box's own bounds: a 45-degree turn spreads both horizontal
+    // half extents over both horizontal axes.
+    const spread: f32 = (4.0 + 0.5) * @sqrt(@as(f32, 0.5));
+    const bounds: zjolt.AABox = .{
+        .min = zjolt.vec3(-spread, y - 1, -spread),
+        .max = zjolt.vec3(spread, y + 1, spread),
+    };
+
+    const broad = world.system.broadPhase();
+    var loose_buffer: [16]zjolt.BodyId = undefined;
+    const loose = try broad.collideBox(bounds, null, &loose_buffer);
+    try std.testing.expect(holds(loose, inside));
+    try std.testing.expect(holds(loose, outside));
+
+    var tight_buffer: [16]zjolt.BodyId = undefined;
+    const tight = try broad.collideOrientedBox(box, null, &tight_buffer);
+    try std.testing.expect(holds(tight, inside));
+    try std.testing.expect(!holds(tight, outside));
+}
+
+test "a broad-phase object-layer filter keeps the static floor out of an overlap" {
+    try zjolt.init(.{ .allocator = std.testing.allocator });
+    defer zjolt.deinit();
+
+    var world = try World.init();
+    defer world.deinit();
+
+    const floor_top = world.system.broadPhase().bounds().max.y;
+    const row = try Row.init(world.system);
+    defer row.deinit();
+    const broad = world.system.broadPhase();
+
+    // A column from below the floor up past the near sphere.
+    const box: zjolt.AABox = .{
+        .min = zjolt.vec3(-1, floor_top - 0.1, -1),
+        .max = zjolt.vec3(1, row.y + 1, 1),
+    };
+
+    var buffer: [16]zjolt.BodyId = undefined;
+    const unfiltered = try broad.collideBox(box, null, &buffer);
+    try std.testing.expect(holds(unfiltered, world.floor));
+    try std.testing.expect(holds(unfiltered, row.near));
+
+    // `OnlyObjectLayer` builds a query filter; the broad phase takes the
+    // object-layer half of one, so the callback has a single home either way.
+    const only: zjolt.OnlyObjectLayer = .{ .layer = Layers.moving };
+    const filters: zjolt.BroadPhaseFilters = .{ .object_layer = only.filters().object_layer };
+
+    const filtered = try broad.collideBox(box, &filters, &buffer);
+    try std.testing.expect(!holds(filtered, world.floor));
+    try std.testing.expect(holds(filtered, row.near));
 }
 
 //=============================================================================
