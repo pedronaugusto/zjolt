@@ -84,6 +84,11 @@ run 'zig fmt (src, tests, build.zig)' zig fmt --check src tests/consumer build.z
 # it as well, but only under --full and only after a full build.
 run 'installed headers cover every include' ci/check-headers.sh
 
+# One home for the arithmetic behind zjoltLiveHandleCount, and both ends of
+# every AddRef/Release pair counting the same way. An unreleased handle is a
+# refusal at zjoltDeinit; a miscounted one is a refusal that never comes.
+run 'host refcount accounting' ci/check-refcounts.sh
+
 # Comment blocks stay short and stay out of the narrative register. Cheap, and
 # the kind of drift that is invisible in review until a whole file reads like a
 # diary.
@@ -139,7 +144,7 @@ if [ $FULL -eq 1 ]; then
   # Mutation test for the ABI cross-check itself — see the script's own header
   # for why a check that guards everything else needs one. It rebuilds once per
   # mutation, so it belongs here rather than in the default run.
-  run 'guard mutations (26)' ci/check-abi-drift.sh
+  run 'guard mutations (29)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
   section 'Tests — build configurations'

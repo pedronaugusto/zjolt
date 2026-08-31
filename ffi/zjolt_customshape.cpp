@@ -714,7 +714,7 @@ ZJoltResult zjoltShapeCreateCustomConvex(const ZJoltConvexShapeCallbacks *callba
 
   EnsureCustomConvexRegistered();
   CustomConvexShape *shape = new CustomConvexShape(*callbacks, user, zjolt::ToJolt(material));
-  shape->AddRef();
+  zjolt::HostRetain(shape);
   *out = const_cast<ZJoltShape *>(zjolt::ToC(static_cast<const JPH::Shape *>(shape)));
   return ZJOLT_RESULT_OK;
 }
@@ -742,7 +742,7 @@ ZJoltResult zjoltShapeCreateCustom(const ZJoltShapeCallbacks *callbacks, void *u
 
   EnsureCustomShapeRegistered();
   CustomShape *shape = new CustomShape(*callbacks, user);
-  shape->AddRef();
+  zjolt::HostRetain(shape);
   *out = const_cast<ZJoltShape *>(zjolt::ToC(static_cast<const JPH::Shape *>(shape)));
   return ZJOLT_RESULT_OK;
 }

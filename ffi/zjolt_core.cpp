@@ -171,12 +171,12 @@ class HostJobSystem final : public JPH::JobSystemWithBarrier {
     // gives back through zjoltJobRelease once it is done with it — exactly
     // the same bookkeeping JobSystemThreadPool::QueueJobInternal does before
     // handing a job to its own queue.
-    inJob->AddRef();
+    zjolt::HostRetain(inJob);
     host_.queue_job(host_.user, reinterpret_cast<ZJoltJob *>(inJob));
   }
 
   void QueueJobs(Job **inJobs, JPH::uint inNumJobs) override {
-    for (JPH::uint i = 0; i < inNumJobs; ++i) inJobs[i]->AddRef();
+    for (JPH::uint i = 0; i < inNumJobs; ++i) zjolt::HostRetain(inJobs[i]);
     // A ZJoltJob* is a bare reinterpret_cast tag over Job* (see the note on
     // ZJoltShape in zjolt_internal.h for why that conversion is sound), so
     // the whole array converts at once rather than element by element.
@@ -424,10 +424,11 @@ void zjoltDeinit(void) {
     JPH::Trace(
         "zjoltDeinit: %d handle(s) still alive. Nothing was torn down, because "
         "restoring Jolt's allocator now would make destroying them corrupt the "
-        "heap. Destroy them and call zjoltDeinit again. The kinds counted here "
-        "are physics systems, job systems, characters, character contact "
-        "listeners, character-vs-character collisions, debug renderers, "
-        "compute systems, hair, vehicle constraints, and ragdolls.",
+        "heap. Destroy or release them and call zjoltDeinit again. Every handle "
+        "this ABI hands out is counted, including one entry per outstanding "
+        "reference to a reference-counted object — a shape, material, group "
+        "filter, skeleton, animation, scene, constraint, constraint settings, "
+        "path, soft body settings or job that was never released.",
         static_cast<int>(live));
     return;
   }
@@ -590,12 +591,12 @@ void zjoltJobRun(ZJoltJob *job) {
 
 void zjoltJobAddRef(ZJoltJob *job) {
   if (job == nullptr) return;
-  ToJoltJob(job)->AddRef();
+  zjolt::HostRetain(ToJoltJob(job));
 }
 
 void zjoltJobRelease(ZJoltJob *job) {
   if (job == nullptr) return;
-  ToJoltJob(job)->Release();
+  zjolt::HostRelease(ToJoltJob(job));
 }
 
 ZJoltResult zjoltJobSystemCreateSingleThreaded(uint32_t max_jobs,

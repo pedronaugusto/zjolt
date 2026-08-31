@@ -51,10 +51,10 @@ typedef struct ZJoltSkeletonMapper ZJoltSkeletonMapper;
 typedef struct ZJoltRagdollSettings ZJoltRagdollSettings;
 
 /// A spawned ragdoll: real bodies and constraints in one PhysicsSystem.
-/// Reference counted, like the settings that created it — but unlike the
-/// three handles above it owns storage of its own beside the Jolt object, so
-/// it is also counted by zjoltLiveHandleCount and zjoltDeinit refuses while
-/// one is still alive.
+/// Reference counted like the settings that created it, but by a count of
+/// its own, because it owns storage beside the Jolt object — so its
+/// zjoltLiveHandleCount entry moves on create and on the release that
+/// destroys it, where the handles above move on every reference.
 typedef struct ZJoltRagdoll ZJoltRagdoll;
 
 //===----------------------------------------------------------------------===//

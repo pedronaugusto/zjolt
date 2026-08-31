@@ -54,7 +54,7 @@ ZJoltResult Finish(JPH::Shape::ShapeResult &result, ZJoltShape **out) {
                            "shape construction produced no result");
   }
   const JPH::Shape *shape = result.Get();
-  shape->AddRef();
+  zjolt::HostRetain(shape);
   *out = const_cast<ZJoltShape *>(zjolt::ToC(shape));
   return ZJOLT_RESULT_OK;
 }
@@ -1125,12 +1125,12 @@ ZJoltResult zjoltShapeGetInnerShape(const ZJoltShape *shape,
 
 void zjoltShapeAddRef(const ZJoltShape *shape) {
   if (shape == nullptr) return;
-  zjolt::ToJolt(shape)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(shape));
 }
 
 void zjoltShapeRelease(const ZJoltShape *shape) {
   if (shape == nullptr) return;
-  zjolt::ToJolt(shape)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(shape));
 }
 
 uint32_t zjoltShapeGetRefCount(const ZJoltShape *shape) {

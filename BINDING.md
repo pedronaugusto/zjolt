@@ -168,16 +168,28 @@ negative sentinel, use a fixed-width constant instead of an enum.
 
 ### Reference counting
 
-**Use `zjolt::Own(fresh)`** to hand a newly constructed reference-counted
-object to the caller. The arithmetic is not what anyone expects — a fresh
-`JPH::RefTarget` starts at **zero**, not one, so the caller's reference is the
-first — and it is not the same arithmetic as `Finish` in `ffi/zjolt_shape.cpp`,
-which also calls `AddRef` once but to compensate for a `JPH::Ref` dropping at
-scope exit. Same call, two different reasons, and mixing them up is silent:
-under-counting wraps the counter to `0xFFFFFFFF` and the object outlives its
-own frees; over-counting shows up as leaked bytes in `tests/c_smoke.c`.
+**Never write `AddRef()` or `Release()`.** Three helpers in
+`ffi/zjolt_internal.h` are the only places a Jolt reference count moves on the
+host's behalf, and `ci/check-refcounts.sh` fails the build on a bare call
+anywhere else in `ffi/`:
 
-`Own` is the answer to both, and using it means the question does not come up.
+- **`zjolt::Own(fresh)`** hands a newly constructed object out. The arithmetic
+  is not what anyone expects — a fresh `JPH::RefTarget` starts at **zero**, not
+  one, so the caller's reference is the first.
+- **`zjolt::HostRetain(held)`** hands out a reference to an object that already
+  has holders: a `zjoltFooAddRef` entry point, a getter that returns something
+  the caller must release, or `Finish` in `ffi/zjolt_shape.cpp` compensating
+  for a `JPH::Ref` that drops at scope exit.
+- **`zjolt::HostRelease(held)`** is the counterpart, and the body of every
+  `zjoltFooRelease`.
+
+Each of the three also moves `zjoltLiveHandleCount`, which is the point: an
+unreleased handle has to be a refusal at `zjoltDeinit` rather than a leak
+nothing reports. Getting the Jolt half right and the count half wrong is
+silent in both directions — under-counting wraps to `0xFFFFFFFF` and the
+object outlives its own frees, and an `AddRef` that skips the handle count
+while its `Release` does not drives the total negative, which reads as
+"nothing outstanding".
 
 ### Callbacks
 

@@ -20,7 +20,7 @@ system and no clock attached.
   production: a test compares the two by reflection, with nothing listed by
   hand. 13 kinds of deliberate drift are verified to fail it, including a
   field swap that leaves every offset in the struct unchanged, and
-  13 mutations for the other guards do the same, each naming the test that
+  16 mutations for the other guards do the same, each naming the test that
   has to catch it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
@@ -443,7 +443,7 @@ over the documents — `ci/check-numbers.sh` and `ci/check-examples.sh`, which
 are mutated by editing a document rather than a source. Each of those declares
 the signal that must appear, so a mutation that fails for an unrelated reason
 is reported as a wrong failure rather than counted as the guard doing its job.
-26 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
+29 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
 that count and this sentence drift apart. It runs under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
@@ -641,8 +641,8 @@ ci/install-hooks.sh  # run the inner loop automatically before every push
 
 The default is trimmed rather than complete, which is a concession to what Jolt
 is: 179 translation units per configuration, so one is tens of seconds rather
-than the couple of seconds a smaller library would take. `--full` is 31 checks
-— 23 of them run on this host, 8 cross-compiling — which is minutes from a
+than the couple of seconds a smaller library would take. `--full` is 32 checks
+— 24 of them run on this host, 8 cross-compiling — which is minutes from a
 cold cache; the default is under a minute once the cache is warm. Two of the
 host checks are the MSVC ABI, which only a Windows host can execute and which
 is skipped elsewhere.

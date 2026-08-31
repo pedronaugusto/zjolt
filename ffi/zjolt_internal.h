@@ -128,19 +128,56 @@ void Delete(T *object) {
   FreeFor<T>(object);
 }
 
-/// Hands a freshly constructed reference-counted object to the caller. A
-/// fresh `JPH::RefTarget` starts at refcount ZERO, not one: under-count
-/// and the next Release wraps to 0xFFFFFFFF; over-count and it never dies.
+//===----------------------------------------------------------------------===//
+// Live-handle accounting
+//
+// zjoltDeinit restores Jolt's allocator, and a handle freed after that is freed through an allocator it
+// was never allocated from. Counting what the host still owns is what lets deinit refuse instead.
+//
+// The unit is ONE THING THE HOST MUST HAND BACK: a reference-counted object counts once per reference this
+// ABI gave the host, not once per object, because Jolt's own count also holds what a body or a compound
+// shape took and that is not the host's to release. Handles zjolt reference-counts itself (ZJoltRagdoll,
+// ZJoltSkeletonMapper) move on create and on the release that destroys them -- zero means the same thing.
+//
+// HostRetain and HostRelease below are the ONLY places a Jolt refcount moves on the host's behalf, and
+// ci/check-refcounts.sh fails the build on a bare AddRef or Release anywhere else in ffi/.
+//===----------------------------------------------------------------------===//
+
+void HandleCreated();
+void HandleDestroyed();
+
+/// One more reference held by the HOST. Null-safe.
 ///
-/// Not the same arithmetic as `Finish` in zjolt_shape.cpp, which also
-/// calls AddRef once but to compensate for a JPH::Ref dropping at scope exit.
+/// No type constraint of its own: `AddRef` exists on a reference-counted
+/// object and on nothing else, so the call below already is the check. Own's
+/// is narrower because a fresh object is where getting it wrong is fatal.
+template <typename T>
+inline void HostRetain(T *object) {
+  if (object == nullptr) return;
+  object->AddRef();
+  HandleCreated();
+}
+
+/// One fewer. Null-safe, and the counterpart of every HostRetain and Own.
+template <typename T>
+inline void HostRelease(T *object) {
+  if (object == nullptr) return;
+  object->Release();
+  HandleDestroyed();
+}
+
+/// Hands a freshly constructed reference-counted object to the caller. A
+/// fresh `JPH::RefTarget` starts at refcount ZERO, not one: under-count and
+/// the next Release wraps to 0xFFFFFFFF; over-count and it never dies.
+/// HostRetain is what it calls, so the arithmetic is that one; what differs
+/// is the provenance, and `Finish` in zjolt_shape.cpp is a third, which
+/// compensates for a JPH::Ref that drops at scope exit.
 template <typename T>
 [[nodiscard]] inline T *Own(T *fresh) {
   static_assert(std::is_base_of_v<JPH::RefTargetVirtual, T> ||
                     std::is_convertible_v<T *, const JPH::RefTarget<T> *>,
                 "Own() is for reference-counted objects; a plain one is Delete()'d");
-  if (fresh == nullptr) return nullptr;
-  fresh->AddRef();
+  HostRetain(fresh);
   return fresh;
 }
 
@@ -183,16 +220,6 @@ inline ZJoltResult CheckPenetrationTolerance(float tolerance) {
       "penetration_tolerance is below FLT_EPSILON; Jolt asserts on that "
       "rather than honouring it, and a smaller one only buys iterations");
 }
-
-//===----------------------------------------------------------------------===//
-// Live-handle accounting
-//
-// zjoltDeinit restores Jolt's allocator; a handle freed after that uses
-// the wrong one. Counting handles zjolt owns (shapes excepted) lets deinit refuse instead.
-//===----------------------------------------------------------------------===//
-
-void HandleCreated();
-void HandleDestroyed();
 
 //===----------------------------------------------------------------------===//
 // Entry-point guards

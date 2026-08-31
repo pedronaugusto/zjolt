@@ -101,12 +101,12 @@ ZJoltResult zjoltGroupFilterCustomCreate(
 
 void zjoltGroupFilterAddRef(const ZJoltGroupFilter *filter) {
   if (filter == nullptr) return;
-  filter->AddRef();
+  zjolt::HostRetain(filter);
 }
 
 void zjoltGroupFilterRelease(const ZJoltGroupFilter *filter) {
   if (filter == nullptr) return;
-  filter->Release();
+  zjolt::HostRelease(filter);
 }
 
 uint32_t zjoltGroupFilterGetRefCount(const ZJoltGroupFilter *filter) {

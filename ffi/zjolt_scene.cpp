@@ -248,12 +248,12 @@ ZJoltResult zjoltSceneCreate(ZJoltScene **out) {
 
 void zjoltSceneAddRef(const ZJoltScene *scene) {
   if (scene == nullptr) return;
-  zjolt::ToJolt(scene)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(scene));
 }
 
 void zjoltSceneRelease(const ZJoltScene *scene) {
   if (scene == nullptr) return;
-  zjolt::ToJolt(scene)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(scene));
 }
 
 uint32_t zjoltSceneGetRefCount(const ZJoltScene *scene) {
@@ -583,7 +583,7 @@ ZJoltResult zjoltSceneRestore(const void *data, size_t size,
   // the same AddRef-once compensation Finish() makes in zjolt_shape.cpp --
   // NOT zjolt::Own's, which answers for a count that starts at zero.
   JPH::PhysicsScene *restored = result.Get();
-  restored->AddRef();
+  zjolt::HostRetain(restored);
   *out = zjolt::ToC(restored);
   return ZJOLT_RESULT_OK;
 }
@@ -653,7 +653,7 @@ ZJoltResult zjoltSceneRestoreStream(const ZJoltStream *stream,
   }
 
   JPH::PhysicsScene *restored = result.Get();
-  restored->AddRef();
+  zjolt::HostRetain(restored);
   *out = zjolt::ToC(restored);
   return ZJOLT_RESULT_OK;
 }

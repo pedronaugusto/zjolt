@@ -324,12 +324,12 @@ ZJOLT_API void zjoltDeinit(void);
 
 ZJOLT_API bool zjoltIsInitialized(void);
 
-/// Every owning handle currently alive. zjoltDeinit refuses while non-zero.
-///
-/// Excludes Jolt-refcounted objects (shapes, materials, group filters,
-/// skeletons, ragdoll settings) — release them anyway; Jolt owns their
-/// counts. A ragdoll IS counted, moving only on create and final release,
-/// not on every AddRef.
+/// Everything the host still owes a destroy or a release for; zjoltDeinit
+/// refuses while it is non-zero. A reference-counted object counts once per
+/// reference this ABI handed out, not once per object: Jolt's own count also
+/// holds the references a body or a compound shape took, and those are not
+/// the host's to release. ci/check-refcounts.sh holds the arithmetic to one
+/// home and to both ends of every AddRef/Release pair.
 ZJOLT_API uint32_t zjoltLiveHandleCount(void);
 
 //===----------------------------------------------------------------------===//

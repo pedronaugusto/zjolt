@@ -824,12 +824,12 @@ extern "C" {
 
 void zjoltConstraintAddRef(const ZJoltConstraint *constraint) {
   if (constraint == nullptr) return;
-  zjolt::ToJolt(constraint)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(constraint));
 }
 
 void zjoltConstraintRelease(const ZJoltConstraint *constraint) {
   if (constraint == nullptr) return;
-  zjolt::ToJolt(constraint)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(constraint));
 }
 
 uint32_t zjoltConstraintGetRefCount(const ZJoltConstraint *constraint) {
@@ -913,7 +913,7 @@ ZJoltResult zjoltPhysicsSystemGetConstraints(const ZJoltPhysicsSystem *system,
   const uint32_t to_copy = count < capacity ? count : capacity;
   for (uint32_t i = 0; i < to_copy; ++i) {
     JPH::Constraint *held = constraints[i].GetPtr();
-    held->AddRef();
+    zjolt::HostRetain(held);
     out_constraints[i] = zjolt::ToC(held);
   }
   if (capacity < count) return ZJOLT_RESULT_BUFFER_TOO_SMALL;
@@ -1125,21 +1125,19 @@ ZJoltResult zjoltConstraintGetConstraintSettings(const ZJoltConstraint *constrai
   // destructor by taking a second one, the same way every other *Create
   // entry point in this file hands a caller-owned reference out.
   JPH::ConstraintSettings *raw = settings.GetPtr();
-  raw->AddRef();
-  zjolt::HandleCreated();
+  zjolt::HostRetain(raw);
   *out = zjolt::ToC(raw);
   return ZJOLT_RESULT_OK;
 }
 
 void zjoltConstraintSettingsAddRef(const ZJoltConstraintSettings *settings) {
   if (settings == nullptr) return;
-  zjolt::ToJolt(settings)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(settings));
 }
 
 void zjoltConstraintSettingsRelease(const ZJoltConstraintSettings *settings) {
   if (settings == nullptr) return;
-  zjolt::ToJolt(settings)->Release();
-  zjolt::HandleDestroyed();
+  zjolt::HostRelease(zjolt::ToJolt(settings));
 }
 
 uint32_t zjoltConstraintSettingsGetRefCount(const ZJoltConstraintSettings *settings) {
@@ -1235,8 +1233,7 @@ ZJoltResult zjoltConstraintSettingsRestoreBinaryState(
   }
 
   JPH::ConstraintSettings *raw = result.Get().GetPtr();
-  raw->AddRef();
-  zjolt::HandleCreated();
+  zjolt::HostRetain(raw);
   *out = zjolt::ToC(raw);
   return ZJOLT_RESULT_OK;
 }
@@ -1312,12 +1309,12 @@ ZJoltResult zjoltPathConstraintPathCreateHermite(const ZJoltPathPoint *points,
 
 void zjoltPathConstraintPathAddRef(const ZJoltPathConstraintPath *path) {
   if (path == nullptr) return;
-  zjolt::ToJolt(path)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(path));
 }
 
 void zjoltPathConstraintPathRelease(const ZJoltPathConstraintPath *path) {
   if (path == nullptr) return;
-  zjolt::ToJolt(path)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(path));
 }
 
 uint32_t zjoltPathConstraintPathGetRefCount(const ZJoltPathConstraintPath *path) {

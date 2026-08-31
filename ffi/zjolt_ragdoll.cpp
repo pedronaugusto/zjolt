@@ -357,12 +357,12 @@ ZJoltResult zjoltSkeletonCreate(ZJoltSkeleton **out) {
 
 void zjoltSkeletonAddRef(const ZJoltSkeleton *skeleton) {
   if (skeleton == nullptr) return;
-  zjolt::ToJolt(skeleton)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(skeleton));
 }
 
 void zjoltSkeletonRelease(const ZJoltSkeleton *skeleton) {
   if (skeleton == nullptr) return;
-  zjolt::ToJolt(skeleton)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(skeleton));
 }
 
 uint32_t zjoltSkeletonGetRefCount(const ZJoltSkeleton *skeleton) {
@@ -638,12 +638,12 @@ ZJoltResult zjoltSkeletalAnimationCreate(ZJoltSkeletalAnimation **out) {
 
 void zjoltSkeletalAnimationAddRef(const ZJoltSkeletalAnimation *animation) {
   if (animation == nullptr) return;
-  zjolt::ToJolt(animation)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(animation));
 }
 
 void zjoltSkeletalAnimationRelease(const ZJoltSkeletalAnimation *animation) {
   if (animation == nullptr) return;
-  zjolt::ToJolt(animation)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(animation));
 }
 
 uint32_t zjoltSkeletalAnimationGetRefCount(
@@ -869,7 +869,7 @@ ZJoltResult zjoltSkeletalAnimationRestoreBinaryState(
   // when it goes out of scope below, so the handle needs its own reference
   // added before that happens.
   JPH::SkeletalAnimation *restored = result.Get();
-  restored->AddRef();
+  zjolt::HostRetain(restored);
   *out = zjolt::ToC(restored);
   return ZJOLT_RESULT_OK;
 }
@@ -1217,12 +1217,12 @@ ZJoltResult zjoltRagdollSettingsCreate(ZJoltRagdollSettings **out) {
 
 void zjoltRagdollSettingsAddRef(const ZJoltRagdollSettings *settings) {
   if (settings == nullptr) return;
-  zjolt::ToJolt(settings)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(settings));
 }
 
 void zjoltRagdollSettingsRelease(const ZJoltRagdollSettings *settings) {
   if (settings == nullptr) return;
-  zjolt::ToJolt(settings)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(settings));
 }
 
 uint32_t zjoltRagdollSettingsGetRefCount(const ZJoltRagdollSettings *settings) {
@@ -1402,7 +1402,7 @@ ZJoltResult zjoltRagdollSettingsGetPartConstraint(
   }
 
   JPH::TwoBodyConstraintSettings *held = s->mParts[part_index].mToParent;
-  if (held != nullptr) held->AddRef();
+  zjolt::HostRetain(held);
   *out = zjolt::ToC(static_cast<JPH::ConstraintSettings *>(held));
   return ZJOLT_RESULT_OK;
 }
@@ -1466,7 +1466,7 @@ ZJoltResult zjoltRagdollSettingsGetAdditionalConstraint(
   }
   if (out_constraint != nullptr) {
     JPH::TwoBodyConstraintSettings *held = ac.mConstraint;
-    if (held != nullptr) held->AddRef();
+    zjolt::HostRetain(held);
     *out_constraint = zjolt::ToC(static_cast<JPH::ConstraintSettings *>(held));
   }
   return ZJOLT_RESULT_OK;

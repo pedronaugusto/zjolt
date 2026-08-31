@@ -317,13 +317,13 @@ ZJoltResult zjoltSoftBodySharedSettingsCreate(
 void zjoltSoftBodySharedSettingsAddRef(
     const ZJoltSoftBodySharedSettings *settings) {
   if (settings == nullptr) return;
-  zjolt::ToJolt(settings)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(settings));
 }
 
 void zjoltSoftBodySharedSettingsRelease(
     const ZJoltSoftBodySharedSettings *settings) {
   if (settings == nullptr) return;
-  zjolt::ToJolt(settings)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(settings));
 }
 
 uint32_t zjoltSoftBodySharedSettingsGetRefCount(
@@ -472,7 +472,7 @@ ZJoltResult zjoltSoftBodySharedSettingsRestoreBinaryState(
                            "shared settings");
   }
 
-  restored->AddRef();
+  zjolt::HostRetain(restored.GetPtr());
   *out = zjolt::ToC(restored.GetPtr());
   return ZJOLT_RESULT_OK;
 }
@@ -503,7 +503,7 @@ ZJoltResult zjoltSoftBodySharedSettingsRestoreWithMaterials(
   }
 
   JPH::Ref<JPH::SoftBodySharedSettings> restored = result.Get();
-  restored->AddRef();
+  zjolt::HostRetain(restored.GetPtr());
   *out = zjolt::ToC(restored.GetPtr());
   return ZJOLT_RESULT_OK;
 }

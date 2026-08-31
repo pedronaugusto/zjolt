@@ -46,12 +46,12 @@ const ZJoltPhysicsMaterial *zjoltPhysicsMaterialDefault(void) {
 
 void zjoltPhysicsMaterialAddRef(const ZJoltPhysicsMaterial *material) {
   if (material == nullptr) return;
-  zjolt::ToJolt(material)->AddRef();
+  zjolt::HostRetain(zjolt::ToJolt(material));
 }
 
 void zjoltPhysicsMaterialRelease(const ZJoltPhysicsMaterial *material) {
   if (material == nullptr) return;
-  zjolt::ToJolt(material)->Release();
+  zjolt::HostRelease(zjolt::ToJolt(material));
 }
 
 uint32_t zjoltPhysicsMaterialGetRefCount(const ZJoltPhysicsMaterial *material) {
