@@ -264,8 +264,10 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `b.dependency` and run. `ci/check-examples.sh` reads README.md as well as
   BINDING.md and holds them character for character; the two had drifted,
   and the README's version was compiled by nothing.
-- `tools/unbound_*.txt` is renamed `tools/verdicts_*.txt`. 605 of its rows
-  record a `BOUND` verdict, so the old name described a minority of it.
+- `tools/unbound_*.txt` is renamed `tools/verdicts_*.txt`. Most of its rows
+  record a `BOUND` verdict, so the old name described a minority of it. The
+  tally is in the README, where `ci/check-numbers.sh` recomputes it; a
+  second copy here would be a second fact free to disagree, and had.
 - `ci/check-coverage.sh` strips comments before deciding whether Zig calls an
   entry point. A doc comment that merely NAMED one counted as calling it, so
   prose could satisfy the rule that nothing is stranded.
@@ -299,6 +301,28 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   is invoked on Windows. The hosted workflow already did; the local mirror of
   it did not, so the second ABI a Windows host has was never built there.
 
+- The README's worked example of what a `BOUND` verdict means is read back
+  against `tools/verdicts_*.txt` by `ci/check-numbers.sh`: the upstream name
+  it quotes must have a row, that row must say `BOUND`, and its evidence must
+  name the entry point the sentence credits. The example it used to carry had
+  lost its row to an entry point of its own, so the rule was being taught from
+  a line no file held. The guards `ci/check-abi-drift.sh` mutates are listed
+  rather than counted for the same reason: the count was written in words,
+  which that gate states it cannot read, and it had gone stale.
+- `ci/check-comments.sh` spends its two budgets in CHARACTERS at an 80-column
+  width rather than in newlines. Six lines was six lines whether they held
+  forty characters or four hundred, so an unwrapped paragraph -- 303 of them
+  on one line, in one case -- cost the same as a one-line note. A `//===` or
+  `//---` banner is recognised wherever it is indented, which it had not been
+  inside a Zig struct; and the 137 comment lines in `ffi/` past 80 columns are
+  wrapped, that being the width those files are formatted to.
+- `ci/check-abi-drift.sh` takes both of its document anchors from
+  `ci/counts.sh`. One was a written-out entry-point count that the tree had
+  moved past, so the mutation reported ANCHOR STALE and the guard it aimed at
+  went unproven. Its entry-point-preamble mutation now names an entry point
+  `tests/c_smoke.c` does not call before init, so the reflective sweep is the
+  guard that answers rather than the C test that runs first.
+
 ### Build
 
 - `build.zig` writes and installs `zjolt_config.h`, carrying the two options
@@ -323,3 +347,8 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 
 - The hosted workflow runs `-Ddebug_renderer=true` for both the Zig suite and
   the C ABI test. The option was declared and never built there.
+- `ci/run.sh --full` and the hosted workflow build `tests/consumer` on the
+  MSVC ABI, and the workflow also runs it with `-Ddouble_precision`. Resolving
+  the installed headers from a dependent build is the one code path neither
+  the in-repo suite nor the C smoke test walks, and it had been proved on one
+  Windows ABI and one configuration only.
