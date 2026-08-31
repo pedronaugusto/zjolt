@@ -20,7 +20,7 @@ system and no clock attached.
   production: a test compares the two by reflection, with nothing listed by
   hand. 13 kinds of deliberate drift are verified to fail it, including a
   field swap that leaves every offset in the struct unchanged, and
-  16 mutations for the other guards do the same, each naming the test that
+  17 mutations for the other guards do the same, each naming the test that
   has to catch it.
 - Jolt asserts where a library for a service would return, and several of those
   assertions sit on paths an ordinary caller reaches. Each one this ABI could
@@ -433,17 +433,20 @@ negative enumerator, an extern replaced by a Zig helper wearing the same name,
 and a module dropped from `src/c.zig`'s list — and asserts each is refused
 with a `zjolt ABI drift:` message.
 
-The same script mutates the other seven guards, since a guard nothing tests is
-a guard nobody has checked: the entry-point preamble that turns a call made
+The same script mutates every other guard, since a guard nothing tests is a
+guard nobody has checked: the entry-point preamble that turns a call made
 before `zjoltInit` into a result rather than a walk through an uninitialised
 allocator, the allocator seam, the callback error path that stashes a failure
 instead of unwinding across a Jolt callback, the analysis sweep that forces Zig
-to look at wrappers nothing calls, the coverage classifier, and the two guards
-over the documents — `ci/check-numbers.sh` and `ci/check-examples.sh`, which
-are mutated by editing a document rather than a source. Each of those declares
+to look at wrappers nothing calls, the coverage classifier, the host reference
+count behind `zjoltLiveHandleCount`, and the two guards over the documents —
+`ci/check-numbers.sh` and `ci/check-examples.sh`, which are mutated by editing
+a document rather than a source. The guards are listed rather than counted:
+`ci/check-numbers.sh` reads digits, so a number written in words is a number
+nothing checks. Each of those declares
 the signal that must appear, so a mutation that fails for an unrelated reason
 is reported as a wrong failure rather than counted as the guard doing its job.
-29 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
+30 mutations in all, none missed, and `ci/check-numbers.sh` fails the build if
 that count and this sentence drift apart. It runs under `ci/run.sh --full`.
 
 Its limit is honest: translate-c renders every C pointer as `[*c]T`, so pointee
@@ -782,9 +785,11 @@ stated blind spots is worse than none:
   as covered, and nothing here compares semantics.
 - **`BOUND` means the effect is reachable through the entry points its
   evidence names, not that the upstream symbol itself crosses the ABI.**
-  `Skeleton::CalculateParentJointIndices` is `BOUND` because
-  `zjoltSkeletonAddJoint` sets what it would compute, not because it is
-  callable.
+  `BodyInterface::ActivateBodiesInAABox` is `BOUND` because
+  `zjoltBodyActivateInBox` does the same thing under another name, not because
+  it is callable. `ci/check-numbers.sh` reads that sentence back against the
+  ledger, so an example whose row is deleted later fails the build rather than
+  teaching the rule with a line no file holds.
 - **The evidence is checked for existence, not for correctness.** A `BOUND` or
   `EXTENSION` line must name a symbol that really is in `ffi/*.h`, a `ZIG`
   line must point at a declaration that really is in `src/`, and `INTERNAL` is

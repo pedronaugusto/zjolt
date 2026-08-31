@@ -19,6 +19,9 @@
 #     have to move together.
 #   * Nothing here reads the DOCUMENT'S sense. A gated number can be correct
 #     and the sentence around it still wrong.
+#   * One claim gated here is not a count: the README's worked ledger example.
+#     Only that one sentence shape is recognised, and only the row's existence
+#     is checked -- never whether it is a good example of the rule.
 #
 # Usage: ci/check-numbers.sh
 
@@ -186,6 +189,39 @@ if [ "$abi_rows" != "$abi_options" ]; then
   fails=$((fails + 1))
 else
   printf '  %-44s %s%s%s\n' 'README ABI-changing table rows' "$DIM" "$abi_rows" "$OFF"
+fi
+
+# Not a number, and the only claim here that is not: the README's worked
+# ledger example, read back against the ledger it quotes. A verdict row is
+# deleted the day its name gains an entry point of its own, and the sentence
+# quoting that row then describes a line no file holds -- which is exactly how
+# the first example this section carried went wrong.
+ledger_example=$(tr '\n' ' ' < README.md |
+  grep -oE '`[A-Za-z0-9_]+::[A-Za-z0-9_]+` is `BOUND` because +`zjolt[A-Za-z0-9_]+`')
+if [ -z "$ledger_example" ]; then
+  printf '  %s%-44s no worked BOUND example in README.md%s\n' \
+    "$RED" 'README ledger example' "$OFF" >&2
+  fails=$((fails + 1))
+else
+  while IFS= read -r sentence; do
+    name=${sentence#*::}; name=${name%%\`*}
+    point=${sentence##*\`zjolt}; point=zjolt${point%\`}
+    if awk -F'\t' -v n="$name" -v p="$point" '
+         $2 == n && $3 == "BOUND" {
+           split($4, evidence, " ")
+           for (i in evidence) if (evidence[i] == p) found = 1
+         }
+         END { exit !found }' tools/verdicts_*.txt
+    then
+      printf '  %-44s %s%s%s\n' 'README ledger example' "$DIM" "$name" "$OFF"
+    else
+      printf '  %s%-44s %s is not a BOUND row naming %s%s\n' \
+        "$RED" 'README ledger example' "$name" "$point" "$OFF" >&2
+      fails=$((fails + 1))
+    fi
+  done <<LEDGER
+$ledger_example
+LEDGER
 fi
 
 if [ "$fails" -ne 0 ]; then

@@ -144,7 +144,7 @@ if [ $FULL -eq 1 ]; then
   # Mutation test for the ABI cross-check itself — see the script's own header
   # for why a check that guards everything else needs one. It rebuilds once per
   # mutation, so it belongs here rather than in the default run.
-  run 'guard mutations (29)' ci/check-abi-drift.sh
+  run 'guard mutations (30)' ci/check-abi-drift.sh
 
   #---------------------------------------------------------------------------
   section 'Tests — build configurations'
