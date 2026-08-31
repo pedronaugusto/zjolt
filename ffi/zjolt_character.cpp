@@ -210,7 +210,9 @@ const JPH::Character *Impl(const ZJoltRigidCharacter *character) {
 //===----------------------------------------------------------------------===//
 // CharacterContactListener
 //
-// Forwards Jolt's virtual callbacks to plain C function pointers. A field left NULL behaves exactly as Jolt's own default override: accept every contact, change nothing.
+// Forwards Jolt's virtual callbacks to plain C function pointers. A field left
+// NULL behaves exactly as Jolt's own default override: accept every contact,
+// change nothing.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltCharacterContactListener final : public JPH::CharacterContactListener {
@@ -374,8 +376,11 @@ struct ZJoltCharacterContactListener final : public JPH::CharacterContactListene
 //===----------------------------------------------------------------------===//
 // Character-vs-character collision
 //
-// The opaque handle is JPH::CharacterVsCharacterCollision itself (the interface, not a fixed implementation), so the built-in brute-force list and a host's own callbacks come out of Create as the same C type.
-// Add/Remove are declared here, virtual (not part of Jolt's own interface), so the two concrete types below can give them their own meaning without a cast.
+// The opaque handle is JPH::CharacterVsCharacterCollision itself (the
+// interface, not a fixed implementation), so the built-in brute-force list and
+// a host's own callbacks come out of Create as the same C type.
+// Add/Remove are declared here, virtual (not part of Jolt's own interface), so
+// the two concrete types below can give them their own meaning without a cast.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltCharacterVsCharacterCollision : public JPH::CharacterVsCharacterCollision {
@@ -418,8 +423,13 @@ struct ZJoltCharacterVsCharacterCollisionSimple final
 //===----------------------------------------------------------------------===//
 // A custom character-vs-character broad phase
 //
-// ZJoltCharacterVsCharacterCollisionCustom asks the host's callback for candidates via a VISITOR, then runs exactly the narrow-phase test CharacterVsCharacterCollisionSimple runs against each accepted one — deciding nothing about HOW two characters collide, only WHO is offered.
-// The `ZJoltCharacterVsCharacterVisitFn` trampoline's context travels through `visit_user`, a stack struct built fresh per CollideCharacter/CastCharacter call.
+// ZJoltCharacterVsCharacterCollisionCustom asks the host's callback for
+// candidates via a VISITOR, then runs exactly the narrow-phase test
+// CharacterVsCharacterCollisionSimple runs against each accepted one — deciding
+// nothing about HOW two characters collide, only WHO is offered.
+// The `ZJoltCharacterVsCharacterVisitFn` trampoline's context travels through
+// `visit_user`, a stack struct built fresh per CollideCharacter/CastCharacter
+// call.
 //===----------------------------------------------------------------------===//
 
 namespace {

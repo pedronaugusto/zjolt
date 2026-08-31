@@ -10,7 +10,8 @@
 //
 // The container around the serialised payload is the one
 // zjolt_shape.cpp/zjolt_state.cpp write, field for field, with its own
-// magic tag — deliberately different, so a shape buffer handed to a scene restore is refused on the tag rather than parsed.
+// magic tag — deliberately different, so a shape buffer handed to a scene
+// restore is refused on the tag rather than parsed.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -28,7 +29,10 @@
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// A scene is Jolt-constructed and reference-counted, so it is a reinterpret_cast tag onto JPH::PhysicsScene exactly as ZJoltShape is onto JPH::Shape (zjolt_internal.h) — never completed or dereferenced as the tag, every use going back through the Jolt type first.
+// A scene is Jolt-constructed and reference-counted, so it is a
+// reinterpret_cast tag onto JPH::PhysicsScene exactly as ZJoltShape is onto
+// JPH::Shape (zjolt_internal.h) — never completed or dereferenced as the tag,
+// every use going back through the Jolt type first.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -138,7 +142,9 @@ void ReadSoftBodyCreationSettings(const JPH::SoftBodyCreationSettings &settings,
 //===----------------------------------------------------------------------===//
 // The preconditions Jolt leaves to an assert
 //
-// Reachable only through zjoltSceneRestore — zjoltSceneAdd* calls refuse the same things at the door — since a buffer is input, and input is where a level cooked by an older tool arrives from.
+// Reachable only through zjoltSceneRestore — zjoltSceneAdd* calls refuse the
+// same things at the door — since a buffer is input, and input is where a level
+// cooked by an older tool arrives from.
 //===----------------------------------------------------------------------===//
 
 /// What SaveBinaryState dereferences: a body's shape
@@ -209,7 +215,9 @@ ZJoltResult ValidateInstantiable(const JPH::PhysicsScene &scene) {
 //===----------------------------------------------------------------------===//
 // The container
 //
-// The shared framing in zjolt_internal.h, with this subsystem's own magic tag: a scene buffer handed to zjoltShapeRestore, or the reverse, is refused on the tag rather than parsed into something plausible and wrong.
+// The shared framing in zjolt_internal.h, with this subsystem's own magic tag:
+// a scene buffer handed to zjoltShapeRestore, or the reverse, is refused on the
+// tag rather than parsed into something plausible and wrong.
 //===----------------------------------------------------------------------===//
 
 /// The shared container from zjolt_internal.h, with this subsystem's own tag
@@ -591,7 +599,12 @@ ZJoltResult zjoltSceneRestore(const void *data, size_t size,
 //===----------------------------------------------------------------------===//
 // The stream form
 //
-// Jolt's own payload behind the twelve-byte header zjolt::WriteStreamHeader/ReadStreamHeader write, not zjoltSceneSave's 32-byte container (@see ZJoltStream in zjolt_core.h). Restoring a shape here goes through the same Shape::sRestoreFromBinaryState path as zjoltShapeRestoreStream, so the same reduced margin against a corrupted (not adversarial) stream applies — @see the note above zjoltShapeSaveStream.
+// Jolt's own payload behind the twelve-byte header
+// zjolt::WriteStreamHeader/ReadStreamHeader write, not zjoltSceneSave's 32-byte
+// container (@see ZJoltStream in zjolt_core.h). Restoring a shape here goes
+// through the same Shape::sRestoreFromBinaryState path as
+// zjoltShapeRestoreStream, so the same reduced margin against a corrupted (not
+// adversarial) stream applies — @see the note above zjoltShapeSaveStream.
 //===----------------------------------------------------------------------===//
 
 namespace {

@@ -276,8 +276,13 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Combine callbacks
 //
-// Jolt's hook is a bare function pointer with NO user parameter and nothing that leads back to the physics system, so a shared trampoline could not tell which system called it — only WHICH pointer was installed distinguishes two systems.
-// So: a fixed table of slots and one trampoline per slot; a system takes a slot on first install and gives it back when destroyed (a global shared pair would not bind a per-system setting).
+// Jolt's hook is a bare function pointer with NO user parameter and nothing
+// that leads back to the physics system, so a shared trampoline could not tell
+// which system called it — only WHICH pointer was installed distinguishes two
+// systems.
+// So: a fixed table of slots and one trampoline per slot; a system takes a slot
+// on first install and gives it back when destroyed (a global shared pair would
+// not bind a per-system setting).
 //===----------------------------------------------------------------------===//
 
 struct CombineSlot {
@@ -490,8 +495,14 @@ const char *WhySettingsRefused(const ZJoltPhysicsSettings &settings) {
 //===----------------------------------------------------------------------===//
 // The step's scratch allocator
 //
-// PhysicsSystem::Update takes a plain JPH::TempAllocator&, so any of the three kinds below can back it interchangeably.
-// They do NOT share introspection uniformly: TempAllocatorImpl has GetSize/GetUsage/CanAllocate natively, TempAllocatorImplWithMallocFallback keeps them private with no accessor. ZJoltTempAllocatorAdapter reimplements that class's strategy (same fixed block, malloc fallback, LIFO assumption) rather than composing it, since reimplementing is what makes the introspection possible.
+// PhysicsSystem::Update takes a plain JPH::TempAllocator&, so any of the three
+// kinds below can back it interchangeably.
+// They do NOT share introspection uniformly: TempAllocatorImpl has
+// GetSize/GetUsage/CanAllocate natively, TempAllocatorImplWithMallocFallback
+// keeps them private with no accessor. ZJoltTempAllocatorAdapter reimplements
+// that class's strategy (same fixed block, malloc fallback, LIFO assumption)
+// rather than composing it, since reimplementing is what makes the
+// introspection possible.
 //===----------------------------------------------------------------------===//
 
 /// The default: a fixed block, falling back to malloc once it is exhausted,

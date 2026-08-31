@@ -431,7 +431,11 @@ ZJoltResult zjoltReflectGetAttribute(const ZJoltRtti *rtti, uint32_t index,
 //===----------------------------------------------------------------------===//
 // Typed member access
 //
-// One macro instantiation per scalar kind: both directions refuse (ZJOLT_RESULT_INVALID_ARGUMENT) unless `attr->primitive_type` already names this kind, so a stale or mismatched ZJoltReflectAttribute cannot write past the member it names. Read through zjolt::RawEnum, since a host-supplied struct's enum field can hold any integer.
+// One macro instantiation per scalar kind: both directions refuse
+// (ZJOLT_RESULT_INVALID_ARGUMENT) unless `attr->primitive_type` already names
+// this kind, so a stale or mismatched ZJoltReflectAttribute cannot write past
+// the member it names. Read through zjolt::RawEnum, since a host-supplied
+// struct's enum field can hold any integer.
 //===----------------------------------------------------------------------===//
 
 #define ZJOLT_REFLECT_SCALAR_ACCESSOR(Suffix, CType, PrimType)                                \

@@ -34,7 +34,10 @@ namespace {
 //===----------------------------------------------------------------------===//
 // The sink
 //
-// DebugRendererSimple already turns Jolt's batched-geometry machinery into calls to DrawLine / DrawTriangle / DrawText3D (see its class comment) — overriding those three is the entire subclass; nothing here mirrors Jolt's vtable.
+// DebugRendererSimple already turns Jolt's batched-geometry machinery into
+// calls to DrawLine / DrawTriangle / DrawText3D (see its class comment) —
+// overriding those three is the entire subclass; nothing here mirrors Jolt's
+// vtable.
 //===----------------------------------------------------------------------===//
 
 struct RecordedLine {
@@ -315,7 +318,8 @@ class ZJoltDebugRendererImpl final : public JPH::DebugRendererSimple {
 // ZJoltDebugRenderer is reinterpreted as JPH::DebugRenderer, not the
 // concrete Impl: a handle may be zjoltDebugRecorderAsRenderer's view of an
 // unrelated DebugRendererRecorder (both share DebugRenderer's base address).
-// ToImpl narrows to the concrete sink ONLY where needed (Clear, SetCameraPosition, GetX read-backs) — never otherwise.
+// ToImpl narrows to the concrete sink ONLY where needed (Clear,
+// SetCameraPosition, GetX read-backs) — never otherwise.
 //===----------------------------------------------------------------------===//
 
 inline JPH::DebugRenderer *ToBase(ZJoltDebugRenderer *renderer) {
@@ -381,7 +385,13 @@ class ZJoltBodyDrawFilterImpl final : public JPH::BodyDrawFilter {
 //===----------------------------------------------------------------------===//
 // Recording
 //
-// Captured into a flat, growable buffer rather than Jolt's StreamInWrapper/StreamOutWrapper over std::istream/std::ostream, for the same reason zjolt_internal.h's CountingStreamOut/ConstStreamIn exist. A recording's final size is not known up front, so unlike a shape save this cannot be two-pass count-then-write: it appends every write and hands the accumulated bytes to the same container-framing helpers when a host finally asks for them.
+// Captured into a flat, growable buffer rather than Jolt's
+// StreamInWrapper/StreamOutWrapper over std::istream/std::ostream, for the same
+// reason zjolt_internal.h's CountingStreamOut/ConstStreamIn exist. A
+// recording's final size is not known up front, so unlike a shape save this
+// cannot be two-pass count-then-write: it appends every write and hands the
+// accumulated bytes to the same container-framing helpers when a host finally
+// asks for them.
 //===----------------------------------------------------------------------===//
 
 class GrowingStreamOut final : public JPH::StreamOut {
@@ -620,7 +630,11 @@ ZJoltResult zjoltDebugRendererGetTexts(const ZJoltDebugRenderer *renderer,
 //===----------------------------------------------------------------------===//
 // Host-issued primitives
 //
-// Each forwards straight into the matching JPH::DebugRenderer method on `ToBase(renderer)` — DrawLine/DrawTriangle dispatch through the vtable into whichever concrete renderer it actually is; the rest are DebugRenderer's own non-virtual helpers, decomposing into those two exactly as for a C++ caller holding the same pointer.
+// Each forwards straight into the matching JPH::DebugRenderer method on
+// `ToBase(renderer)` — DrawLine/DrawTriangle dispatch through the vtable into
+// whichever concrete renderer it actually is; the rest are DebugRenderer's own
+// non-virtual helpers, decomposing into those two exactly as for a C++ caller
+// holding the same pointer.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltDebugRendererDrawLine(ZJoltDebugRenderer *renderer,

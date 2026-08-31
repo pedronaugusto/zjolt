@@ -20,7 +20,8 @@ extern "C" {
 //===----------------------------------------------------------------------===//
 // Collision layers
 //
-// Jolt's three broad-phase questions cross as plain function-pointer tables, keeping C++ vtable layout out of the ABI.
+// Jolt's three broad-phase questions cross as plain function-pointer tables,
+// keeping C++ vtable layout out of the ABI.
 // Copied by value at creation; `user` must outlive the system.
 //===----------------------------------------------------------------------===//
 
@@ -173,12 +174,17 @@ typedef struct ZJoltBodyActivationListener {
 //===----------------------------------------------------------------------===//
 // The step's scratch allocator
 //
-// Jolt asks for a TempAllocator at every step. This library's default is a fixed block (temp_allocator_size)
-// falling back to malloc; supply ZJoltTempAllocator for a frame arena or a hard ceiling instead.
+// Jolt asks for a TempAllocator at every step. This library's default is a
+// fixed block (temp_allocator_size)
+// falling back to malloc; supply ZJoltTempAllocator for a frame arena or a hard
+// ceiling instead.
 //
-// Two places take one, mirroring Jolt: ZJoltPhysicsSystemDesc::temp_allocator sets the system's own, and
-// zjoltPhysicsSystemStep takes one for that step alone. NULL there means the system's; a non-NULL one is
-// borrowed, not adopted, and does not appear in zjoltPhysicsSystemGetTempAllocatorStats.
+// Two places take one, mirroring Jolt: ZJoltPhysicsSystemDesc::temp_allocator
+// sets the system's own, and
+// zjoltPhysicsSystemStep takes one for that step alone. NULL there means the
+// system's; a non-NULL one is
+// borrowed, not adopted, and does not appear in
+// zjoltPhysicsSystemGetTempAllocatorStats.
 //===----------------------------------------------------------------------===//
 
 typedef enum ZJoltTempAllocatorKind {
@@ -274,8 +280,10 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemCreate(
 //===----------------------------------------------------------------------===//
 // Reading back what create was given
 //
-// The three tables above are copied in at zjoltPhysicsSystemCreate; Jolt never hands them back, so a host that
-// kept no copy of its own had no way to ask again. All-zero if `system` is NULL.
+// The three tables above are copied in at zjoltPhysicsSystemCreate; Jolt never
+// hands them back, so a host that
+// kept no copy of its own had no way to ask again. All-zero if `system` is
+// NULL.
 //===----------------------------------------------------------------------===//
 
 ZJOLT_API void zjoltPhysicsSystemGetBroadPhaseLayerInterface(
@@ -347,8 +355,10 @@ ZJOLT_API void zjoltPhysicsSystemGetSoftBodyContactListener(
 //===----------------------------------------------------------------------===//
 // Simulation shape filter
 //
-// PhysicsSystem::SetSimShapeFilter is consulted by the step itself, on Jolt's job threads, to decide whether two
-// shapes may collide — distinct from ZJoltShapeFilter in zjolt_query.h, which only applies to an explicit query.
+// PhysicsSystem::SetSimShapeFilter is consulted by the step itself, on Jolt's
+// job threads, to decide whether two
+// shapes may collide — distinct from ZJoltShapeFilter in zjolt_query.h, which
+// only applies to an explicit query.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltSimShapeFilter {
@@ -468,13 +478,19 @@ ZJOLT_API void zjoltSimCollideDefault(
 //===----------------------------------------------------------------------===//
 // The collector's early out -- how a ZJoltSimCollideFn narrows the search
 //
-// Every collector carries one float, and Jolt's collision routines read it to skip work that cannot beat
-// what is already collected. For the collide-shape collector a ZJoltSimCollideFn is given, that float is
-// MINUS the penetration depth: smaller is deeper and better, FLT_MAX accepts anything, and -FLT_MAX means
-// nothing can improve on what is held (JPH::CollisionCollectorTraitsCollideShape).
+// Every collector carries one float, and Jolt's collision routines read it to
+// skip work that cannot beat
+// what is already collected. For the collide-shape collector a
+// ZJoltSimCollideFn is given, that float is
+// MINUS the penetration depth: smaller is deeper and better, FLT_MAX accepts
+// anything, and -FLT_MAX means
+// nothing can improve on what is held
+// (JPH::CollisionCollectorTraitsCollideShape).
 //
-// Seeding it before zjoltSimCollideDefault is how a hook says "I already have a contact this deep" and has
-// Jolt's own pass skip everything shallower. zjoltSimCollideAddHit does not move it: a collector decides
+// Seeding it before zjoltSimCollideDefault is how a hook says "I already have a
+// contact this deep" and has
+// Jolt's own pass skip everything shallower. zjoltSimCollideAddHit does not
+// move it: a collector decides
 // for itself what a hit is worth, and the ones Jolt installs here already do.
 //===----------------------------------------------------------------------===//
 
@@ -574,8 +590,10 @@ ZJOLT_API bool zjoltPhysicsSystemWereBodiesInContact(
 //===----------------------------------------------------------------------===//
 // The unlocked path
 //
-// Every zjoltBody* accessor locks unless it is a *Locked one, wrong inside a step where a listener already holds
-// the relevant locks. This is the unlocked way to get a ZJoltBody* for that case — "use with great care".
+// Every zjoltBody* accessor locks unless it is a *Locked one, wrong inside a
+// step where a listener already holds
+// the relevant locks. This is the unlocked way to get a ZJoltBody* for that
+// case — "use with great care".
 //===----------------------------------------------------------------------===//
 
 /// The body named by `body`, with NO lock taken — @see the section comment
@@ -598,8 +616,10 @@ ZJOLT_API void zjoltPhysicsSystemGetActiveBodiesUnsafe(
 //===----------------------------------------------------------------------===//
 // Simulation settings
 //
-// Jolt's PhysicsSettings verbatim, one flat struct with no per-field setter (several fields interact). Takes effect
-// from the next step; not saved by zjoltPhysicsSystemSaveState (configuration, not state).
+// Jolt's PhysicsSettings verbatim, one flat struct with no per-field setter
+// (several fields interact). Takes effect
+// from the next step; not saved by zjoltPhysicsSystemSaveState (configuration,
+// not state).
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltPhysicsSettings {
@@ -721,8 +741,10 @@ ZJOLT_API ZJoltResult zjoltPhysicsSystemSetSettings(
 //===----------------------------------------------------------------------===//
 // Combine callbacks
 //
-// What friction/restitution a contact gets when bodies disagree (Jolt's defaults: sqrt(f1*f2), max(r1,r2)). Run on
-// job threads during a step, once per contact — re-entrant; nothing may unwind out of one.
+// What friction/restitution a contact gets when bodies disagree (Jolt's
+// defaults: sqrt(f1*f2), max(r1,r2)). Run on
+// job threads during a step, once per contact — re-entrant; nothing may unwind
+// out of one.
 //===----------------------------------------------------------------------===//
 
 /// The pair being combined, and the two values to combine.
@@ -773,8 +795,10 @@ ZJOLT_API void zjoltPhysicsSystemGetCombineRestitution(
 //===----------------------------------------------------------------------===//
 // Step listeners
 //
-// Called once per collision step, before collision detection, with every body/constraint mutex held: read/write
-// bodies, but do not add or remove them. Nothing may unwind out of one, same as ZJoltCombineFn.
+// Called once per collision step, before collision detection, with every
+// body/constraint mutex held: read/write
+// bodies, but do not add or remove them. Nothing may unwind out of one, same as
+// ZJoltCombineFn.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltStepListenerContext {

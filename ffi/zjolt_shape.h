@@ -291,7 +291,8 @@ ZJOLT_API ZJoltResult zjoltShapeGetIntersectingSubShapes(
 //===----------------------------------------------------------------------===//
 // Mutating a compound shape
 //
-// Not thread safe against a query, a step, or each other; modify under zjoltBodyLockWrite.
+// Not thread safe against a query, a step, or each other; modify under
+// zjoltBodyLockWrite.
 // Invalidates every sub-shape id; call zjoltBodyNotifyShapeChanged afterward.
 //===----------------------------------------------------------------------===//
 

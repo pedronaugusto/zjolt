@@ -38,7 +38,9 @@
 // Handle mapping
 //
 // Two more of the incomplete tags from zjolt_internal.h, converted
-// exactly as ZJoltShape is. Live here (not zjolt_internal.h) since only this subsystem introduces or converts them — the "one conversion, one place" rule is about a single definition, not which file it sits in.
+// exactly as ZJoltShape is. Live here (not zjolt_internal.h) since only this
+// subsystem introduces or converts them — the "one conversion, one place" rule
+// is about a single definition, not which file it sits in.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -79,7 +81,9 @@ namespace {
 // Scalar and vector validation
 //
 // A NaN reaching Jolt does not abort; it spreads. Every float a
-// descriptor carries is checked for finiteness before use — otherwise the failure surfaces as a body that has vanished, several frames later, in a different subsystem.
+// descriptor carries is checked for finiteness before use — otherwise the
+// failure surfaces as a body that has vanished, several frames later, in a
+// different subsystem.
 //===----------------------------------------------------------------------===//
 
 bool IsFinite(float v) { return std::isfinite(v); }
@@ -135,8 +139,11 @@ ZJoltResult CheckPerpendicular(const ZJoltVec3 &a, const ZJoltVec3 &b,
 //===----------------------------------------------------------------------===//
 // Enumeration conversion
 //
-// A C caller can pass any integer for an enum parameter, so every one refuses an unknown value rather than falling through to a silently wrong default.
-// Callers take int32_t, not the enum, and convert via zjolt::RawEnum (zjolt_internal.h) — ToC* converts what zjolt itself computed and needs none of this.
+// A C caller can pass any integer for an enum parameter, so every one refuses
+// an unknown value rather than falling through to a silently wrong default.
+// Callers take int32_t, not the enum, and convert via zjolt::RawEnum
+// (zjolt_internal.h) — ToC* converts what zjolt itself computed and needs none
+// of this.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult ToJoltSpace(int32_t space, JPH::EConstraintSpace *out) {
@@ -595,8 +602,10 @@ ZJoltResult CheckAuxiliary(const ZJoltConstraint *auxiliary,
 //===----------------------------------------------------------------------===//
 // Custom constraints
 //
-// ZJoltCustomConstraint forwards every solver virtual to a host's function pointers, once per virtual rather than once per Jacobian operation.
-// What crosses is ZJoltSolverBodyPair, a POD snapshot built from the live bodies before the callback and written back after.
+// ZJoltCustomConstraint forwards every solver virtual to a host's function
+// pointers, once per virtual rather than once per Jacobian operation.
+// What crosses is ZJoltSolverBodyPair, a POD snapshot built from the live
+// bodies before the callback and written back after.
 //===----------------------------------------------------------------------===//
 
 /// A settings object with nowhere to round-trip a host's callbacks or user
@@ -789,7 +798,8 @@ class ZJoltCustomConstraint final : public JPH::TwoBodyConstraint {
 // Narrowing, as macros
 //
 // Both have to return from the CALLER, which a function cannot do, and
-// between them open nearly every entry point below — a per-kind check that can be half-written is one that eventually will be.
+// between them open nearly every entry point below — a per-kind check that can
+// be half-written is one that eventually will be.
 //===----------------------------------------------------------------------===//
 
 /// Refuses a NULL handle and a handle of the wrong kind in one step, and binds

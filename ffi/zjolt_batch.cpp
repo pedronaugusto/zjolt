@@ -21,7 +21,10 @@
 //===----------------------------------------------------------------------===//
 // The staged batch
 //
-// Global namespace, since the C header names it as an opaque handle and the tag has to match. Owns the id array on purpose: Jolt's AddState holds POINTERS INTO the array it was given, so the array must stay put between prepare and finalize — owning a copy here lets the caller's array be a temporary.
+// Global namespace, since the C header names it as an opaque handle and the tag
+// has to match. Owns the id array on purpose: Jolt's AddState holds POINTERS
+// INTO the array it was given, so the array must stay put between prepare and
+// finalize — owning a copy here lets the caller's array be a temporary.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltBodyAddBatch {

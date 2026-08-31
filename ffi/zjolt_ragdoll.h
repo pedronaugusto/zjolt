@@ -483,8 +483,10 @@ ZJOLT_API uint32_t zjoltRagdollSettingsGetRefCount(
 //===----------------------------------------------------------------------===//
 // Jolt's own object stream
 //
-// RagdollSettings is one of Jolt's reflective-object-stream types, for editor authoring — @see zjoltSceneSaveObjectStream.
-// A part's SHAPE does not survive the round trip; re-attach after loading. ZJOLT_RESULT_UNSUPPORTED without -Dobject_stream=true.
+// RagdollSettings is one of Jolt's reflective-object-stream types, for editor
+// authoring — @see zjoltSceneSaveObjectStream.
+// A part's SHAPE does not survive the round trip; re-attach after loading.
+// ZJOLT_RESULT_UNSUPPORTED without -Dobject_stream=true.
 //===----------------------------------------------------------------------===//
 
 /// Writes `settings` through `stream` in Jolt's own object-stream format.

@@ -18,7 +18,8 @@ extern "C" {
 // The support-function seam
 //
 // GJK and EPA work against any convex object answering "the point of me
-// furthest in this direction" — a callback standing in for a C++ host's GetSupport(Vec3) method.
+// furthest in this direction" — a callback standing in for a C++ host's
+// GetSupport(Vec3) method.
 //===----------------------------------------------------------------------===//
 
 /// A convex object, given by the support point it returns for a direction.
@@ -74,7 +75,8 @@ ZJOLT_API void zjoltConvexSupportAdapterDestroy(ZJoltConvexSupportAdapter *adapt
 //===----------------------------------------------------------------------===//
 // GJK -- Jolt/Geometry/GJKClosestPoint.h
 //
-// A `ZJoltGJK` is JPH::GJKClosestPoint itself: cheap to create, and required across zjoltGJKGetClosestPoints
+// A `ZJoltGJK` is JPH::GJKClosestPoint itself: cheap to create, and required
+// across zjoltGJKGetClosestPoints
 // then zjoltGJKGetClosestPointsSimplex, so it outlives any single call.
 //===----------------------------------------------------------------------===//
 
@@ -147,8 +149,10 @@ ZJOLT_API ZJoltResult zjoltGJKCastShape(
 //===----------------------------------------------------------------------===//
 // EPA -- Jolt/Geometry/EPAPenetrationDepth.h
 //
-// `GetPenetrationDepth` is the headline: how deep two convex shapes overlap, and along which axis. The two-step
-// form shares a `ZJoltEPA`'s internal GJK simplex between calls, like `ZJoltGJK` does.
+// `GetPenetrationDepth` is the headline: how deep two convex shapes overlap,
+// and along which axis. The two-step
+// form shares a `ZJoltEPA`'s internal GJK simplex between calls, like
+// `ZJoltGJK` does.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltEPA ZJoltEPA;
@@ -286,8 +290,10 @@ ZJOLT_API ZJoltResult zjoltEPATriangleGetNextEdge(const ZJoltEPATriangle *triang
 //===----------------------------------------------------------------------===//
 // Convex hull building -- Jolt/Geometry/ConvexHullBuilder.h
 //
-// Offline construction: given a point cloud, the minimal hull that contains it. Faces are a count plus an indexed
-// getter, not Jolt's own `Face *`, which the builder owns and frees out from under a caller.
+// Offline construction: given a point cloud, the minimal hull that contains it.
+// Faces are a count plus an indexed
+// getter, not Jolt's own `Face *`, which the builder owns and frees out from
+// under a caller.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltConvexHullBuilder ZJoltConvexHullBuilder;
@@ -388,7 +394,8 @@ ZJOLT_API ZJoltResult zjoltConvexHullBuilder2DInitialize(
 //===----------------------------------------------------------------------===//
 // Polygon clipping -- Jolt/Geometry/ClipPoly.h
 //
-// Free functions over vertex arrays. Unlike Jolt's own growing container, these take a fixed output buffer and
+// Free functions over vertex arrays. Unlike Jolt's own growing container, these
+// take a fixed output buffer and
 // report ZJOLT_RESULT_BUFFER_TOO_SMALL (true count still written) if short.
 //===----------------------------------------------------------------------===//
 

@@ -6,7 +6,9 @@
 # only statement of any of them:
 #
 #   1. At most MAX_DECL lines directly above one declaration, MAX_HEADER for
-#      the block at the top of a file or under a //===---===// banner.
+#      the block at the top of a file or under a banner -- measured in
+#      CHARACTERS at WIDTH columns, not in newlines. A budget counted in
+#      newlines is defeated by not wrapping, and a 303-character line had.
 #   2. No narrative register: the first person, an appeal to a former state,
 #      and the phrases that introduce an aside rather than a fact.
 #   3. Nothing that dates itself -- to a day, a machine, or one run of
@@ -32,6 +34,7 @@ else RED=; GREEN=; OFF=; fi
 
 MAX_DECL=6      # comment lines directly above one declaration
 MAX_HEADER=14   # the block at the top of a file
+WIDTH=80        # the column width both budgets are expressed in
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 REGISTER='\bwe\b|\bour\b|\bus\b|\bnote that\b|\bworth (stating|noting|saying)\b|\bused to be\b|\bthey used to\b|\bit used to\b|\bthe reason (is|it)\b|\bwhich is why\b|\bthat is why\b|\bturns out\b|\bin practice this\b|\bdo not be\b|\byou might (think|expect)\b|\bit is tempting\b'
@@ -59,23 +62,29 @@ done
 
 for f in ffi/*.h ffi/*.cpp src/*.zig src/c/*.zig; do
   [ -f "$f" ] || continue
-  awk -v F="$f" -v MD="$MAX_DECL" -v MH="$MAX_HEADER" '
-    BEGIN { run = 0; start = 0; first = 1 }
+  awk -v F="$f" -v MD="$MAX_DECL" -v MH="$MAX_HEADER" -v W="$WIDTH" '
+    # Characters, not bytes. A UTF-8 continuation byte is not a column, and an
+    # em dash would otherwise cost three of them.
+    function width(line,   t) { t = line; gsub(/[\200-\277]/, "", t); return length(t) }
+    BEGIN { run = 0; chars = 0; start = 0; first = 1 }
     /^[[:space:]]*(\/\/|\/\/\/|\/\/!)/ {
       if (run == 0) { start = NR; banner = 0 }
-      if ($0 ~ /^\/\/===/) banner = 1
-      run++; next
+      if ($0 ~ /^[[:space:]]*\/\/[-=][-=][-=]/) banner = 1
+      run++; chars += width($0); next
     }
     {
       if (run > 0) {
         # A //===---===// banner heads a whole section, not one declaration, and
-        # is where conventions covering everything below it belong.
+        # is where conventions covering everything below it belong. It is
+        # indented inside a Zig struct, so the match cannot be anchored to
+        # column 0.
         cap = ((first && start <= 3) || banner) ? MH : MD
-        if (run > cap) printf "%s:%d: %d comment lines in one block (max %d)\n", F, start, run, cap
-        first = 0; run = 0
+        if (chars > cap * W)
+          printf "%s:%d: %d comment characters in one block (max %d, %d lines wide)\n", F, start, chars, cap * W, cap
+        first = 0; run = 0; chars = 0
       }
     }
-    END { if (run > MD) printf "%s:%d: %d trailing comment lines\n", F, start, run }
+    END { if (chars > MD * W) printf "%s:%d: %d trailing comment characters\n", F, start, chars }
   ' "$f" >> "$work/long" || { echo "check-comments: awk failed on $f" >&2; exit 2; }
 
   voice '//|///|//!' "$f"

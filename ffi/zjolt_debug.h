@@ -91,8 +91,10 @@ ZJOLT_API ZJoltResult zjoltDebugRendererSetCameraPosition(
 //===----------------------------------------------------------------------===//
 // Read-back
 //
-// Two-call protocol: array NULL reports the count in `*out_count`; a short `capacity` is
-// ZJOLT_RESULT_BUFFER_TOO_SMALL with the true count written. Can grow between calls.
+// Two-call protocol: array NULL reports the count in `*out_count`; a short
+// `capacity` is
+// ZJOLT_RESULT_BUFFER_TOO_SMALL with the true count written. Can grow between
+// calls.
 //===----------------------------------------------------------------------===//
 
 ZJOLT_API ZJoltResult zjoltDebugRendererGetLines(const ZJoltDebugRenderer *renderer,
@@ -112,8 +114,10 @@ ZJOLT_API ZJoltResult zjoltDebugRendererGetTexts(const ZJoltDebugRenderer *rende
 //===----------------------------------------------------------------------===//
 // Host-issued primitives
 //
-// Direct forwards to a DebugRenderer method, writing into `renderer`'s buffers alongside whatever Jolt drew.
-// Also accepts the recorder view zjoltDebugRecorderAsRenderer returns, writing into a recorded stream instead.
+// Direct forwards to a DebugRenderer method, writing into `renderer`'s buffers
+// alongside whatever Jolt drew.
+// Also accepts the recorder view zjoltDebugRecorderAsRenderer returns, writing
+// into a recorded stream instead.
 //===----------------------------------------------------------------------===//
 
 /// Mirrors JPH::DebugRenderer::ECastShadow.
@@ -453,8 +457,10 @@ ZJOLT_API ZJoltResult zjoltShapeDrawShrunkShape(
 //===----------------------------------------------------------------------===//
 // Record and playback
 //
-// A ZJoltDebugRecorder serialises every draw call into a stream instead of buffering the current frame, so a
-// session replays after the fact. zjoltDebugRecorderGetData uses zjoltShapeSave's container framing; not adversarial-safe.
+// A ZJoltDebugRecorder serialises every draw call into a stream instead of
+// buffering the current frame, so a
+// session replays after the fact. zjoltDebugRecorderGetData uses
+// zjoltShapeSave's container framing; not adversarial-safe.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltDebugRecorder ZJoltDebugRecorder;
@@ -525,8 +531,10 @@ ZJOLT_API ZJoltResult zjoltDebugPlaybackDrawFrame(ZJoltDebugPlayback *playback,
 //===----------------------------------------------------------------------===//
 // Soft bodies
 //
-// Separate from zjoltPhysicsSystemDrawBodies: Jolt draws a soft body's state through SoftBodyMotionProperties,
-// not the shape. ZJOLT_RESULT_UNSUPPORTED without -Ddebug_renderer=true, INVALID_ARGUMENT for a non-soft body.
+// Separate from zjoltPhysicsSystemDrawBodies: Jolt draws a soft body's state
+// through SoftBodyMotionProperties,
+// not the shape. ZJOLT_RESULT_UNSUPPORTED without -Ddebug_renderer=true,
+// INVALID_ARGUMENT for a non-soft body.
 //===----------------------------------------------------------------------===//
 
 /// How constraints are coloured. Mirrors JPH::ESoftBodyConstraintColor.

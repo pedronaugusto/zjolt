@@ -10,7 +10,8 @@
 //
 // Jolt's queues retain buffers bound to them until execution finishes
 // (`ComputeQueueCPU::mUsedBuffers` — reading a freed buffer mid-frame is
-// UB), enforced by the bridge queue. Hair needs no bridge: JPH::Hair is an ordinary C++ object working through a ComputeSystem.
+// UB), enforced by the bridge queue. Hair needs no bridge: JPH::Hair is an
+// ordinary C++ object working through a ComputeSystem.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -653,7 +654,10 @@ bool TableIsComplete(const ZJoltComputeInterface &iface) {
 //===----------------------------------------------------------------------===//
 // Groom validation
 //
-// Stands in for checks Jolt does not make: its own asserts fire in HairSettings::Init, several thousand vertices into a build that has already allocated, and in a build without asserts the same inputs divide by zero or index past an array.
+// Stands in for checks Jolt does not make: its own asserts fire in
+// HairSettings::Init, several thousand vertices into a build that has already
+// allocated, and in a build without asserts the same inputs divide by zero or
+// index past an array.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult ValidateGroom(const ZJoltHairDesc *desc, uint32_t material_count) {

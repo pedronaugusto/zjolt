@@ -2,7 +2,9 @@
 // zjolt — ragdolls.
 //
 // A few conversions are duplicated from zjolt_body.cpp/zjolt_internal.h
-// rather than shared, since this subsystem is scoped to add files and append registrations only — not to edit the existing translation units they would otherwise join.
+// rather than shared, since this subsystem is scoped to add files and append
+// registrations only — not to edit the existing translation units they would
+// otherwise join.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -22,8 +24,12 @@
 //===----------------------------------------------------------------------===//
 // Opaque handle mapping
 //
-// Three of the five are reinterpret_cast tags directly onto the Jolt type, like ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h. Skeleton/RagdollSettings are reference counted; SkeletonPose is a plain value type, allocated/freed like a job system.
-// The other two are not tags — see "The handle" and "The mapper handle" below for why.
+// Three of the five are reinterpret_cast tags directly onto the Jolt type, like
+// ZJoltShape/ZJoltPhysicsMaterial in zjolt_internal.h. Skeleton/RagdollSettings
+// are reference counted; SkeletonPose is a plain value type, allocated/freed
+// like a job system.
+// The other two are not tags — see "The handle" and "The mapper handle" below
+// for why.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -94,8 +100,12 @@ inline ZJoltConstraint *ToC(JPH::Constraint *constraint) {
 //===----------------------------------------------------------------------===//
 // The handle
 //
-// Not a tag like the others: releasing the last reference must take its bodies out of the broad phase first, needing the PhysicsSystem — `owner` holds it (`Ragdoll::mSystem` has no getter).
-// `refs` counts the HANDLE's references, not JPH::RefTarget's: two concurrent Release calls must resolve race-free, which RefTarget's own count cannot (`impl` pins Jolt's reference at one for the handle's lifetime).
+// Not a tag like the others: releasing the last reference must take its bodies
+// out of the broad phase first, needing the PhysicsSystem — `owner` holds it
+// (`Ragdoll::mSystem` has no getter).
+// `refs` counts the HANDLE's references, not JPH::RefTarget's: two concurrent
+// Release calls must resolve race-free, which RefTarget's own count cannot
+// (`impl` pins Jolt's reference at one for the handle's lifetime).
 //===----------------------------------------------------------------------===//
 
 struct ZJoltRagdoll {
@@ -111,7 +121,11 @@ struct ZJoltRagdoll {
 //===----------------------------------------------------------------------===//
 // The mapper handle
 //
-// Not a tag either, for a sharper reason: JPH::SkeletonMapper's Release ends in a GLOBAL `delete this` on a block zjolt::New took from the HOST allocator — heap corruption a test might not catch. So the count is the handle's; this file constructs/destroys the member directly and never AddRefs it, keeping Jolt's own count at zero.
+// Not a tag either, for a sharper reason: JPH::SkeletonMapper's Release ends in
+// a GLOBAL `delete this` on a block zjolt::New took from the HOST allocator —
+// heap corruption a test might not catch. So the count is the handle's; this
+// file constructs/destroys the member directly and never AddRefs it, keeping
+// Jolt's own count at zero.
 // NOT counted by zjoltLiveHandleCount, like ZJoltSkeletonPose.
 //===----------------------------------------------------------------------===//
 
@@ -1233,7 +1247,9 @@ uint32_t zjoltRagdollSettingsGetRefCount(const ZJoltRagdollSettings *settings) {
 //===----------------------------------------------------------------------===//
 // Jolt's own object stream
 //
-// Same feature as zjoltSceneSaveObjectStream/RestoreObjectStream (zjolt_scene.cpp), on RagdollSettings instead of PhysicsScene — see that file for what the two entry points do and do not check.
+// Same feature as zjoltSceneSaveObjectStream/RestoreObjectStream
+// (zjolt_scene.cpp), on RagdollSettings instead of PhysicsScene — see that file
+// for what the two entry points do and do not check.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltRagdollSettingsSaveObjectStream(

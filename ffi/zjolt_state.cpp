@@ -10,7 +10,9 @@
 // The same container zjoltShapeSave uses wraps Jolt's payload, plus a
 // body-set digest: Jolt's own reaction to a world that changed shape
 // underneath a restore is an abort with asserts on, so the container
-// records the digest and a restore compares it first. The stream forms keep only that one check (cheap without a resident blob) — see ZJoltStream in zjolt_core.h.
+// records the digest and a restore compares it first. The stream forms keep
+// only that one check (cheap without a resident blob) — see ZJoltStream in
+// zjolt_core.h.
 //===----------------------------------------------------------------------===//
 
 #include "zjolt_internal.h"
@@ -24,7 +26,10 @@ namespace {
 //===----------------------------------------------------------------------===//
 // The container
 //
-// The shared framing in zjolt_internal.h, with a magic tag deliberately different from the shape container's (zjolt_shape.cpp): a shape buffer handed to a state restore, or vice versa, must be refused on the tag rather than parsed.
+// The shared framing in zjolt_internal.h, with a magic tag deliberately
+// different from the shape container's (zjolt_shape.cpp): a shape buffer handed
+// to a state restore, or vice versa, must be refused on the tag rather than
+// parsed.
 //===----------------------------------------------------------------------===//
 
 /// The shared container from zjolt_internal.h, with this subsystem's own tag
@@ -223,7 +228,9 @@ uint32_t BodySetDigest(const JPH::PhysicsSystem &system, uint32_t *out_count) {
 // Per-body container
 //
 // The same shared framing, under a magic tag different from both the
-// whole-system container above and the shape container (zjolt_shape.cpp) — a buffer meant for one restore must be refused by the other, not parsed. Adds the body's motion type, which decides how many bytes Jolt reads.
+// whole-system container above and the shape container (zjolt_shape.cpp) — a
+// buffer meant for one restore must be refused by the other, not parsed. Adds
+// the body's motion type, which decides how many bytes Jolt reads.
 //===----------------------------------------------------------------------===//
 
 constexpr zjolt::ContainerFormat kBodyContainer = {
@@ -553,8 +560,12 @@ ZJoltResult zjoltPhysicsSystemRestoreBodyStateLocked(ZJoltPhysicsSystem *system,
 //===----------------------------------------------------------------------===//
 // The stream form
 //
-// Jolt's payload, unframed except for the twelve-byte header WriteStreamHeader/ReadStreamHeader always write — see ZJoltStream in zjolt_core.h for what that keeps and does not.
-// The whole-system pair also keeps the body-set digest `restore` checks: a few bytes computed from the system already in hand, not needing the payload addressable, so no reason to drop it with the rest of the container.
+// Jolt's payload, unframed except for the twelve-byte header
+// WriteStreamHeader/ReadStreamHeader always write — see ZJoltStream in
+// zjolt_core.h for what that keeps and does not.
+// The whole-system pair also keeps the body-set digest `restore` checks: a few
+// bytes computed from the system already in hand, not needing the payload
+// addressable, so no reason to drop it with the rest of the container.
 //===----------------------------------------------------------------------===//
 
 namespace {

@@ -118,7 +118,12 @@ struct FillBuffer {
 //===----------------------------------------------------------------------===//
 // zjoltTransformedShapeCollectTransformedShapes's collector
 //
-// Not a HitStream instantiation: a hit here IS a JPH::TransformedShape, reported as a fresh ZJoltTransformedShape handle — no "project the fields" step, since every field matters, and no separate sink, since a discarded handle (past `capacity`) would leak rather than simply going unused like FillBuffer's POD hits. Allocation happens here, gated on capacity, in one place.
+// Not a HitStream instantiation: a hit here IS a JPH::TransformedShape,
+// reported as a fresh ZJoltTransformedShape handle — no "project the fields"
+// step, since every field matters, and no separate sink, since a discarded
+// handle (past `capacity`) would leak rather than simply going unused like
+// FillBuffer's POD hits. Allocation happens here, gated on capacity, in one
+// place.
 //===----------------------------------------------------------------------===//
 
 class CollectShapesCollector final : public JPH::TransformedShapeCollector {

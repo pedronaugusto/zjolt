@@ -18,8 +18,10 @@ extern "C" {
 //===----------------------------------------------------------------------===//
 // A shape and its placement, with no body and no physics system
 //
-// The other half of zjolt_query.h: given a shape already in hand and a world transform, run the same query kinds
-// against it alone. Typical source: a broad-phase hit carried past its body lock, or a compound's child.
+// The other half of zjolt_query.h: given a shape already in hand and a world
+// transform, run the same query kinds
+// against it alone. Typical source: a broad-phase hit carried past its body
+// lock, or a compound's child.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJoltTransformedShape ZJoltTransformedShape;
@@ -99,8 +101,10 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeGetSupportingFace(
 //===----------------------------------------------------------------------===//
 // Decomposing a compound
 //
-// zjoltShapeGetSubShapeIDFromIndexInto composes a grandchild's id when the path is already known. This is the
-// other way in: hand Jolt a box, walk the tree, and report each LEAF overlapping it as its own placed handle.
+// zjoltShapeGetSubShapeIDFromIndexInto composes a grandchild's id when the path
+// is already known. This is the
+// other way in: hand Jolt a box, walk the tree, and report each LEAF
+// overlapping it as its own placed handle.
 //===----------------------------------------------------------------------===//
 
 /// Every leaf of `ts` whose world-space bounds overlap `box`, each as a fresh,
@@ -117,8 +121,10 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeCollectTransformedShapes(
 //===----------------------------------------------------------------------===//
 // Triangle read-back
 //
-// A second ZJoltShapeTrianglesContext-shaped type rather than reusing zjolt_shape.h's, avoiding a dependency
-// that header's own comment was written to avoid. @see zjoltShapeGetTrianglesNext: identical protocol.
+// A second ZJoltShapeTrianglesContext-shaped type rather than reusing
+// zjolt_shape.h's, avoiding a dependency
+// that header's own comment was written to avoid. @see
+// zjoltShapeGetTrianglesNext: identical protocol.
 //===----------------------------------------------------------------------===//
 
 typedef struct ZJOLT_ALIGN16 ZJoltTransformedShapeTrianglesContext {
@@ -144,8 +150,10 @@ ZJOLT_API ZJoltResult zjoltTransformedShapeGetTrianglesNext(
 //===----------------------------------------------------------------------===//
 // Queries against this one shape
 //
-// Same three forms as zjolt_query.h, minus the streaming *Each form: a resolved shape's result set is bounded by
-// its own leaf count, so the allocation-avoidance streaming exists for matters far less here.
+// Same three forms as zjolt_query.h, minus the streaming *Each form: a resolved
+// shape's result set is bounded by
+// its own leaf count, so the allocation-avoidance streaming exists for matters
+// far less here.
 //===----------------------------------------------------------------------===//
 
 /// @see zjoltCastRayClosest. `filter` may be NULL to accept every sub-shape.

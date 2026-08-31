@@ -27,7 +27,11 @@ namespace {
 //===----------------------------------------------------------------------===//
 // Per-thread error detail
 //
-// Jolt reports shape construction/deserialisation failures as strings; a flat result enum would throw them away, and an out-parameter on every constructor would make the common success path pay for the rare failure. Thread-local so a cook running on a worker cannot clobber the message another thread is about to read.
+// Jolt reports shape construction/deserialisation failures as strings; a flat
+// result enum would throw them away, and an out-parameter on every constructor
+// would make the common success path pay for the rare failure. Thread-local so
+// a cook running on a worker cannot clobber the message another thread is about
+// to read.
 //===----------------------------------------------------------------------===//
 
 constexpr size_t kErrorCapacity = 256;
@@ -47,7 +51,9 @@ void CopyMessage(const char *message) {
 //===----------------------------------------------------------------------===//
 // Allocator seam
 //
-// Jolt routes every allocation through five global function pointers; the host table is held here, and the five thunks below add the `user` argument Jolt's signatures have no room for.
+// Jolt routes every allocation through five global function pointers; the host
+// table is held here, and the five thunks below add the `user` argument Jolt's
+// signatures have no room for.
 //===----------------------------------------------------------------------===//
 
 ZJoltAllocator g_allocator = {};
@@ -131,7 +137,11 @@ void DestroySingleThreaded(JPH::JobSystem *impl) {
 //===----------------------------------------------------------------------===//
 // Host job system
 //
-// JobSystem::Job is `protected`, since Jolt expects only a JobSystem override to touch one. HostJobSystem below IS such a subclass; the free functions later (zjoltJobRun and friends) are not, and borrow the access through JobTypeAccess purely to name the type — every member they call through it (Execute, AddRef, Release) is itself public on Job.
+// JobSystem::Job is `protected`, since Jolt expects only a JobSystem override
+// to touch one. HostJobSystem below IS such a subclass; the free functions
+// later (zjoltJobRun and friends) are not, and borrow the access through
+// JobTypeAccess purely to name the type — every member they call through it
+// (Execute, AddRef, Release) is itself public on Job.
 //===----------------------------------------------------------------------===//
 
 /// Runs Jolt's step on a host's own task graph instead of spawning threads

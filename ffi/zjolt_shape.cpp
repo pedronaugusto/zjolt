@@ -1720,8 +1720,13 @@ void zjoltPolyhedronSubmergedVolumeCalculatorGetResult(
 //===----------------------------------------------------------------------===//
 // Serialisation
 //
-// SaveWithChildren/sRestoreWithChildren, not plain binary state, since a graph shape cannot re-supply children order through a flat ABI. The container exists because Jolt validates AFTER using an unchecked field first (sRestoreFromBinaryState indexes a table with the shape-type byte before its own EOF check) — magic/length/build-stamp/checksum catch a bad buffer first.
-// NOT a defence against a deliberately crafted payload with a matching checksum — treat a shape cache as your own cook's output, not untrusted input.
+// SaveWithChildren/sRestoreWithChildren, not plain binary state, since a graph
+// shape cannot re-supply children order through a flat ABI. The container
+// exists because Jolt validates AFTER using an unchecked field first
+// (sRestoreFromBinaryState indexes a table with the shape-type byte before its
+// own EOF check) — magic/length/build-stamp/checksum catch a bad buffer first.
+// NOT a defence against a deliberately crafted payload with a matching checksum
+// — treat a shape cache as your own cook's output, not untrusted input.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -1820,8 +1825,14 @@ ZJoltResult zjoltShapeRestore(const void *data, size_t size,
 //===----------------------------------------------------------------------===//
 // The stream form
 //
-// Jolt's own payload behind a twelve-byte header (not the 32-byte buffer container above) — @see ZJoltStream in zjolt_core.h.
-// The twelve bytes do NOT close the upstream bug the buffer form's length/CRC-32 route around (sRestoreFromBinaryState uses the shape-type byte before its own EOF check — see UPSTREAM.md): a stream restore is no safer against a CORRUPTED payload than handing Jolt's StreamIn directly. Treat a shape stream like a shape cache — your own pipeline's output, not an arbitrary transport.
+// Jolt's own payload behind a twelve-byte header (not the 32-byte buffer
+// container above) — @see ZJoltStream in zjolt_core.h.
+// The twelve bytes do NOT close the upstream bug the buffer form's
+// length/CRC-32 route around (sRestoreFromBinaryState uses the shape-type byte
+// before its own EOF check — see UPSTREAM.md): a stream restore is no safer
+// against a CORRUPTED payload than handing Jolt's StreamIn directly. Treat a
+// shape stream like a shape cache — your own pipeline's output, not an
+// arbitrary transport.
 //===----------------------------------------------------------------------===//
 
 namespace {

@@ -134,7 +134,7 @@ jobs:
 
   # The ABI cross-check is the one test here that cannot test itself: a
   # refactor that quietly makes it vacuous looks exactly like a passing build.
-  # This mutates the sources 30 ways and asserts each is refused. It is not
+  # This mutates the sources 31 ways and asserts each is refused. It is not
   # platform-specific — the comparison is between two declarations of the same
   # header — so one host is enough, and it is its own job because it rebuilds
   # once per mutation.

@@ -149,7 +149,12 @@ ZJoltResult NoSuchVertex(const char *what) {
 //===----------------------------------------------------------------------===//
 // Reaching a body's soft-body motion properties
 //
-// SoftBodyMotionProperties is a SIBLING of MotionProperties, not a parent — `GetMotionPropertiesUnchecked` hands back the base of both, plus null for a static body — so the static_cast every Jolt sample writes is only sound once `IsSoftBody()` has been asked. Every entry point below goes through one of these two, which take the lock, check, and hand back a reference already of the right type.
+// SoftBodyMotionProperties is a SIBLING of MotionProperties, not a parent —
+// `GetMotionPropertiesUnchecked` hands back the base of both, plus null for a
+// static body — so the static_cast every Jolt sample writes is only sound once
+// `IsSoftBody()` has been asked. Every entry point below goes through one of
+// these two, which take the lock, check, and hand back a reference already of
+// the right type.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult BodyNotFound() {
@@ -1211,7 +1216,10 @@ ZJoltResult zjoltSoftBodyGetVertexStates(const ZJoltPhysicsSystem *system,
 //===----------------------------------------------------------------------===//
 // Live properties
 //
-// Each of these guards the out-parameter, resolves the motion properties under a lock, and touches one field — written out one at a time rather than folded into a property enum, since a caller reads a name and a doc comment, not a table.
+// Each of these guards the out-parameter, resolves the motion properties under
+// a lock, and touches one field — written out one at a time rather than folded
+// into a property enum, since a caller reads a name and a doc comment, not a
+// table.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltSoftBodyGetNumIterations(const ZJoltPhysicsSystem *system,
@@ -1934,7 +1942,9 @@ ZJoltResult zjoltSoftBodySetContactListener(
 //===----------------------------------------------------------------------===//
 // The adapter Jolt actually calls
 //
-// Outside extern "C": C++ virtual overrides, declared in zjolt_internal.h next to their rigid-body sibling and defined here, the translation unit that knows how a soft-body manifold is projected.
+// Outside extern "C": C++ virtual overrides, declared in zjolt_internal.h next
+// to their rigid-body sibling and defined here, the translation unit that knows
+// how a soft-body manifold is projected.
 //===----------------------------------------------------------------------===//
 
 JPH::SoftBodyValidateResult

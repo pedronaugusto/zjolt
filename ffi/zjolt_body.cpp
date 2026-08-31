@@ -1474,7 +1474,9 @@ bool zjoltShapeMustBeStatic(const ZJoltShape *shape) {
 //===----------------------------------------------------------------------===//
 // Locks
 //
-// Jolt's locks are RAII; the ABI's are explicit, since a scope is not something a C struct can express. The two _reserved slots hold the mutex and lock interface — what a release needs, and what the caller must not touch.
+// Jolt's locks are RAII; the ABI's are explicit, since a scope is not something
+// a C struct can express. The two _reserved slots hold the mutex and lock
+// interface — what a release needs, and what the caller must not touch.
 //===----------------------------------------------------------------------===//
 
 namespace {

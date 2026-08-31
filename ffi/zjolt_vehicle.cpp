@@ -23,7 +23,9 @@
 // Viewed as a plain constraint
 //
 // ZJoltConstraint's own ToC/ToJolt live in zjolt_constraint.cpp; this
-// local, identical inline definition duplicates one reinterpret_cast rather than promoting it to a shared header, the same call zjolt_softbody.cpp makes for ZJoltSoftBodySharedSettings and for the same reason.
+// local, identical inline definition duplicates one reinterpret_cast rather
+// than promoting it to a shared header, the same call zjolt_softbody.cpp makes
+// for ZJoltSoftBodySharedSettings and for the same reason.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -35,8 +37,12 @@ inline ZJoltConstraint *ToC(JPH::Constraint *constraint) {
 //===----------------------------------------------------------------------===//
 // Wheel-ground collision filters
 //
-// zjolt_internal.h has adapters of this shape for queries, but `final` with the table held by value; a vehicle's filters are retargetable and live in the handle, so these are the same three forwards written to be mutated in place.
-// The body one also re-applies the self-exclusion installing any body filter would otherwise take away (VehicleCollisionTester.cpp): wheels colliding with their own chassis is never wanted, so it cannot be asked for by omission.
+// zjolt_internal.h has adapters of this shape for queries, but `final` with the
+// table held by value; a vehicle's filters are retargetable and live in the
+// handle, so these are the same three forwards written to be mutated in place.
+// The body one also re-applies the self-exclusion installing any body filter
+// would otherwise take away (VehicleCollisionTester.cpp): wheels colliding with
+// their own chassis is never wanted, so it cannot be asked for by omission.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -80,7 +86,9 @@ class VehicleBodyFilter final : public JPH::BodyFilter {
 //===----------------------------------------------------------------------===//
 // The handle
 //
-// Defined here, not zjolt_internal.h: nothing outside this file ever sees a ZJoltVehicleConstraint*. Must still match the incomplete tag zjolt_vehicle.h declares, as that header's own comment on ZJoltCharacter describes.
+// Defined here, not zjolt_internal.h: nothing outside this file ever sees a
+// ZJoltVehicleConstraint*. Must still match the incomplete tag zjolt_vehicle.h
+// declares, as that header's own comment on ZJoltCharacter describes.
 //===----------------------------------------------------------------------===//
 
 struct ZJoltVehicleConstraint {
@@ -411,8 +419,12 @@ bool WheelIndexValid(int32_t index, uint32_t wheel_count, bool allow_none) {
 //===----------------------------------------------------------------------===//
 // Numeric-range validation
 //
-// Every function below is a recon'd JPH_ASSERT from Wheel.cpp/WheeledVehicleController.cpp/TrackedVehicleController.cpp, turned into a returned ZJOLT_RESULT_INVALID_ARGUMENT instead of a caller-trippable abort.
-// Validates only, mutates nothing, so a batch caller (every wheel, every differential) sees the first failure with nothing partially applied.
+// Every function below is a recon'd JPH_ASSERT from
+// Wheel.cpp/WheeledVehicleController.cpp/TrackedVehicleController.cpp, turned
+// into a returned ZJOLT_RESULT_INVALID_ARGUMENT instead of a caller-trippable
+// abort.
+// Validates only, mutates nothing, so a batch caller (every wheel, every
+// differential) sees the first failure with nothing partially applied.
 //===----------------------------------------------------------------------===//
 
 /// Wheel.cpp:74-80 — every wheel regardless of controller kind.
@@ -720,7 +732,9 @@ void ApplyFilters(ZJoltVehicleConstraint *c) {
 //===----------------------------------------------------------------------===//
 // Callback shims
 //
-// Each captures only the handle and re-reads the C table out of it, so clearing a callback takes effect even while Jolt still holds the shim, and one pointer is all the capture std::function has to store (no allocation).
+// Each captures only the handle and re-reads the C table out of it, so clearing
+// a callback takes effect even while Jolt still holds the shim, and one pointer
+// is all the capture std::function has to store (no allocation).
 //===----------------------------------------------------------------------===//
 
 void InvokeStepCallback(const ZJoltVehicleStepCallback &cb,
@@ -762,7 +776,9 @@ extern "C" {
 //===----------------------------------------------------------------------===//
 // Descriptor defaults
 //
-// Every DescInit reads out of a default-constructed Jolt settings object rather than transcribing numbers, so an upstream tuning change moves with it (same reasoning as zjoltCharacterDescInit).
+// Every DescInit reads out of a default-constructed Jolt settings object rather
+// than transcribing numbers, so an upstream tuning change moves with it (same
+// reasoning as zjoltCharacterDescInit).
 //===----------------------------------------------------------------------===//
 
 void zjoltVehicleWheelDescInit(ZJoltVehicleWheelDesc *desc) {

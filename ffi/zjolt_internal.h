@@ -53,7 +53,8 @@
 // Opaque handle mapping
 //
 // Shape and Body are Jolt-owned, wrapped as incomplete tags a pointer
-// converts through instead of a dedicated struct. zjolt's own handles are structs.
+// converts through instead of a dedicated struct. zjolt's own handles are
+// structs.
 //===----------------------------------------------------------------------===//
 
 namespace zjolt {
@@ -131,16 +132,24 @@ void Delete(T *object) {
 //===----------------------------------------------------------------------===//
 // Live-handle accounting
 //
-// zjoltDeinit restores Jolt's allocator, and a handle freed after that is freed through an allocator it
-// was never allocated from. Counting what the host still owns is what lets deinit refuse instead.
+// zjoltDeinit restores Jolt's allocator, and a handle freed after that is freed
+// through an allocator it
+// was never allocated from. Counting what the host still owns is what lets
+// deinit refuse instead.
 //
-// The unit is ONE THING THE HOST MUST HAND BACK: a reference-counted object counts once per reference this
-// ABI gave the host, not once per object, because Jolt's own count also holds what a body or a compound
-// shape took and that is not the host's to release. Handles zjolt reference-counts itself (ZJoltRagdoll,
-// ZJoltSkeletonMapper) move on create and on the release that destroys them -- zero means the same thing.
+// The unit is ONE THING THE HOST MUST HAND BACK: a reference-counted object
+// counts once per reference this
+// ABI gave the host, not once per object, because Jolt's own count also holds
+// what a body or a compound
+// shape took and that is not the host's to release. Handles zjolt
+// reference-counts itself (ZJoltRagdoll,
+// ZJoltSkeletonMapper) move on create and on the release that destroys them --
+// zero means the same thing.
 //
-// HostRetain and HostRelease below are the ONLY places a Jolt refcount moves on the host's behalf, and
-// ci/check-refcounts.sh fails the build on a bare AddRef or Release anywhere else in ffi/.
+// HostRetain and HostRelease below are the ONLY places a Jolt refcount moves on
+// the host's behalf, and
+// ci/check-refcounts.sh fails the build on a bare AddRef or Release anywhere
+// else in ffi/.
 //===----------------------------------------------------------------------===//
 
 void HandleCreated();
@@ -277,7 +286,8 @@ template <typename... Ptrs>
 // An enum parameter's bytes, rather than its value.
 //
 // Reading an enum object holding a value no enumerator names is undefined
-// behaviour (UBSan aborts). Taken by reference and copied as raw bytes to avoid that load.
+// behaviour (UBSan aborts). Taken by reference and copied as raw bytes to avoid
+// that load.
 //===----------------------------------------------------------------------===//
 
 template <typename E>
@@ -618,7 +628,8 @@ struct BroadPhaseFilters {
 // Byte-buffer streams, for shape serialisation
 //
 // Jolt's own StreamInWrapper/StreamOutWrapper wrap std::istream/ostream,
-// dragging in <iostream>. A shape saves to and restores from a flat buffer here instead.
+// dragging in <iostream>. A shape saves to and restores from a flat buffer here
+// instead.
 //===----------------------------------------------------------------------===//
 
 /// Counts bytes when `buffer` is null, writes them when it is not. That is
@@ -856,7 +867,8 @@ inline ZJoltResult ReadContainer(const ContainerFormat &format,
 // The host-stream seam
 //
 // One adapter forwards Jolt's StreamIn/StreamOut/StateRecorder virtuals to a
-// ZJoltStream, shared by *Stream entry points and the buffer form of SaveState/RestoreState.
+// ZJoltStream, shared by *Stream entry points and the buffer form of
+// SaveState/RestoreState.
 //===----------------------------------------------------------------------===//
 
 /// StreamIn, StreamOut and StateRecorder each declare IsFailed with the same
@@ -1031,7 +1043,8 @@ inline ZJoltResult ReadStreamHeader(JPH::StreamIn &in, const uint8_t magic[4],
 // Bridging a ZJoltStream to std::istream/std::ostream
 //
 // ObjectStreamIn/Out template over istream&/ostream&, predating Jolt's own
-// StreamIn/StreamOut. Single-byte reads only: a buffered underflow could not tell truncation from a late arrival.
+// StreamIn/StreamOut. Single-byte reads only: a buffered underflow could not
+// tell truncation from a late arrival.
 //===----------------------------------------------------------------------===//
 
 class ZJoltStreamBuf : public std::streambuf {

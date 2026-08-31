@@ -371,7 +371,8 @@ JPH::CollideShapeSettings ForceInternalEdgeRemovalSettings(
 // Bodies shared by the locked/*NoLock and plain/*WithBody entry points
 //
 // Identical past ZJOLT_ENTER regardless of which JPH::NarrowPhaseQuery a
-// caller reaches through — each takes the query by reference so the four entry points sharing one implementation cannot drift apart.
+// caller reaches through — each takes the query by reference so the four entry
+// points sharing one implementation cannot drift apart.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult CastRayClosestImpl(const JPH::NarrowPhaseQuery &query,
@@ -690,7 +691,9 @@ ZJoltResult CollidePointEachImpl(const JPH::NarrowPhaseQuery &query,
 // Shape versus shape
 //
 // JPH::CollisionDispatch underneath every query above, handed two shapes
-// directly (no physics system, broad phase, or body) — reuses this file's collector/sinks/count-then-fill tail; new here is Mat44 (not RMat44) argument plumbing, since there is no TransformedShape to resolve a material off.
+// directly (no physics system, broad phase, or body) — reuses this file's
+// collector/sinks/count-then-fill tail; new here is Mat44 (not RMat44) argument
+// plumbing, since there is no TransformedShape to resolve a material off.
 //===----------------------------------------------------------------------===//
 
 /// What a shape can present to Jolt's dispatch table, as a set.
@@ -899,7 +902,8 @@ JPH::ShapeCast MakeDispatchShapeCast(const ShapePair &pair,
 // Projections
 //
 // Unlike the projections above, these read nothing off the collector —
-// no TransformedShape here; the material comes off the shape the caller passed, and the body id is Jolt's default (invalid), since there is no body.
+// no TransformedShape here; the material comes off the shape the caller passed,
+// and the body id is Jolt's default (invalid), since there is no body.
 //===----------------------------------------------------------------------===//
 
 struct ProjectShapeVsShapeCollideHit {
@@ -1072,7 +1076,9 @@ ZJoltResult zjoltCastRayEachWithBody(const ZJoltPhysicsSystem *system,
 // Shape casts
 //
 // Contact points come back relative to a caller-chosen base offset (the
-// caller's own `position` is the one to pick) — resolving to absolute world space would store a world coordinate in a float, losing the precision this mechanism exists to keep.
+// caller's own `position` is the one to pick) — resolving to absolute world
+// space would store a world coordinate in a float, losing the precision this
+// mechanism exists to keep.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltCastShapeClosest(
@@ -1189,7 +1195,8 @@ ZJoltResult zjoltCastShapeEachWithBody(
 // Overlap
 //
 // Same base-offset rule as the shape casts above: hits are relative to
-// the caller's `position`, not an absolute world coordinate a float cannot hold precisely.
+// the caller's `position`, not an absolute world coordinate a float cannot hold
+// precisely.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltCollideShapeClosest(
@@ -1307,7 +1314,9 @@ ZJoltResult zjoltCollideShapeEachWithBody(
 // Overlap, with internal edge removal
 //
 // Same collector/sinks/tail as the plain zjoltCollideShape* family, via
-// CollideShapeWithInternalEdgeRemoval — `with_internal_edge_removal` on CollideShape*Impl is the only difference, so the *NoLock/*WithBody twins fall out of the same three functions.
+// CollideShapeWithInternalEdgeRemoval — `with_internal_edge_removal` on
+// CollideShape*Impl is the only difference, so the *NoLock/*WithBody twins fall
+// out of the same three functions.
 //===----------------------------------------------------------------------===//
 
 ZJoltResult zjoltCollideShapeWithInternalEdgeRemovalClosest(
@@ -1492,7 +1501,8 @@ ZJoltResult zjoltCollidePointEachWithBody(const ZJoltPhysicsSystem *system,
 // Shape versus shape
 //
 // Same collector/sinks/tail as everything above, driven against
-// JPH::CollisionDispatch instead of a NarrowPhaseQuery — no *Each form (leaf-bounded, not broad-phase-bounded; see zjolt_transformed.h).
+// JPH::CollisionDispatch instead of a NarrowPhaseQuery — no *Each form
+// (leaf-bounded, not broad-phase-bounded; see zjolt_transformed.h).
 //===----------------------------------------------------------------------===//
 
 void zjoltCollideShapeSettingsInit(ZJoltCollideShapeSettings *settings) {

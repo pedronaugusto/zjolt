@@ -483,7 +483,8 @@ typedef struct ZJoltPathConstraintDesc {
 // Construction
 //
 // Creating a constraint does NOT add it — call zjoltConstraintAdd. A body
-// id naming nothing in `system` is ZJOLT_RESULT_BODY_NOT_FOUND; ZJOLT_BODY_ID_WORLD names the world.
+// id naming nothing in `system` is ZJOLT_RESULT_BODY_NOT_FOUND;
+// ZJOLT_BODY_ID_WORLD names the world.
 //===----------------------------------------------------------------------===//
 
 ZJOLT_API ZJoltResult zjoltConstraintCreateFixed(

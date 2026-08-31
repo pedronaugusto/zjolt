@@ -814,8 +814,10 @@ ZJOLT_API void zjoltSoftBodyVertexMarkCcdContact(
 //===----------------------------------------------------------------------===//
 // SoftBodyContactListener
 //
-// Separate from ZJoltContactListener: a rigid-only listener hears nothing about soft bodies. Exceptions are off — NOTHING may unwind out of a callback.
-// Both run WITH ALL BODIES LOCKED. Do not call back into the system from inside one.
+// Separate from ZJoltContactListener: a rigid-only listener hears nothing about
+// soft bodies. Exceptions are off — NOTHING may unwind out of a callback.
+// Both run WITH ALL BODIES LOCKED. Do not call back into the system from inside
+// one.
 //===----------------------------------------------------------------------===//
 
 /// Whether a soft body's collision with one other body is processed at all.
