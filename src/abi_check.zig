@@ -185,6 +185,72 @@ fn checkFnType(
     sameScalar(what ++ " return value", OR, TR);
 }
 
+//=============================================================================
+// Parameter classes
+//
+// Zig 0.16.0's self-hosted x86-64 backend (the default for Debug builds
+// targeting x86_64-linux) miscompiles the CALLER of an extern fn whose
+// f32/f64 parameter is preceded by MORE than 6 integer-class parameters
+// (pointers, ints, enums, bools): the float loads from the wrong register,
+// and the 3rd and later such float shifts every later argument slot.
+// Measured 2026-09-01 by disassembling minimal reproductions; the LLVM
+// backend is correct, and exactly 6 integer-class parameters before a float
+// is safe. The conservative bound also covers the aarch64 backend's larger
+// register file. Every extern fn, callback typedef and callback field is
+// held to it, so a signature a consumer's Debug build would miscompile
+// cannot land in this ABI.
+//=============================================================================
+
+const max_int_class_params_before_float = 6;
+
+fn checkParamClasses(comptime what: []const u8, comptime Fn: type) void {
+    comptime {
+        var int_class: usize = 0;
+        for (@typeInfo(Fn).@"fn".params, 0..) |p, i| {
+            const P = p.type orelse continue;
+            switch (@typeInfo(scalarIdentity(P))) {
+                .float, .vector => {
+                    if (int_class > max_int_class_params_before_float) {
+                        fail(what ++ " passes parameter " ++
+                            std.fmt.comptimePrint("{d}", .{i}) ++
+                            " (a float) after " ++
+                            std.fmt.comptimePrint("{d}", .{int_class}) ++
+                            " integer-class parameters. Zig 0.16.0's " ++
+                            "self-hosted x86-64 backend miscompiles the " ++
+                            "caller of such a signature; at most 6 " ++
+                            "integer-class parameters may precede a float. " ++
+                            "Group the parameters into a desc struct, or " ++
+                            "move the float ahead of them.");
+                    }
+                },
+                else => int_class += 1,
+            }
+        }
+    }
+}
+
+/// Callback fields inside a crossed struct are C function signatures too,
+/// crossed and invoked through the same ABI, so each is held to the same
+/// parameter-class bound as the externs.
+fn checkFieldCallbacks(comptime what: []const u8, comptime Ours: type) void {
+    comptime {
+        for (@typeInfo(Ours).@"struct".fields) |f| {
+            const Base = switch (@typeInfo(f.type)) {
+                .optional => |o| o.child,
+                else => f.type,
+            };
+            if (@typeInfo(Base) == .pointer and
+                @typeInfo(@typeInfo(Base).pointer.child) == .@"fn")
+            {
+                checkParamClasses(
+                    what ++ "." ++ f.name,
+                    @typeInfo(Base).pointer.child,
+                );
+            }
+        }
+    }
+}
+
 /// Struct layout, compared field by NAME rather than by position — the
 /// distinction that makes the check worth having. Two same-sized adjacent
 /// fields swapping places leaves the *sequence* of offsets identical, so a
@@ -368,6 +434,7 @@ fn sweepOurs() Counts {
                         switch (s.layout) {
                             .@"extern" => {
                                 checkStructLayout(what, Ours, Theirs);
+                                checkFieldCallbacks(what, Ours);
                                 n.fields += s.fields.len;
                             },
                             .@"packed" => {
@@ -409,6 +476,7 @@ fn sweepOurs() Counts {
                         const TheirsOpt = @typeInfo(Theirs);
                         const TheirsPtr = if (TheirsOpt == .optional) TheirsOpt.optional.child else Theirs;
                         checkFnType(what, OursFn, @typeInfo(TheirsPtr).pointer.child);
+                        checkParamClasses(what, OursFn);
                     },
                     else => fail("type " ++ d.name ++ " is a " ++
                         @tagName(@typeInfo(Ours)) ++ ", which this check does not know how to " ++
@@ -435,6 +503,7 @@ fn sweepOurs() Counts {
                     continue;
                 }
                 const what = "function " ++ d.name;
+                checkParamClasses(what, Decl);
                 _ = theirDecl(d.name, what);
                 checkFnType(what, Decl, @TypeOf(@field(h, d.name)));
                 n.functions += 1;

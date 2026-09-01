@@ -370,6 +370,16 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 
 ### Build
 
+- `src/abi_check.zig` refuses any extern fn, callback typedef or callback
+  field whose f32/f64 parameter follows more than 6 integer-class
+  parameters (pointers, ints, enums, bools). Zig 0.16.0's self-hosted
+  x86-64 backend — the default for a consumer's Debug build targeting
+  x86_64-linux — miscompiles the CALLER of such a signature, loading the
+  float from the wrong register and shifting later argument slots; measured
+  2026-09-01 by disassembling minimal reproductions. Exactly 6 is safe and
+  7 is not, and the conservative bound also covers the aarch64 backend's
+  larger register file. The desc redesign above removed the three
+  signatures over the bound; this is what keeps the class from returning.
 - The three misuse sweeps are one function per module behind a thin driver
   rather than one function looping over every module, and which declarations
   a sweep visits has one home instead of a copy of the filter in each of the
