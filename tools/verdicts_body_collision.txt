@@ -278,7 +278,6 @@ Physics/Collision	MakeUniformScaleXZ	ZIG	src/scale.zig:makeUniformScaleXZ
 Physics/Collision	ManifoldBetweenTwoFaces	BOUND	zjoltPhysicsSystemSetContactListener
 Physics/Collision	MapObjectToBroadPhaseLayer	EXTENSION	zjolt ZJoltBroadPhaseLayerInterface
 Physics/Collision	MarkNodeAndParentsChanged	INTERNAL	upstream libs/JoltPhysics/Jolt/Physics/Collision/BroadPhase/QuadTree.h:17 (class)
-Physics/Collision	MeshShape	BOUND	zjoltShapeCreateMesh
 Physics/Collision	MeshShapeSettings	BOUND	zjoltShapeCreateMesh ZJoltMeshBuildQuality zjoltShapeMeshGetTriangleUserData zjoltShapeGetUserData zjoltShapeSetUserData
 Physics/Collision	ModifyShape	BOUND	zjoltShapeMutableCompoundReplaceChild
 Physics/Collision	ModifyShapes	BOUND	zjoltShapeMutableCompoundMoveChild

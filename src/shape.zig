@@ -426,21 +426,25 @@ pub const Shape = struct {
         if (opts.materials.len > handles.len) return err.Error.InvalidArgument;
         for (opts.materials, 0..) |m, i| handles[i] = m.handle;
 
+        var desc: c.MeshShapeDesc = undefined;
+        c.zjoltMeshShapeDescInit(&desc);
+        desc.vertices = vertices.ptr;
+        desc.num_vertices = @intCast(vertices.len);
+        desc.indices = indices.ptr;
+        desc.num_triangles = @intCast(num_triangles);
+        if (opts.triangle_materials.len != 0)
+            desc.triangle_materials = opts.triangle_materials.ptr;
+        if (opts.triangle_user_data.len != 0)
+            desc.triangle_user_data = opts.triangle_user_data.ptr;
+        if (opts.materials.len != 0) desc.materials = &handles;
+        desc.num_materials = @intCast(opts.materials.len);
+        desc.max_triangles_per_leaf = opts.max_triangles_per_leaf;
+        desc.active_edge_cos_threshold_angle =
+            opts.active_edge_cos_threshold_angle;
+        desc.build_quality = opts.build_quality;
+
         var handle: *c.Shape = undefined;
-        try err.check(c.zjoltShapeCreateMesh(
-            vertices.ptr,
-            @intCast(vertices.len),
-            indices.ptr,
-            @intCast(num_triangles),
-            if (opts.triangle_materials.len != 0) opts.triangle_materials.ptr else null,
-            if (opts.triangle_user_data.len != 0) opts.triangle_user_data.ptr else null,
-            if (opts.materials.len != 0) &handles else null,
-            @intCast(opts.materials.len),
-            opts.max_triangles_per_leaf,
-            opts.active_edge_cos_threshold_angle,
-            opts.build_quality,
-            &handle,
-        ));
+        try err.check(c.zjoltShapeCreateMesh(&desc, &handle));
         return .{ .handle = handle };
     }
 
@@ -500,25 +504,26 @@ pub const Shape = struct {
         if (opts.materials.len > handles.len) return err.Error.InvalidArgument;
         for (opts.materials, 0..) |m, i| handles[i] = m.handle;
 
+        var desc: c.HeightFieldShapeDesc = undefined;
+        c.zjoltHeightFieldShapeDescInit(&desc);
+        desc.samples = samples.ptr;
+        desc.sample_count = sample_count;
+        desc.offset = opts.offset;
+        desc.scale = opts.scale;
+        if (opts.quad_materials.len != 0)
+            desc.material_indices = opts.quad_materials.ptr;
+        if (opts.materials.len != 0) desc.materials = &handles;
+        desc.num_materials = @intCast(opts.materials.len);
+        desc.materials_capacity = opts.materials_capacity;
+        desc.block_size = opts.block_size;
+        desc.bits_per_sample = opts.bits_per_sample;
+        desc.min_height_value = opts.min_height_value;
+        desc.max_height_value = opts.max_height_value;
+        desc.active_edge_cos_threshold_angle =
+            opts.active_edge_cos_threshold_angle;
+
         var handle: *c.Shape = undefined;
-        var offset = opts.offset;
-        var scale = opts.scale;
-        try err.check(c.zjoltShapeCreateHeightField(
-            samples.ptr,
-            sample_count,
-            &offset,
-            &scale,
-            if (opts.quad_materials.len != 0) opts.quad_materials.ptr else null,
-            if (opts.materials.len != 0) &handles else null,
-            @intCast(opts.materials.len),
-            opts.materials_capacity,
-            opts.block_size,
-            opts.bits_per_sample,
-            opts.min_height_value,
-            opts.max_height_value,
-            opts.active_edge_cos_threshold_angle,
-            &handle,
-        ));
+        try err.check(c.zjoltShapeCreateHeightField(&desc, &handle));
         return .{ .handle = handle };
     }
 
@@ -1442,9 +1447,9 @@ pub const Shape = struct {
             y,
             size_x,
             size_y,
+            active_edge_cos_threshold_angle,
             heights.ptr,
             size_x,
-            active_edge_cos_threshold_angle,
         ));
     }
 

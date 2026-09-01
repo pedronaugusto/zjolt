@@ -823,11 +823,14 @@ int main(void) {
   ZJoltVec3 floor_vertices[8];
   uint32_t floor_indices[36];
   makeBoxMesh(20.0f, 0.5f, 20.0f, floor_vertices, floor_indices);
+  ZJoltMeshShapeDesc floor_mesh_desc;
+  zjoltMeshShapeDescInit(&floor_mesh_desc);
+  floor_mesh_desc.vertices = floor_vertices;
+  floor_mesh_desc.num_vertices = 8;
+  floor_mesh_desc.indices = floor_indices;
+  floor_mesh_desc.num_triangles = 12;
   ZJoltShape *floor_shape = NULL;
-  CHECK_OK(zjoltShapeCreateMesh(
-      floor_vertices, 8, floor_indices, 12, NULL, NULL, NULL, 0, 0,
-      ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE,
-      ZJOLT_MESH_BUILD_QUALITY_FAVOR_RUNTIME_PERFORMANCE, &floor_shape));
+  CHECK_OK(zjoltShapeCreateMesh(&floor_mesh_desc, &floor_shape));
   CHECK(zjoltShapeGetSubType(floor_shape) == ZJOLT_SHAPE_SUB_TYPE_MESH,
         "floor is a mesh");
 
@@ -1771,12 +1774,17 @@ int main(void) {
   const uint32_t quad_triangle_materials[2] = {0, 1};
   const ZJoltPhysicsMaterial *quad_materials[2] = {gravel, metal};
 
+  ZJoltMeshShapeDesc quad_mesh_desc;
+  zjoltMeshShapeDescInit(&quad_mesh_desc);
+  quad_mesh_desc.vertices = quad_vertices;
+  quad_mesh_desc.num_vertices = 4;
+  quad_mesh_desc.indices = quad_indices;
+  quad_mesh_desc.num_triangles = 2;
+  quad_mesh_desc.triangle_materials = quad_triangle_materials;
+  quad_mesh_desc.materials = quad_materials;
+  quad_mesh_desc.num_materials = 2;
   ZJoltShape *quad = NULL;
-  CHECK_OK(zjoltShapeCreateMesh(
-      quad_vertices, 4, quad_indices, 2, quad_triangle_materials, NULL,
-      quad_materials, 2, 0,
-      ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE,
-      ZJOLT_MESH_BUILD_QUALITY_FAVOR_RUNTIME_PERFORMANCE, &quad));
+  CHECK_OK(zjoltShapeCreateMesh(&quad_mesh_desc, &quad));
 
   ZJoltBodyDesc quad_desc;
   zjoltBodyDescInit(&quad_desc);

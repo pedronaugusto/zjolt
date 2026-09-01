@@ -210,8 +210,12 @@ try "a struct field added in the header only" ffi/zjolt_shape.h \
 # flipping c.zig instead breaks an unrelated test first, which is not evidence
 # about this check.
 try "a field's signedness flipped in the header" ffi/zjolt_shape.h \
-'  uint32_t num_triangles;' \
-'  int32_t num_triangles;'
+'typedef struct ZJoltShapeStats {
+  uint64_t size_bytes;
+  uint32_t num_triangles;' \
+'typedef struct ZJoltShapeStats {
+  uint64_t size_bytes;
+  int32_t num_triangles;'
 
 # A negative enumerator is not drift between the two sides — it is drift
 # between two toolchains. C leaves an enum's underlying type to the

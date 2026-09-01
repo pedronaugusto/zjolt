@@ -104,9 +104,22 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   constraint" and "a kind this ABI does not name", so a vehicle -- which this
   library builds -- was indistinguishable from nothing at all. Values 1..13
   are untouched.
-- `zjoltShapeCreateHeightField` takes `materials_capacity`, Jolt's
-  `mMaterialsCapacity`. Without it the material list a repaint grows is
+- `zjoltShapeCreateMesh` and `zjoltShapeCreateHeightField` build from
+  `ZJoltMeshShapeDesc` and `ZJoltHeightFieldShapeDesc`, passed by const
+  pointer and initialised by `zjoltMeshShapeDescInit` /
+  `zjoltHeightFieldShapeDescInit` — the pattern `ZJoltBodyDesc` set. The two
+  had grown to 12- and 14-parameter positional calls, where two transposed
+  counts still compile and misread every argument after them; a desc names
+  every field at its call site and gives the defaults one home. The height
+  field's `offset` and `scale` cross by value in the desc, and a zeroed desc
+  is not a default one: the init functions write the defaults zero cannot
+  spell. `materials_capacity` (Jolt's `mMaterialsCapacity`) is a field of
+  the height-field desc; without it the material list a repaint grows is
   reallocated under any query running in parallel.
+- `zjoltShapeHeightFieldSetHeights` takes
+  `active_edge_cos_threshold_angle` before `heights` and `stride`:
+  everything steering the repaint — the block, then how its edges rebuild —
+  precedes the samples it consumes.
 - `zjoltPhysicsSystemGetNumActiveBodies`, `zjoltPhysicsSystemGetActiveBodies`
   and `zjoltPhysicsSystemGetActiveBodiesUnsafe` take a `ZJoltBodyType`. All
   three passed `JPH::EBodyType::RigidBody` unconditionally, so a system's soft

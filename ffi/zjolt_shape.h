@@ -121,41 +121,92 @@ typedef enum ZJoltMeshBuildQuality {
   ZJOLT_MESH_BUILD_QUALITY_FAVOR_BUILD_SPEED = 1,
 } ZJoltMeshBuildQuality;
 
-/// A static triangle mesh for a static or kinematic body only — Jolt has no
-/// inertia for one. `indices` holds 3*num_triangles vertex indices;
-/// `triangle_materials` indexes `materials` per triangle (NULL for none, at
-/// most 32). `triangle_user_data`, if not NULL, is read back with
-/// zjoltShapeMeshGetTriangleUserData. A hit's sub-shape id names the
-/// triangle AFTER Jolt's own reordering, not an index into `indices`.
-ZJOLT_API ZJoltResult zjoltShapeCreateMesh(
-    const ZJoltVec3 *vertices, uint32_t num_vertices, const uint32_t *indices,
-    uint32_t num_triangles, const uint32_t *triangle_materials,
-    const uint32_t *triangle_user_data,
-    const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t max_triangles_per_leaf, float active_edge_cos_threshold_angle,
-    ZJoltMeshBuildQuality build_quality, ZJoltShape **out);
+/// What zjoltShapeCreateMesh builds from. Initialise with
+/// zjoltMeshShapeDescInit before filling it in: the threshold angle's zero
+/// is a meaningful setting, so a zeroed desc is NOT a default one.
+typedef struct ZJoltMeshShapeDesc {
+  /// Required: `num_vertices` entries.
+  const ZJoltVec3 *vertices;
+  uint32_t num_vertices;
+  /// Required: 3*num_triangles vertex indices. A hit's sub-shape id names
+  /// the triangle AFTER Jolt's own reordering, not an index into this array.
+  const uint32_t *indices;
+  uint32_t num_triangles;
+  /// One index into `materials` per triangle, or NULL for none.
+  const uint32_t *triangle_materials;
+  /// One host value per triangle, read back with
+  /// zjoltShapeMeshGetTriangleUserData — or NULL for Jolt's default (the
+  /// triangle's pre-reorder index), at roughly 25% less shape memory.
+  const uint32_t *triangle_user_data;
+  /// The materials `triangle_materials` chooses between. At most 32: a mesh
+  /// stores the index in five bits of a per-triangle flag byte.
+  const ZJoltPhysicsMaterial *const *materials;
+  uint32_t num_materials;
+  /// 0 for Jolt's default.
+  uint32_t max_triangles_per_leaf;
+  float active_edge_cos_threshold_angle;
+  ZJoltMeshBuildQuality build_quality;
+} ZJoltMeshShapeDesc;
 
-/// Passed as `min_height_value`/`max_height_value` together, this pair asks
+/// Zeroes `desc`, then writes the defaults a zero cannot spell:
+/// ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE.
+ZJOLT_API void zjoltMeshShapeDescInit(ZJoltMeshShapeDesc *desc);
+
+/// A static triangle mesh for a static or kinematic body only — Jolt has no
+/// inertia for one.
+ZJOLT_API ZJoltResult zjoltShapeCreateMesh(const ZJoltMeshShapeDesc *desc,
+                                           ZJoltShape **out);
+
+/// Written as `min_height_value`/`max_height_value` together, this pair asks
 /// Jolt to derive the quantisation range from `samples` itself instead of
-/// reserving one — zjoltShapeCreateHeightField's only behaviour before these
-/// two parameters existed. They are Jolt's own sentinel (HeightFieldShape.h's
+/// reserving one. They are Jolt's own sentinel (HeightFieldShape.h's
 /// cLargeFloat), not a value this binding invented.
 #define ZJOLT_HEIGHT_FIELD_AUTO_MIN_HEIGHT_VALUE 1.0e15f
 #define ZJOLT_HEIGHT_FIELD_AUTO_MAX_HEIGHT_VALUE (-1.0e15f)
 
-/// A static `sample_count` x `sample_count` height field, row major:
-/// `samples[y*sample_count+x]`; surface at `offset + scale*(x,samples,y)`.
-/// ZJOLT_HEIGHT_FIELD_NO_COLLISION punches a hole. `block_size` (0 for
-/// default 2) is [2, 8]; `bits_per_sample` (0 for default 8) is [1, 16].
-/// `material_indices`: one index per quad into `materials` (NULL, max 256).
-/// `materials_capacity` and the height pair: @see zjoltShapeHeightFieldSet*.
+/// What zjoltShapeCreateHeightField builds from: a static `sample_count` x
+/// `sample_count` height field, row major — `samples[y*sample_count+x]`,
+/// surface at `offset + scale*(x,samples,y)`. Initialise with
+/// zjoltHeightFieldShapeDescInit before filling it in: four fields here
+/// have meaningful zeroes, so a zeroed desc is NOT a default one.
+typedef struct ZJoltHeightFieldShapeDesc {
+  /// Required: sample_count^2 entries. A sample of
+  /// ZJOLT_HEIGHT_FIELD_NO_COLLISION punches a hole.
+  const float *samples;
+  uint32_t sample_count;
+  ZJoltVec3 offset;
+  ZJoltVec3 scale;
+  /// One index into `materials` per QUAD — (sample_count-1)^2 of them — or
+  /// NULL for none.
+  const uint8_t *material_indices;
+  /// At most 256, the width of one stored material index.
+  const ZJoltPhysicsMaterial *const *materials;
+  uint32_t num_materials;
+  /// Room reserved for materials zjoltShapeHeightFieldSetMaterials merges
+  /// in later. Growing the list past what is reserved reallocates it under
+  /// any query running in parallel; reserve here for a field repainted
+  /// during simulation.
+  uint32_t materials_capacity;
+  /// 0 for Jolt's default of 2, otherwise in [2, 8].
+  uint32_t block_size;
+  /// 0 for Jolt's default of 8, otherwise in [1, 16].
+  uint32_t bits_per_sample;
+  /// The range samples quantise into (16 bits), fixed for the shape's life.
+  /// The ZJOLT_HEIGHT_FIELD_AUTO_* pair derives the tightest fit; widen it
+  /// to reserve headroom zjoltShapeHeightFieldSetHeights can move a sample
+  /// into later without being clamped.
+  float min_height_value;
+  float max_height_value;
+  float active_edge_cos_threshold_angle;
+} ZJoltHeightFieldShapeDesc;
+
+/// Zeroes `desc`, then writes the defaults a zero cannot spell: unit
+/// `scale`, the ZJOLT_HEIGHT_FIELD_AUTO_* height pair, and
+/// ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE.
+ZJOLT_API void zjoltHeightFieldShapeDescInit(ZJoltHeightFieldShapeDesc *desc);
+
 ZJOLT_API ZJoltResult zjoltShapeCreateHeightField(
-    const float *samples, uint32_t sample_count, const ZJoltVec3 *offset,
-    const ZJoltVec3 *scale, const uint8_t *material_indices,
-    const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t materials_capacity, uint32_t block_size, uint32_t bits_per_sample,
-    float min_height_value, float max_height_value,
-    float active_edge_cos_threshold_angle, ZJoltShape **out);
+    const ZJoltHeightFieldShapeDesc *desc, ZJoltShape **out);
 
 /// The height sample that means "no collision here", punching a hole in a
 /// height field. Jolt's own FLT_MAX sentinel, republished so a host does not
@@ -924,8 +975,8 @@ ZJOLT_API ZJoltResult zjoltShapeHeightFieldGetHeights(
 /// body afterward.
 ZJOLT_API ZJoltResult zjoltShapeHeightFieldSetHeights(
     ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
-    uint32_t size_y, const float *heights, uint32_t stride,
-    float active_edge_cos_threshold_angle);
+    uint32_t size_y, float active_edge_cos_threshold_angle,
+    const float *heights, uint32_t stride);
 
 /// Reads back a `size_x` by `size_y` block of QUAD material indices starting
 /// at (x, y), x-major into `out_materials[row * stride + col]`; `stride` is in

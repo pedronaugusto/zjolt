@@ -593,20 +593,23 @@ ZJoltResult zjoltShapeCreateEmpty(const ZJoltVec3 *center_of_mass,
 // Mesh
 //===----------------------------------------------------------------------===//
 
-ZJoltResult zjoltShapeCreateMesh(
-    const ZJoltVec3 *vertices, uint32_t num_vertices, const uint32_t *indices,
-    uint32_t num_triangles, const uint32_t *triangle_materials,
-    const uint32_t *triangle_user_data,
-    const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t max_triangles_per_leaf, float active_edge_cos_threshold_angle,
-    ZJoltMeshBuildQuality build_quality, ZJoltShape **out) {
+void zjoltMeshShapeDescInit(ZJoltMeshShapeDesc *desc) {
+  if (desc == nullptr) return;
+  *desc = ZJoltMeshShapeDesc{};
+  desc->active_edge_cos_threshold_angle =
+      ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE;
+  desc->build_quality = ZJOLT_MESH_BUILD_QUALITY_FAVOR_RUNTIME_PERFORMANCE;
+}
+
+ZJoltResult zjoltShapeCreateMesh(const ZJoltMeshShapeDesc *desc,
+                                 ZJoltShape **out) {
   ZJOLT_ENTER(out);
+  if (!zjolt::Present(desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   // Converted here, at the entry point that receives it from the host — see
   // zjolt::RawEnum in zjolt_internal.h.
-  const int32_t raw_build_quality = zjolt::RawEnum(build_quality);
-  if (!zjolt::Present(out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
-  if (vertices == nullptr || indices == nullptr || num_vertices == 0 ||
-      num_triangles == 0) {
+  const int32_t raw_build_quality = zjolt::RawEnum(desc->build_quality);
+  if (desc->vertices == nullptr || desc->indices == nullptr ||
+      desc->num_vertices == 0 || desc->num_triangles == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a mesh needs at least one vertex and one triangle");
   }
@@ -614,8 +617,8 @@ ZJoltResult zjoltShapeCreateMesh(
   // Checked here rather than left to Jolt: an out-of-range index would
   // otherwise be read as a vertex from beyond the caller's array, inside the
   // tree builder, with nothing to attribute the crash to.
-  for (uint32_t i = 0; i < num_triangles * 3; ++i) {
-    if (indices[i] >= num_vertices) {
+  for (uint32_t i = 0; i < desc->num_triangles * 3; ++i) {
+    if (desc->indices[i] >= desc->num_vertices) {
       return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                              "a triangle index is out of range for the vertex "
                              "array");
@@ -624,12 +627,12 @@ ZJoltResult zjoltShapeCreateMesh(
 
   JPH::PhysicsMaterialList material_list;
   const ZJoltResult materials_ok =
-      BuildMaterialList(materials, num_materials, material_list);
+      BuildMaterialList(desc->materials, desc->num_materials, material_list);
   if (materials_ok != ZJOLT_RESULT_OK) return materials_ok;
 
-  if (triangle_materials != nullptr) {
-    for (uint32_t i = 0; i < num_triangles; ++i) {
-      if (triangle_materials[i] >= num_materials) {
+  if (desc->triangle_materials != nullptr) {
+    for (uint32_t i = 0; i < desc->num_triangles; ++i) {
+      if (desc->triangle_materials[i] >= desc->num_materials) {
         return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                                "a triangle's material index is out of range "
                                "for the material list");
@@ -638,31 +641,36 @@ ZJoltResult zjoltShapeCreateMesh(
   }
 
   JPH::VertexList vertex_list;
-  vertex_list.reserve(num_vertices);
-  for (uint32_t i = 0; i < num_vertices; ++i)
-    vertex_list.push_back(JPH::Float3(vertices[i].x, vertices[i].y, vertices[i].z));
+  vertex_list.reserve(desc->num_vertices);
+  for (uint32_t i = 0; i < desc->num_vertices; ++i) {
+    vertex_list.push_back(JPH::Float3(desc->vertices[i].x, desc->vertices[i].y,
+                                      desc->vertices[i].z));
+  }
 
   JPH::IndexedTriangleList triangle_list;
-  triangle_list.reserve(num_triangles);
-  for (uint32_t i = 0; i < num_triangles; ++i) {
+  triangle_list.reserve(desc->num_triangles);
+  for (uint32_t i = 0; i < desc->num_triangles; ++i) {
     triangle_list.push_back(JPH::IndexedTriangle(
-        indices[i * 3 + 0], indices[i * 3 + 1], indices[i * 3 + 2],
-        triangle_materials != nullptr ? triangle_materials[i] : 0u,
-        triangle_user_data != nullptr ? triangle_user_data[i] : 0u));
+        desc->indices[i * 3 + 0], desc->indices[i * 3 + 1],
+        desc->indices[i * 3 + 2],
+        desc->triangle_materials != nullptr ? desc->triangle_materials[i] : 0u,
+        desc->triangle_user_data != nullptr ? desc->triangle_user_data[i]
+                                            : 0u));
   }
 
   JPH::MeshShapeSettings settings(std::move(vertex_list),
                                   std::move(triangle_list),
                                   std::move(material_list));
-  if (max_triangles_per_leaf > 0)
-    settings.mMaxTrianglesPerLeaf = max_triangles_per_leaf;
-  settings.mActiveEdgeCosThresholdAngle = active_edge_cos_threshold_angle;
+  if (desc->max_triangles_per_leaf > 0)
+    settings.mMaxTrianglesPerLeaf = desc->max_triangles_per_leaf;
+  settings.mActiveEdgeCosThresholdAngle =
+      desc->active_edge_cos_threshold_angle;
   settings.mBuildQuality = ToJoltBuildQuality(raw_build_quality);
   // Storing a value nobody can read back would just cost memory: Jolt
   // defaults this off, and turning it on is what makes
   // zjoltShapeMeshGetTriangleUserData report what was actually asked for
   // instead of its own pre-reorder fallback.
-  settings.mPerTriangleUserData = triangle_user_data != nullptr;
+  settings.mPerTriangleUserData = desc->triangle_user_data != nullptr;
   JPH::Shape::ShapeResult result = settings.Create();
   return Finish(result, out);
 }
@@ -671,61 +679,69 @@ ZJoltResult zjoltShapeCreateMesh(
 // Height field
 //===----------------------------------------------------------------------===//
 
-ZJoltResult zjoltShapeCreateHeightField(
-    const float *samples, uint32_t sample_count, const ZJoltVec3 *offset,
-    const ZJoltVec3 *scale, const uint8_t *material_indices,
-    const ZJoltPhysicsMaterial *const *materials, uint32_t num_materials,
-    uint32_t materials_capacity, uint32_t block_size, uint32_t bits_per_sample,
-    float min_height_value, float max_height_value,
-    float active_edge_cos_threshold_angle, ZJoltShape **out) {
+void zjoltHeightFieldShapeDescInit(ZJoltHeightFieldShapeDesc *desc) {
+  if (desc == nullptr) return;
+  *desc = ZJoltHeightFieldShapeDesc{};
+  desc->scale = ZJoltVec3{1.0f, 1.0f, 1.0f};
+  desc->min_height_value = ZJOLT_HEIGHT_FIELD_AUTO_MIN_HEIGHT_VALUE;
+  desc->max_height_value = ZJOLT_HEIGHT_FIELD_AUTO_MAX_HEIGHT_VALUE;
+  desc->active_edge_cos_threshold_angle =
+      ZJOLT_SHAPE_DEFAULT_ACTIVE_EDGE_COS_THRESHOLD_ANGLE;
+}
+
+ZJoltResult zjoltShapeCreateHeightField(const ZJoltHeightFieldShapeDesc *desc,
+                                        ZJoltShape **out) {
   ZJOLT_ENTER(out);
-  if (!zjolt::Present(samples, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::Present(desc, out)) return ZJOLT_RESULT_INVALID_ARGUMENT;
+  if (!zjolt::Present(desc->samples)) return ZJOLT_RESULT_INVALID_ARGUMENT;
 
   // Guarded before anything computes with it. The quad count below is
   // (sample_count - 1)^2, and Jolt's own settings do the same arithmetic — at
   // zero that underflows to a four-billion-element span rather than to an
   // error anybody could read.
-  if (sample_count == 0) {
+  if (desc->sample_count == 0) {
     return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                            "a height field needs at least one sample");
   }
 
   JPH::HeightFieldShapeSettings settings;
-  settings.mOffset =
-      offset != nullptr ? zjolt::ToJolt(*offset) : JPH::Vec3::sZero();
-  settings.mScale = scale != nullptr ? zjolt::ToJolt(*scale) : JPH::Vec3::sOne();
-  settings.mSampleCount = sample_count;
-  if (block_size > 0) settings.mBlockSize = block_size;
-  if (bits_per_sample > 0) settings.mBitsPerSample = bits_per_sample;
+  settings.mOffset = zjolt::ToJolt(desc->offset);
+  settings.mScale = zjolt::ToJolt(desc->scale);
+  settings.mSampleCount = desc->sample_count;
+  if (desc->block_size > 0) settings.mBlockSize = desc->block_size;
+  if (desc->bits_per_sample > 0) settings.mBitsPerSample = desc->bits_per_sample;
   // Fixes the 16-bit quantisation range once and for all: Jolt widens it to
   // fit whatever the samples below actually need (DetermineMinAndMaxSample),
   // but never narrows it, so passing a wider pair than the samples span here
   // is what reserves headroom a later zjoltShapeHeightFieldSetHeights can
   // move a sample into without being clamped.
-  settings.mMinHeightValue = min_height_value;
-  settings.mMaxHeightValue = max_height_value;
-  settings.mActiveEdgeCosThresholdAngle = active_edge_cos_threshold_angle;
+  settings.mMinHeightValue = desc->min_height_value;
+  settings.mMaxHeightValue = desc->max_height_value;
+  settings.mActiveEdgeCosThresholdAngle =
+      desc->active_edge_cos_threshold_angle;
 
-  settings.mMaterialsCapacity = materials_capacity;
+  settings.mMaterialsCapacity = desc->materials_capacity;
   settings.mHeightSamples.assign(
-      samples, samples + static_cast<size_t>(sample_count) * sample_count);
+      desc->samples,
+      desc->samples +
+          static_cast<size_t>(desc->sample_count) * desc->sample_count);
 
-  const ZJoltResult materials_ok =
-      BuildMaterialList(materials, num_materials, settings.mMaterials);
+  const ZJoltResult materials_ok = BuildMaterialList(
+      desc->materials, desc->num_materials, settings.mMaterials);
   if (materials_ok != ZJOLT_RESULT_OK) return materials_ok;
 
-  if (material_indices != nullptr) {
-    const size_t quad_count =
-        static_cast<size_t>(sample_count - 1) * (sample_count - 1);
+  if (desc->material_indices != nullptr) {
+    const size_t quad_count = static_cast<size_t>(desc->sample_count - 1) *
+                              (desc->sample_count - 1);
     for (size_t i = 0; i < quad_count; ++i) {
-      if (material_indices[i] >= num_materials) {
+      if (desc->material_indices[i] >= desc->num_materials) {
         return zjolt::SetError(ZJOLT_RESULT_INVALID_ARGUMENT,
                                "a quad's material index is out of range for "
                                "the material list");
       }
     }
-    settings.mMaterialIndices.assign(material_indices,
-                                     material_indices + quad_count);
+    settings.mMaterialIndices.assign(desc->material_indices,
+                                     desc->material_indices + quad_count);
   }
 
   JPH::Shape::ShapeResult result = settings.Create();
@@ -2269,8 +2285,8 @@ ZJoltResult zjoltShapeHeightFieldGetHeights(const ZJoltShape *shape,
 
 ZJoltResult zjoltShapeHeightFieldSetHeights(
     ZJoltShape *shape, uint32_t x, uint32_t y, uint32_t size_x,
-    uint32_t size_y, const float *heights, uint32_t stride,
-    float active_edge_cos_threshold_angle) {
+    uint32_t size_y, float active_edge_cos_threshold_angle,
+    const float *heights, uint32_t stride) {
   ZJOLT_ENTER();
   if (!zjolt::Present(shape, heights)) return ZJOLT_RESULT_INVALID_ARGUMENT;
   if (size_x == 0 || size_y == 0) return ZJOLT_RESULT_OK;

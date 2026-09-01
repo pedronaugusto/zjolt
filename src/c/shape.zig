@@ -58,7 +58,25 @@ pub extern fn zjoltShapeCreateCapsule(half_height_of_cylinder: f32, radius: f32,
 
 pub extern fn zjoltShapeCreateConvexHull(points: [*]const Vec3, num_points: u32, max_convex_radius: f32, hull_tolerance: f32, max_error_convex_radius: f32, density: f32, material: ?*const PhysicsMaterial, out: **Shape) Result;
 
-pub extern fn zjoltShapeCreateMesh(vertices: [*]const Vec3, num_vertices: u32, indices: [*]const u32, num_triangles: u32, triangle_materials: ?[*]const u32, triangle_user_data: ?[*]const u32, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, max_triangles_per_leaf: u32, active_edge_cos_threshold_angle: f32, build_quality: MeshBuildQuality, out: **Shape) Result;
+/// What `zjoltShapeCreateMesh` builds from. Layout-identical to
+/// `ffi/zjolt_shape.h`'s `ZJoltMeshShapeDesc`.
+pub const MeshShapeDesc = extern struct {
+    vertices: ?[*]const Vec3,
+    num_vertices: u32,
+    indices: ?[*]const u32,
+    num_triangles: u32,
+    triangle_materials: ?[*]const u32,
+    triangle_user_data: ?[*]const u32,
+    materials: ?[*]const *const PhysicsMaterial,
+    num_materials: u32,
+    max_triangles_per_leaf: u32,
+    active_edge_cos_threshold_angle: f32,
+    build_quality: MeshBuildQuality,
+};
+
+pub extern fn zjoltMeshShapeDescInit(desc: *MeshShapeDesc) void;
+
+pub extern fn zjoltShapeCreateMesh(desc: *const MeshShapeDesc, out: **Shape) Result;
 
 pub extern fn zjoltShapeCreateScaled(inner: *const Shape, scale: *const Vec3, out: **Shape) Result;
 
@@ -192,7 +210,27 @@ pub extern fn zjoltShapeCreatePlane(normal: *const Vec3, constant: f32, half_ext
 
 pub extern fn zjoltShapeCreateEmpty(center_of_mass: ?*const Vec3, out: **Shape) Result;
 
-pub extern fn zjoltShapeCreateHeightField(samples: [*]const f32, sample_count: u32, offset: ?*const Vec3, scale: ?*const Vec3, material_indices: ?[*]const u8, materials: ?[*]const *const PhysicsMaterial, num_materials: u32, materials_capacity: u32, block_size: u32, bits_per_sample: u32, min_height_value: f32, max_height_value: f32, active_edge_cos_threshold_angle: f32, out: **Shape) Result;
+/// What `zjoltShapeCreateHeightField` builds from. Layout-identical to
+/// `ffi/zjolt_shape.h`'s `ZJoltHeightFieldShapeDesc`.
+pub const HeightFieldShapeDesc = extern struct {
+    samples: ?[*]const f32,
+    sample_count: u32,
+    offset: Vec3,
+    scale: Vec3,
+    material_indices: ?[*]const u8,
+    materials: ?[*]const *const PhysicsMaterial,
+    num_materials: u32,
+    materials_capacity: u32,
+    block_size: u32,
+    bits_per_sample: u32,
+    min_height_value: f32,
+    max_height_value: f32,
+    active_edge_cos_threshold_angle: f32,
+};
+
+pub extern fn zjoltHeightFieldShapeDescInit(desc: *HeightFieldShapeDesc) void;
+
+pub extern fn zjoltShapeCreateHeightField(desc: *const HeightFieldShapeDesc, out: **Shape) Result;
 
 pub extern fn zjoltShapeCreateStaticCompound(children: [*]const CompoundChild, num_children: u32, out: **Shape) Result;
 
@@ -298,7 +336,7 @@ pub extern fn zjoltShapeHeightFieldGetSubShapeCoordinates(shape: *const Shape, s
 
 pub extern fn zjoltShapeHeightFieldGetHeights(shape: *const Shape, x: u32, y: u32, size_x: u32, size_y: u32, out_heights: [*]f32, stride: u32) Result;
 
-pub extern fn zjoltShapeHeightFieldSetHeights(shape: *Shape, x: u32, y: u32, size_x: u32, size_y: u32, heights: [*]const f32, stride: u32, active_edge_cos_threshold_angle: f32) Result;
+pub extern fn zjoltShapeHeightFieldSetHeights(shape: *Shape, x: u32, y: u32, size_x: u32, size_y: u32, active_edge_cos_threshold_angle: f32, heights: [*]const f32, stride: u32) Result;
 
 pub extern fn zjoltShapeHeightFieldGetMaterials(shape: *const Shape, x: u32, y: u32, size_x: u32, size_y: u32, out_materials: [*]u8, stride: u32) Result;
 
