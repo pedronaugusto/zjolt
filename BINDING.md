@@ -240,3 +240,42 @@ example or a count that this change moves fails there rather than in review.
 `ci/run.sh --full` executes the configurations that change ABI widths
 (`-Ddouble_precision`, `-Dobject_layer_bits=32`), which a compile alone does
 not prove.
+
+## Decisions that stay settled
+
+Recorded so the question is not re-opened; the reasoning lives next to the
+code, and each entry is the pointer to it.
+
+- **The C declarations are one module per public header.** `src/c.zig` was a
+  single file every subsystem appended to. It is now the list of 25 modules
+  under `src/c/`, and that list is what `src/abi_check.zig` and
+  `src/misuse_sweep_test.zig` walk — so a module missing from it is a module
+  neither guard covers, which `ci/check-abi-drift.sh` mutates to prove.
+- **Coverage is computed, not judged.** `tools/coverage.sh`'s raw percentage
+  used to over-count, because its denominator held Jolt internals that must
+  never cross. It is no longer the measure. `tools/classify.sh` proves an
+  exclusion three ways — an upstream internal marker, no public declaration,
+  or a scaffolding macro whose only `#define` in the tree is commented out —
+  and `ci/check-coverage.sh` recomputes that proof on every run and rejects
+  any `INTERNAL` line it cannot justify. Every other verdict is checked
+  against the tree too: a `BOUND` or `EXTENSION` names entry points that must
+  exist in `ffi/*.h`, a `ZIG` names a declaration that must exist at that
+  path, a `LANGUAGE` names a facility from a closed list.
+- **Numbers in documents no longer rot.** `ci/check-numbers.sh` recomputes
+  every count the README, `UPSTREAM.md` and `ci/run.sh` state and fails when
+  one disagrees with the tree. Its own header names what it cannot reach: a
+  count written in words rather than digits, and a sentence that is wrong
+  around a number that is right.
+- **Accessibility is checked through every enclosing scope.**
+  `tools/jolt_access.awk` used to consult only the innermost class, so a
+  public member of a privately nested class read as public — Jolt's
+  `CharacterVirtual::ContactCollector` is the case that exposed it. Sixty
+  names across the tree were affected. `tools/jolt_internal.awk` also learned
+  Jolt's sixth marker form, `INTERNAL CLASS DO NOT USE!`, which
+  `SimShapeFilterWrapper.h` uses and nothing else does.
+- **`ZJOLT_SHAPE_SUB_TYPE_OTHER` is gone, but a "kind I cannot name" value is
+  not.** It stood for two different facts. Both are now named: `NONE` is zero
+  and means the handle was NULL, and `USER_DEFINED` means a real shape from one
+  of Jolt's sixteen `User*` slots, registered outside this library. Collapsing
+  the second into the first would have `zjoltShapeGetSubType` answer "not a
+  shape" about a shape. See the enum's own comment in `ffi/zjolt_core.h`.
