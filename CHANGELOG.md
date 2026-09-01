@@ -235,6 +235,14 @@ held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
   `JPH::Array`'s `data()` is NULL, and Jolt writes one per empty constraint
   list, so saving soft body shared settings through a host stream aborted in
   safe Zig before reaching the first field.
+- The buffer-backed streams called `memcpy`/`memset` on the same zero-length
+  writes: `CountingStreamOut::WriteBytes`, `MemoryCursorWrite` and
+  `HostStream::ReadBytes`'s missing-callback path all passed Jolt's
+  `(nullptr, 0)` straight through, which is undefined behaviour even at zero
+  bytes — glibc's nonnull annotations abort on it. Saving a shape that
+  serialises any empty array — a baked hair groom, a constraint-free soft
+  body — crashed on Linux Debug. All three skip the zero-size case now;
+  `ConstStreamIn::ReadBytes` and `MemoryCursorRead` already guarded it.
 
 - `Skeleton.addJointWithParentName` and `Skeleton.calculateParentJointIndices`.
 - `PhysicsSystem.stepWithTempAllocator`; `step` is it with no override.

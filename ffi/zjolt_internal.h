@@ -644,7 +644,9 @@ class CountingStreamOut final : public JPH::StreamOut {
     if (buffer_ != nullptr) {
       if (written_ + inNumBytes > capacity_) {
         overflowed_ = true;
-      } else {
+      } else if (inNumBytes != 0) {
+        // Jolt serialises an empty array as WriteBytes(nullptr, 0), and
+        // memcpy from a null pointer is undefined even for zero bytes.
         std::memcpy(buffer_ + written_, inData, inNumBytes);
       }
     }
@@ -891,7 +893,9 @@ class HostStream final : public JPH::StateRecorder {
     if (stream_.read != nullptr) {
       stream_.read(stream_.user, outData, inNumBytes);
     } else {
-      std::memset(outData, 0, inNumBytes);
+      // A zero-length read may carry a null outData; memset on it is
+      // undefined even for zero bytes.
+      if (inNumBytes != 0) std::memset(outData, 0, inNumBytes);
       misused_ = true;
     }
   }
@@ -950,7 +954,9 @@ inline void MemoryCursorWrite(void *user, const void *data, size_t n) {
   if (cursor->out != nullptr) {
     if (cursor->written + n > cursor->capacity) {
       cursor->overflowed = true;
-    } else {
+    } else if (n != 0) {
+      // Jolt writes an empty array as (nullptr, 0); memcpy from a null
+      // pointer is undefined even for zero bytes.
       std::memcpy(cursor->out + cursor->written, data, n);
     }
   }
