@@ -4,8 +4,7 @@
 
 Zig bindings for [Jolt Physics](https://github.com/jrouwe/JoltPhysics) — the
 whole runtime, from shapes and the step to constraints, characters, vehicles,
-ragdolls, soft bodies and hair, in a package with no renderer, no entity
-system and no clock attached.
+ragdolls, soft bodies and hair.
 
 - Vendored, pinned upstream Jolt (5.6.0). No fork, no patches. See
   [UPSTREAM.md](UPSTREAM.md).
