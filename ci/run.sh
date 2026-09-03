@@ -113,6 +113,15 @@ run 'documented examples' ci/check-examples.sh
 # was a configuration ahead.
 run 'ci and this roster build the same options' ci/check-mirror.sh
 
+# CI runs the scripts in ci/ by path. One committed without its executable bit
+# fails there and nowhere else, because every local runner invokes bash first.
+run 'every committed script is executable' ci/check-executable.sh
+
+# .gitignore says what does not belong in the history. Being tracked overrides
+# every rule in it, so a blanket `git add -A` can put a fetched package or a
+# build directory into a public clone forever with nothing to say so.
+run 'nothing this repository ignores is tracked' ci/check-ignored.sh
+
 #-----------------------------------------------------------------------------
 section 'Tests — native'
 #-----------------------------------------------------------------------------
