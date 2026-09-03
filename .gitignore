@@ -1,6 +1,8 @@
-# Build output.
+# Build output, and the packages `zig fetch` drops beside the project when
+# it is run from this directory.
 .zig-cache/
 zig-out/
+zig-pkg/
 
 # Agent worktrees. These are full checkouts of this repository; committing one
 # would nest the repository inside itself.
