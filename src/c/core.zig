@@ -42,7 +42,7 @@ pub const version_major: u32 = 0;
 
 pub const version_minor: u32 = 2;
 
-pub const version_patch: u32 = 0;
+pub const version_patch: u32 = 1;
 
 /// The Zig side's view of ZJOLT_CONFIG_ID. Must be computed the same way the
 /// header computes it.

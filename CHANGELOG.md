@@ -8,7 +8,7 @@ The version lives in `ffi/zjolt_core.h` and nowhere else: `build.zig.zon` is
 held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 `ci/check-numbers.sh` fails the build if the README's status line disagrees.
 
-## Unreleased
+## 0.2.1
 
 ### Fixed
 

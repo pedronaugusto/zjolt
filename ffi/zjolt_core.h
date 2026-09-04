@@ -60,7 +60,7 @@ extern "C" {
 // library writes.
 #define ZJOLT_VERSION_MAJOR 0
 #define ZJOLT_VERSION_MINOR 2
-#define ZJOLT_VERSION_PATCH 0
+#define ZJOLT_VERSION_PATCH 1
 
 /// Defined by the build when world positions are doubles. Must match the
 /// setting the library was compiled with.

@@ -26,7 +26,7 @@ ragdolls, soft bodies and hair.
   reach has been turned into a returned error, with a test that fails if the
   guard is removed.
 
-Status: **v0.2.0.** Every Jolt subsystem is bound and the surface is complete
+Status: **v0.2.1.** Every Jolt subsystem is bound and the surface is complete
 enough to build against. Still pre-1.0, so naming and shape can change between
 minor versions — but a change will be a change, not a silent one: the ABI
 cross-check makes any drift between the header and the Zig side a build
