@@ -8,6 +8,24 @@ The version lives in `ffi/zjolt_core.h` and nowhere else: `build.zig.zon` is
 held against it by a Zig test, `ZJOLT_CONFIG_ID` folds it, and
 `ci/check-numbers.sh` fails the build if the README's status line disagrees.
 
+## Unreleased
+
+### Fixed
+
+- `zjoltInitWithConfig` reported out of memory with its own hooks still
+  installed. It points `JPH::Trace` at zjolt's trace thunk — and, when the
+  caller supplies an assert hook, `JPH::AssertFailed` at the assert thunk —
+  before it allocates Jolt's type factory, and the failure there gave back
+  only Jolt's allocator. A call that reported FAILED therefore left a thunk
+  armed on Jolt's globals, still reading the `hooks_user` a caller is free to
+  release the moment init says it never came up; the host allocator table was
+  left recorded beside an allocator seam pointing back at Jolt's own; and a
+  retry made it permanent, because the next successful init recorded that
+  thunk as the trace function to restore, so `zjoltDeinit` reinstalled zjolt's
+  thunk and Jolt never got its default back. The failure path and
+  `zjoltDeinit` now share one rollback and so cannot drift apart. Held by a
+  test that reaches the path with an allocator that refuses everything.
+
 ## 0.2.0
 
 ### C ABI — added

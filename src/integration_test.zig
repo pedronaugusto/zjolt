@@ -267,6 +267,118 @@ test "deinit refuses while a handle is still alive, and says so" {
     try std.testing.expect(!zjolt.isInitialized());
 }
 
+/// Reads Jolt's diagnostic-hook globals, which no entry point reports. See
+/// tests/hook_probe.cpp, and build.zig for why a shared build has no probe.
+const HookProbe = struct {
+    extern fn zjoltTestTraceHook() ?*const anyopaque;
+    extern fn zjoltTestAssertFailedHook() ?*const anyopaque;
+
+    const available = !zjolt.options.shared;
+
+    /// Guarded so the declarations above are referenced only in a build that
+    /// links the probe; an unreferenced `extern` needs no symbol.
+    fn traceHook() ?*const anyopaque {
+        return if (available) zjoltTestTraceHook() else null;
+    }
+
+    fn assertHook() ?*const anyopaque {
+        return if (available) zjoltTestAssertFailedHook() else null;
+    }
+};
+
+/// An allocator that refuses everything. Init installs the allocator and the
+/// hooks before it allocates Jolt's factory, so this reaches the one failure
+/// the function has after it has changed process-wide state — and nothing
+/// else in the ABI can get there.
+const RefusingAllocator = struct {
+    fn allocate(user: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
+        _ = user;
+        _ = size;
+        return null;
+    }
+
+    fn reallocate(
+        user: ?*anyopaque,
+        block: ?*anyopaque,
+        old_size: usize,
+        new_size: usize,
+    ) callconv(.c) ?*anyopaque {
+        _ = user;
+        _ = block;
+        _ = old_size;
+        _ = new_size;
+        return null;
+    }
+
+    fn freeBlock(user: ?*anyopaque, block: ?*anyopaque) callconv(.c) void {
+        _ = user;
+        _ = block;
+    }
+
+    fn alignedAllocate(user: ?*anyopaque, size: usize, alignment: usize) callconv(.c) ?*anyopaque {
+        _ = user;
+        _ = size;
+        _ = alignment;
+        return null;
+    }
+
+    const table: zjolt.c.core.Allocator = .{
+        .allocate = allocate,
+        .reallocate = reallocate,
+        .free = freeBlock,
+        .aligned_allocate = alignedAllocate,
+        .aligned_free = freeBlock,
+        .user = null,
+    };
+};
+
+test "an init that cannot allocate the factory leaves no hook of its own installed" {
+    if (!HookProbe.available) return error.SkipZigTest;
+    AssertSink.reset();
+    try std.testing.expect(!zjolt.isInitialized());
+
+    const trace_before = HookProbe.traceHook();
+    const assert_before = HookProbe.assertHook();
+
+    // The raw entry point, not `zjolt.init`: the allocator table has to be one
+    // that fails, and the hooks have to be non-null for init to install them.
+    var context: u32 = 0;
+    var desc: zjolt.c.core.InitDesc = .{
+        .allocator = &RefusingAllocator.table,
+        .trace = TraceSink.onTrace,
+        .assert_failed = AssertSink.onAssert,
+        .hooks_user = &context,
+    };
+    try std.testing.expectEqual(
+        zjolt.c.core.Result.out_of_memory,
+        zjolt.c.core.zjoltInitWithConfig(&desc, zjolt.c.core.config_id),
+    );
+    try std.testing.expect(!zjolt.isInitialized());
+    try std.testing.expect(zjolt.lastError().len > 0);
+
+    // The point of the whole test. zjolt's trace thunk reads `hooks_user` on
+    // every line Jolt emits, and a caller whose init failed owes nothing to a
+    // library that reported it never came up: it is free to release that
+    // context, and free to link something else against Jolt's globals. A
+    // failed call has to hand both of them back exactly as it found them.
+    try std.testing.expectEqual(trace_before, HookProbe.traceHook());
+    try std.testing.expectEqual(assert_before, HookProbe.assertHook());
+
+    // And a retry still gives Jolt its own trace function back at deinit. A
+    // thunk left installed above is what the successful init below would have
+    // recorded as the original, so the restore would reinstall zjolt's own
+    // thunk and Jolt would never get its default back.
+    try zjolt.init(.{
+        .allocator = std.testing.allocator,
+        .trace = TraceSink.onTrace,
+        .assert_failed = AssertSink.onAssert,
+    });
+    zjolt.deinit();
+    try std.testing.expectEqual(trace_before, HookProbe.traceHook());
+    try std.testing.expectEqual(assert_before, HookProbe.assertHook());
+    try std.testing.expectEqual(@as(u32, 0), AssertSink.count);
+}
+
 //=============================================================================
 // Shapes
 //=============================================================================

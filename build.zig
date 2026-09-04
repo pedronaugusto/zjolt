@@ -651,6 +651,25 @@ pub fn build(b: *std.Build) void {
     tests.root_module.addIncludePath(config_header.dirname());
     applyBuildMacros(tests.root_module, options);
 
+    // The hook probe (tests/hook_probe.cpp) reads Jolt's own trace and
+    // assert-failure globals, which no entry point reports, so a test can
+    // check that a failed init left them alone. A C++ translation unit rather
+    // than a Zig `extern`, because only a C++ compiler knows how the name of
+    // a C++ global is spelled on the target.
+    //
+    // Static builds only: a shared library exports zjolt's own C ABI and
+    // nothing of Jolt's, so the probe would have no symbol to bind to. The
+    // test that uses it skips itself on `zjolt.options.shared` for the same
+    // reason.
+    if (!options.shared) {
+        tests.root_module.addIncludePath(b.path("libs/JoltPhysics"));
+        if (target.result.abi != .msvc) tests.root_module.link_libcpp = true;
+        tests.root_module.addCSourceFile(.{
+            .file = b.path("tests/hook_probe.cpp"),
+            .flags = cxx_flags,
+        });
+    }
+
     const test_step = b.step("test", "Run zjolt tests");
     test_step.dependOn(&b.addRunArtifact(tests).step);
     test_step.dependOn(c_test_step);

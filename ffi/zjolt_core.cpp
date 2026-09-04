@@ -116,6 +116,28 @@ bool AssertFailedThunk(const char *expression, const char *message,
 }
 #endif
 
+/// Undoes every process-wide install zjoltInitWithConfig makes: the hooks
+/// first and Jolt's own allocator last, since anything freed before this ran
+/// had to go through the allocator it came from.
+///
+/// Shared with the one failure init has once those hooks are in, so the two
+/// cannot drift apart — a thunk left behind still dereferences a hook context
+/// the caller owns again the moment init reports failure.
+void RestoreHostState() {
+  if (g_saved_trace != nullptr) JPH::Trace = g_saved_trace;
+  g_saved_trace = nullptr;
+#ifdef JPH_ENABLE_ASSERTS
+  if (g_saved_assert_failed != nullptr) JPH::AssertFailed = g_saved_assert_failed;
+  g_saved_assert_failed = nullptr;
+#endif
+  g_trace = nullptr;
+  g_assert_failed = nullptr;
+  g_hooks_user = nullptr;
+
+  JPH::RegisterDefaultAllocator();
+  g_allocator = ZJoltAllocator{};
+}
+
 bool g_initialized = false;
 
 /// Physics systems, job systems and characters currently alive. Atomic because
@@ -400,7 +422,12 @@ ZJoltResult zjoltInitWithConfig(const ZJoltInitDesc *desc, uint32_t config_id) {
   // path at start-up an error rather than a null dereference.
   JPH::Factory *factory = zjolt::New<JPH::Factory>();
   if (factory == nullptr) {
-    JPH::RegisterDefaultAllocator();
+    // The only early return this function has once the hooks above are
+    // installed, and it gives back everything they replaced. Reporting failure
+    // with the thunk still armed would also lose Jolt's own trace function for
+    // good: the next successful init would record the thunk as the original,
+    // and zjoltDeinit would restore that.
+    RestoreHostState();
     return zjolt::SetError(ZJOLT_RESULT_OUT_OF_MEMORY,
                            "could not allocate Jolt's type factory");
   }
@@ -447,20 +474,9 @@ void zjoltDeinit(void) {
   zjolt::Delete(JPH::Factory::sInstance);
   JPH::Factory::sInstance = nullptr;
 
-  if (g_saved_trace != nullptr) JPH::Trace = g_saved_trace;
-  g_saved_trace = nullptr;
-#ifdef JPH_ENABLE_ASSERTS
-  if (g_saved_assert_failed != nullptr) JPH::AssertFailed = g_saved_assert_failed;
-  g_saved_assert_failed = nullptr;
-#endif
-  g_trace = nullptr;
-  g_assert_failed = nullptr;
-  g_hooks_user = nullptr;
-
-  // Restored last: everything freed above had to go through the allocator it
-  // was allocated from.
-  JPH::RegisterDefaultAllocator();
-  g_allocator = ZJoltAllocator{};
+  // Hooks first, Jolt's own allocator last: everything freed above had to go
+  // through the allocator it was allocated from.
+  RestoreHostState();
 
   g_initialized = false;
 }
